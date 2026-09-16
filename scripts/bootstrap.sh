@@ -3,83 +3,98 @@
 #
 #   ./scripts/bootstrap.sh
 #
-# Requires: az (logged in), gh (logged in), jq. Override any variable via env.
+# Every Azure resource is declared in infra/*.bicep. This script only:
+#   1. checks prerequisites and registers the resource providers the templates use,
+#   2. runs the subscription-scoped deployment (resource group + everything in it),
+#   3. hands the identity/tenant/subscription ids to GitHub so workflows can log in with OIDC.
+#
+# Requires: az (logged in as an Owner of the subscription), gh (logged in, repo+workflow scopes), jq.
 set -euo pipefail
 
 SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-25bf257c-c94e-4d61-bba3-edc635f46602}"
 RESOURCE_GROUP="${RESOURCE_GROUP:-internetresearch}"
-LOCATION="${LOCATION:-eastus2}"
+LOCATION="${LOCATION:-westus2}"
 GITHUB_REPO="${GITHUB_REPO:-tgoodyear/internetresearch}"
-APP_NAME="${APP_NAME:-gh-internetresearch-infra}"
 export BUDGET_CONTACT_EMAIL="${BUDGET_CONTACT_EMAIL:-trevor.goodyear@gmail.com}"
-export BUDGET_START_DATE="${BUDGET_START_DATE:-$(date -u +%Y-%m-01)}"
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
+SUB=(--subscription "$SUBSCRIPTION_ID")
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
+die() { echo "error: $*" >&2; exit 1; }
 
-log "Selecting subscription $SUBSCRIPTION_ID"
-az account set --subscription "$SUBSCRIPTION_ID"
-TENANT_ID="$(az account show --query tenantId -o tsv)"
+log "Preflight"
+for t in az gh jq; do command -v "$t" >/dev/null || die "missing prerequisite: $t"; done
+gh auth status >/dev/null 2>&1 || die "gh is not logged in (needs repo + workflow scopes)"
+gh repo view "$GITHUB_REPO" --json name >/dev/null || die "cannot access GitHub repo $GITHUB_REPO"
+az account show "${SUB[@]}" --query "{name:name, tenant:tenantId, user:user.name}" -o table \
+  || die "subscription $SUBSCRIPTION_ID is not visible; run: az login --tenant <tenant-id>"
+me="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
+if [[ -n "$me" ]]; then
+  az role assignment list "${SUB[@]}" --assignee "$me" --scope "/subscriptions/$SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Owner']" -o tsv | grep -q . \
+    || die "the signed-in user is not Owner of the subscription (needed for RBAC and locks)"
+fi
 
-log "Resource group $RESOURCE_GROUP ($LOCATION)"
-az group create --name "$RESOURCE_GROUP" --location "$LOCATION" --tags project=atlas-credit-exchange -o none
+log "Resource providers"
+for rp in Microsoft.Web Microsoft.Storage Microsoft.ManagedIdentity Microsoft.Consumption Microsoft.OperationalInsights Microsoft.Insights Microsoft.AlertsManagement; do
+  state="$(az provider show -n "$rp" "${SUB[@]}" --query registrationState -o tsv 2>/dev/null || echo Unknown)"
+  if [[ "$state" != "Registered" ]]; then
+    echo "  registering $rp ..."
+    az provider register -n "$rp" "${SUB[@]}" -o none
+    until [[ "$(az provider show -n "$rp" "${SUB[@]}" --query registrationState -o tsv)" == "Registered" ]]; do sleep 5; done
+  fi
+  echo "  $rp: Registered"
+done
 
-log "Deploying infra/main.bicep"
-deployment_json="$(az deployment group create \
+log "GitHub OIDC subject prefix"
+export GITHUB_OIDC_SUBJECT_PREFIX="$(gh api "repos/$GITHUB_REPO/actions/oidc/customization/sub" --jq '.sub_claim_prefix // empty')"
+if [[ -z "$GITHUB_OIDC_SUBJECT_PREFIX" ]]; then
+  GITHUB_OIDC_SUBJECT_PREFIX="repo:$GITHUB_REPO"
+fi
+echo "  $GITHUB_OIDC_SUBJECT_PREFIX"
+
+log "Budget period start"
+export BUDGET_START_DATE="$("$here/scripts/budget-start-date.sh" "$SUBSCRIPTION_ID" "$RESOURCE_GROUP")"
+echo "  $BUDGET_START_DATE"
+
+log "Deploying infra/main.bicep (subscription scope)"
+outputs="$(az deployment sub create \
   --name "bootstrap-$(date -u +%Y%m%d%H%M%S)" \
-  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
   --template-file "$here/infra/main.bicep" \
   --parameters "$here/infra/main.bicepparam" \
+  --parameters resourceGroupName="$RESOURCE_GROUP" location="$LOCATION" githubRepo="$GITHUB_REPO" \
+  "${SUB[@]}" \
   --query properties.outputs -o json)"
-SWA_NAME="$(jq -r .staticWebAppName.value <<<"$deployment_json")"
-SWA_HOST="$(jq -r .staticWebAppHostname.value <<<"$deployment_json")"
-STORAGE_NAME="$(jq -r .storageAccountName.value <<<"$deployment_json")"
+
+val() { jq -r ".$1.value" <<<"$outputs"; }
+SWA_NAME="$(val staticWebAppName)"
+SWA_HOST="$(val staticWebAppHostname)"
+STORAGE_NAME="$(val storageAccountName)"
+CI_CLIENT_ID="$(val ciClientId)"
+CI_PRINCIPAL_ID="$(val ciPrincipalId)"
+TENANT_ID="$(val tenantId)"
+echo "  resource group: $RESOURCE_GROUP"
 echo "  static web app: $SWA_NAME  (https://$SWA_HOST)"
 echo "  storage:        $STORAGE_NAME"
+echo "  ci identity:    $CI_CLIENT_ID"
 
-log "Refreshing SWA app settings (storage connection string)"
-CONN="$(az storage account show-connection-string --name "$STORAGE_NAME" --resource-group "$RESOURCE_GROUP" --query connectionString -o tsv)"
-az staticwebapp appsettings set --name "$SWA_NAME" --resource-group "$RESOURCE_GROUP" \
-  --setting-names "TABLES_CONNECTION_STRING=$CONN" "ATLAS_API_BASE=https://atlas.ripe.net/api/v2" -o none
-
-log "SWA deployment token -> GitHub secret AZURE_STATIC_WEB_APPS_API_TOKEN"
-DEPLOY_TOKEN="$(az staticwebapp secrets list --name "$SWA_NAME" --resource-group "$RESOURCE_GROUP" --query properties.apiKey -o tsv)"
-gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN --repo "$GITHUB_REPO" --body "$DEPLOY_TOKEN"
-
-log "Entra app for GitHub OIDC ($APP_NAME)"
-APP_ID="$(az ad app list --display-name "$APP_NAME" --query '[0].appId' -o tsv)"
-if [[ -z "$APP_ID" ]]; then
-  APP_ID="$(az ad app create --display-name "$APP_NAME" --query appId -o tsv)"
-fi
-if ! az ad sp show --id "$APP_ID" -o none 2>/dev/null; then
-  az ad sp create --id "$APP_ID" -o none
-fi
-SP_OBJECT_ID="$(az ad sp show --id "$APP_ID" --query id -o tsv)"
-
-add_fic() {
-  local name="$1" subject="$2"
-  if ! az ad app federated-credential list --id "$APP_ID" --query "[?name=='$name']" -o tsv | grep -q .; then
-    az ad app federated-credential create --id "$APP_ID" --parameters "$(cat <<JSON
-{"name":"$name","issuer":"https://token.actions.githubusercontent.com","subject":"$subject","audiences":["api://AzureADTokenExchange"]}
-JSON
-)" -o none
+log "Waiting for the CI role assignment to be visible"
+rg_id="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
+for _ in $(seq 1 24); do
+  if az role assignment list "${SUB[@]}" --scope "$rg_id" --assignee-object-id "$CI_PRINCIPAL_ID" --query "[0].id" -o tsv 2>/dev/null | grep -q .; then
+    echo "  assigned"; break
   fi
-}
-add_fic "main-branch" "repo:$GITHUB_REPO:ref:refs/heads/main"
-add_fic "pull-requests" "repo:$GITHUB_REPO:pull_request"
+  sleep 5
+done
 
-log "Contributor on the resource group"
-RG_ID="$(az group show --name "$RESOURCE_GROUP" --query id -o tsv)"
-az role assignment create --assignee-object-id "$SP_OBJECT_ID" --assignee-principal-type ServicePrincipal \
-  --role Contributor --scope "$RG_ID" -o none 2>/dev/null || true
-
-log "GitHub secrets for OIDC login"
-gh secret set AZURE_CLIENT_ID --repo "$GITHUB_REPO" --body "$APP_ID"
+log "GitHub secrets/variables for OIDC login ($GITHUB_REPO)"
+gh secret set AZURE_CLIENT_ID --repo "$GITHUB_REPO" --body "$CI_CLIENT_ID"
 gh secret set AZURE_TENANT_ID --repo "$GITHUB_REPO" --body "$TENANT_ID"
 gh secret set AZURE_SUBSCRIPTION_ID --repo "$GITHUB_REPO" --body "$SUBSCRIPTION_ID"
 gh variable set BUDGET_CONTACT_EMAIL --repo "$GITHUB_REPO" --body "$BUDGET_CONTACT_EMAIL"
 
 log "Done"
 echo "Site: https://$SWA_HOST"
-echo "Next: merge to main or run the 'Deploy' workflow: gh workflow run deploy.yml --repo $GITHUB_REPO"
+echo "Next: merge to main, or run: gh workflow run deploy.yml --repo $GITHUB_REPO"
+echo "Note: Azure role assignments can take a few minutes to propagate; re-run a failed first workflow."

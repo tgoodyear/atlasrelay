@@ -15,10 +15,11 @@ The platform never holds credits or long-lived API keys. RIPE Atlas stays the le
 
 | Layer | Choice | Monthly cost |
 | --- | --- | --- |
-| Hosting + auth + API | Azure Static Web Apps (Free) with managed Azure Functions (Node 20) | $0 |
+| Hosting + auth + API | Azure Static Web Apps (Free) with managed Azure Functions (Node 22) | $0 |
 | Data | Azure Table Storage (Standard LRS) | ≈ $0.05 |
-| CI/CD | GitHub Actions → SWA deploy token; Bicep via OIDC federated credential | $0 |
-| Guardrail | Azure budget, $120 cap with alerts | $0 |
+| Logs | App Insights + Log Analytics, capped at 0.1 GB/day | $0 (free allowance) |
+| CI/CD | GitHub Actions with OIDC through a user-assigned managed identity; all resources in Bicep | $0 |
+| Guardrail | Azure budget with alerts at $120; subscription spending limit as the hard stop | $0 |
 
 ## Quick start
 
@@ -27,11 +28,10 @@ npm install
 npm run dev        # http://localhost:4280 (SWA emulator + API + Azurite)
 ```
 
-Deploy for the first time:
+Deploy for the first time (as a subscription Owner):
 
 ```bash
-az login
 ./scripts/bootstrap.sh
 ```
 
-Every push to `main` deploys; every pull request gets a preview environment.
+Every push to `main` deploys; pull requests build, test and lint only.

@@ -1,6 +1,6 @@
 {
   "platform": {
-    "apiRuntime": "node:20"
+    "apiRuntime": "node:22"
   },
   "navigationFallback": {
     "rewrite": "/index.html",
@@ -81,7 +81,8 @@
     "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     "x-content-type-options": "nosniff",
     "referrer-policy": "strict-origin-when-cross-origin",
-    "permissions-policy": "camera=(), microphone=(), geolocation=()"
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "strict-transport-security": "max-age=31536000; includeSubDomains"
   },
   "mimeTypes": {
     ".webmanifest": "application/manifest+json"

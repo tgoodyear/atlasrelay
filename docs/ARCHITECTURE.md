@@ -10,8 +10,8 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | Goal | Decision |
 | --- | --- |
 | Attractive, simple UI | Single-page React app, four core screens, no dashboards to learn. |
-| Lowest cost, serverless | Azure Static Web Apps (Free) + managed Azure Functions + Azure Table Storage. Expected bill: under $1/month. Budget cap $120/month enforced with an Azure budget alert. |
-| CI/CD from GitHub | Two GitHub Actions workflows: app deploy (push to `main`, PR previews) and infra (Bicep via OIDC federated credential, no stored Azure secrets). |
+| Lowest cost, serverless | Azure Static Web Apps (Free) + managed Azure Functions + Azure Table Storage + App Insights inside its free allowance. Expected bill: under $1/month. A $120/month budget sends alerts; the subscription's spending limit (On) is the hard stop. |
+| CI/CD from GitHub | Two GitHub Actions workflows: app deploy (push to `main`, PR previews) and infra (Bicep). Both log in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub. |
 | Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth. RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); the design leaves a slot for it. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
 
@@ -22,7 +22,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
    │  /.auth/login/github | /.auth/login/aad      (SWA built-in auth, free)
    │  /api/*  (x-ms-client-principal injected by SWA edge)
    ▼
- Azure Static Web Apps (Free)  ── managed Azure Functions (Node 20, HTTP only)
+ Azure Static Web Apps (Free)  ── managed Azure Functions (Node 22, HTTP only)
    │                                    │
    │ static assets (global CDN)         │ @azure/data-tables
    │                                    ▼
@@ -130,49 +130,88 @@ at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code 
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
 the SPA shows its own sign-in prompt.
 
-## Azure resources (all in resource group `internetresearch`)
+## Azure resources (every one declared in Bicep)
 
-| Resource | SKU | Est. cost |
-| --- | --- | --- |
-| Static Web App `swa-internetresearch` | Free | $0 (100 GB bandwidth/mo, 2 custom domains, 3 staging envs) |
-| Storage account `stinternetresearch<hash>` | Standard LRS, tables only | ≈ $0.05/mo at expected volumes |
-| Consumption budget `internetresearch-monthly` | $120 cap, alerts at 50/80/100% | $0 |
+| Resource | Bicep | SKU | Est. cost |
+| --- | --- | --- | --- |
+| Resource group `internetresearch` (westus2) | `infra/main.bicep` | | $0 |
+| Static Web App `swa-internetresearch` + `appsettings` | `infra/app.bicep` | Free | $0 (100 GB bandwidth/mo, 2 custom domains; staging environments disabled) |
+| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges` | `infra/app.bicep` | Standard LRS | ≈ $0.05/mo at expected volumes |
+| Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/app.bicep` | Pay-as-you-go | $0 inside the 5 GB/month free allowance |
+| Consumption budget `internetresearch-monthly` | `infra/app.bicep` | $120, alerts at 50% and 80% actual, 100% forecast | $0 |
+| User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | | $0 |
+| Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write only deployments, static sites, storage, Log Analytics, App Insights, budgets | `infra/main.bicep` | | $0 |
+| Role assignment of that role to the CI identity; `CanNotDelete` lock on the storage account | `infra/rbac.bicep` | | $0 |
 
-Upgrade paths that stay well inside budget: SWA Standard ($9/mo) for custom OIDC
-(RIPE NCC Access) and SLA; Application Insights (first 5 GB/mo free) for API logs.
+`main.bicep` is subscription-scoped and is run once by a subscription Owner via
+`scripts/bootstrap.sh`. It creates the group, the CI identity, the custom role, the role
+assignment and the lock, and deploys `app.bicep`. `app.bicep` is what CI deploys on every
+infra change; it needs nothing beyond the custom role, so a compromised workflow run
+cannot change RBAC, re-federate the identity, remove the lock, or create unrelated
+resource types.
+
+Why a managed identity rather than an Entra app registration: the Microsoft Graph Bicep
+extension cannot be used from a personal Microsoft account, and the subscription is owned
+by one. A user-assigned identity with federated identity credentials is a plain ARM
+resource, works with `azure/login`, and needs no directory permissions.
+
+Why the federated subject looks odd: the repository was created after 2026-07-15, so
+GitHub issues immutable subjects of the form `repo:OWNER@OWNER-ID/REPO@REPO-ID:…`.
+`bootstrap.sh` reads the prefix from the GitHub API and passes it to Bicep.
+
+Why no pull-request previews: preview environments would run unreviewed code against the
+production tables with a CI identity, so PRs only build, test and lint. Previews can be
+re-enabled later by setting `enablePullRequestFederation` and
+`stagingEnvironmentPolicy: Enabled`.
+
+Upgrade path that stays well inside budget: SWA Standard ($9/mo) for custom OIDC
+(RIPE NCC Access), an SLA and PR preview environments.
 
 ## Repository layout
 
 ```
 web/      Vite + React + TypeScript SPA; public/staticwebapp.config.json
-api/      Azure Functions v4 (Node 20, TypeScript)
-infra/    main.bicep (+ parameters), resource-group scope
-scripts/  bootstrap.sh – one-time provisioning + GitHub secret wiring
-.github/workflows/deploy.yml   build + deploy app & API on push/PR
-.github/workflows/infra.yml    Bicep what-if on PR, deploy on main (OIDC login)
+api/      Azure Functions v4 (Node 22, TypeScript)
+infra/    main.bicep (subscription scope) → identity.bicep, rbac.bicep, app.bicep (+ .bicepparam)
+scripts/  bootstrap.sh – one-time provisioning + GitHub secret wiring; budget-start-date.sh
+.github/workflows/deploy.yml   build + test on PRs; build + deploy app & API on main
+.github/workflows/infra.yml    Bicep lint on PRs; what-if + deploy app.bicep on main (OIDC login)
 docs/     this spec, RIPE research notes, runbook
 ```
 
 ## CI/CD
 
-- `deploy.yml`: `npm ci && npm run build` for `web` and `api`, prune dev deps, then
-  `Azure/static-web-apps-deploy@v1` with `skip_app_build`/`skip_api_build`. Uses the
-  SWA deployment token secret `AZURE_STATIC_WEB_APPS_API_TOKEN`. PRs get preview URLs.
-- `infra.yml`: `azure/login@v2` with a federated credential (no client secret), then
-  `az deployment group what-if` on PRs and `create` on `main`.
-- `scripts/bootstrap.sh`: creates the resource group, runs the Bicep deployment,
-  creates the Entra app + federated credential scoped to `repo:tgoodyear/internetresearch:ref:refs/heads/main`,
-  assigns Contributor on the resource group, and pushes all GitHub secrets.
+- `deploy.yml`, job `build` (no Azure identity): `npm ci -w api -w web`, tests, build
+  web and API, then stage a self-contained `api-deploy/` folder (npm workspaces hoist the
+  API's runtime dependencies to the repo root, and the SWA action uploads the API folder
+  verbatim), smoke-load the API entry point, upload both as artifacts. Runs on PRs too.
+- `deploy.yml`, job `deploy` (push to `main` / manual only): download artifacts,
+  `azure/login` (OIDC, managed identity), read the SWA deployment token with
+  `az staticwebapp secrets list` (masked, never stored), then
+  `Azure/static-web-apps-deploy@v1` with `skip_app_build`/`skip_api_build`.
+- `infra.yml`: lints every template on PRs; on `main` it logs in, computes the budget
+  start date, runs `az deployment group what-if` then `create` on `infra/app.bicep`.
+- Both workflows degrade to build/lint-only until the three GitHub secrets exist, run
+  one deployment at a time (`concurrency`), and pin third-party actions to commit SHAs
+  (Dependabot keeps them current).
+- `scripts/bootstrap.sh`: preflight checks, resource-provider registration, reads the
+  GitHub OIDC subject prefix and the budget start date, runs `az deployment sub create`
+  with `infra/main.bicep`, waits for the role assignment, and stores the identity's
+  client id, tenant id and subscription id as GitHub secrets. Nothing else is created
+  imperatively.
 
 ## Security notes
 
-- Global headers: CSP (self + Google Fonts), `X-Content-Type-Options`, `Referrer-Policy`,
-  `Permissions-Policy`, HSTS is provided by the platform.
+- Global headers: CSP (self + Google Fonts), HSTS, `X-Content-Type-Options`,
+  `Referrer-Policy`, `Permissions-Policy`.
 - Input validation on every write; string lengths, enums, URL scheme allow-list
   (`https:` only), integer ranges.
 - Storage account: public blob access off, TLS 1.2 minimum, shared-key access used by
   the managed function via connection string (managed identity is not available on
   SWA managed functions; moving to a "bring your own Functions" app with identity is
   the upgrade path).
-- Secrets: only the storage connection string (SWA app setting) and the SWA deploy
-  token (GitHub secret). Azure login from CI is OIDC.
+- Secrets: the storage connection string and the App Insights connection string, both
+  written into the SWA app settings by Bicep (Bicep is the only writer; the settings
+  resource replaces the whole map). GitHub holds three non-secret identifiers (client,
+  tenant, subscription); the SWA deployment token is fetched per run and masked. Azure
+  login from CI is OIDC. Untrusted build steps never run in a job that holds the identity.

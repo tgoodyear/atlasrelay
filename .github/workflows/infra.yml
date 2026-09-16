@@ -5,63 +5,88 @@ on:
     branches: [main]
     paths:
       - 'infra/**'
+      - 'scripts/budget-start-date.sh'
       - '.github/workflows/infra.yml'
   pull_request:
     branches: [main]
     paths:
       - 'infra/**'
+      - 'scripts/budget-start-date.sh'
       - '.github/workflows/infra.yml'
   workflow_dispatch:
 
-permissions:
-  id-token: write
-  contents: read
+concurrency:
+  group: infra
+  cancel-in-progress: false
+
+permissions: {}
 
 env:
+  SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   RESOURCE_GROUP: internetresearch
   BUDGET_CONTACT_EMAIL: ${{ vars.BUDGET_CONTACT_EMAIL || 'trevor.goodyear@gmail.com' }}
-  # Until scripts/bootstrap.sh has created the federated credential and secrets,
-  # this workflow only lints the template instead of failing.
+  # Set by scripts/bootstrap.sh from the Bicep outputs. Until then this workflow only lints.
   AZURE_READY: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
 
 jobs:
-  bicep:
+  lint:
+    name: Lint Bicep
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - run: |
+          for f in infra/*.bicep; do az bicep build --file "$f" --stdout > /dev/null; done
+          for f in infra/*.bicepparam; do az bicep build-params --file "$f" --stdout > /dev/null; done
 
-      - name: Lint Bicep
-        run: az bicep build --file infra/main.bicep --stdout > /dev/null
-
+  # The CI identity holds a custom role limited to the resource types in app.bicep, inside the
+  # resource group. The resource group, identity, RBAC and locks live in main.bicep (bootstrap).
+  deploy:
+    name: What-if and deploy app.bicep
+    needs: lint
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
       - name: Skipping deployment (Azure secrets not configured yet)
         if: env.AZURE_READY != 'true'
-        run: echo "Run scripts/bootstrap.sh to create the OIDC credential and GitHub secrets."
+        run: echo "Run scripts/bootstrap.sh to provision Azure and set the GitHub secrets."
 
-      - name: Azure login (OIDC)
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         if: env.AZURE_READY == 'true'
-        uses: azure/login@v2
+        with:
+          persist-credentials: false
+
+      - name: Azure login (OIDC via managed identity)
+        if: env.AZURE_READY == 'true'
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Budget period start
+      - name: Budget period start (existing value, else current month)
         if: env.AZURE_READY == 'true'
-        run: echo "BUDGET_START_DATE=$(date -u +%Y-%m-01)" >> "$GITHUB_ENV"
+        run: echo "BUDGET_START_DATE=$(scripts/budget-start-date.sh "$SUBSCRIPTION_ID" "$RESOURCE_GROUP")" >> "$GITHUB_ENV"
 
-      - name: What-if (pull requests)
-        if: env.AZURE_READY == 'true' && github.event_name == 'pull_request'
+      - name: What-if
+        if: env.AZURE_READY == 'true'
         run: |
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
-            --template-file infra/main.bicep \
-            --parameters infra/main.bicepparam
+            --template-file infra/app.bicep \
+            --parameters infra/app.bicepparam
 
-      - name: Deploy (main)
-        if: env.AZURE_READY == 'true' && github.event_name != 'pull_request'
+      - name: Deploy
+        if: env.AZURE_READY == 'true'
         run: |
           az deployment group create \
-            --name "infra-${GITHUB_SHA::7}" \
+            --name "app-${GITHUB_SHA::7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" \
-            --template-file infra/main.bicep \
-            --parameters infra/main.bicepparam
+            --template-file infra/app.bicep \
+            --parameters infra/app.bicepparam

@@ -9,3 +9,4 @@ api/local.settings.json
 .env.*
 !.env.example
 .claude/
+api-deploy/

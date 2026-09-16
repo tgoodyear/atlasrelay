@@ -13,7 +13,8 @@
     "dev": "concurrently -k -n azurite,api,web,swa -c blue,green,magenta,cyan \"npm run azurite\" \"npm run api\" \"npm run dev -w web\" \"npm run swa\"",
     "azurite": "azurite --silent --location .azurite --skipApiVersionCheck",
     "api": "npm run build -w api && cd api && func start --port 7071",
-    "swa": "swa start http://localhost:5173 --api-devserver-url http://localhost:7071 --port 4280"
+    "swa": "swa start http://localhost:5173 --api-devserver-url http://localhost:7071 --port 4280",
+    "predev": "node -e \"const fs=require('fs');if(!fs.existsSync('api/local.settings.json'))fs.copyFileSync('api/local.settings.json.example','api/local.settings.json')\""
   },
   "devDependencies": {
     "@azure/static-web-apps-cli": "^2.0.10",
@@ -22,6 +23,6 @@
     "concurrently": "^9.2.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

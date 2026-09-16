@@ -2,51 +2,66 @@
 
 ## First deployment
 
-Prerequisites: `az` (logged into the account that owns subscription
-`25bf257c-c94e-4d61-bba3-edc635f46602`), `gh` (logged in with `repo` and `workflow`
-scopes), Node 20+.
+Prerequisites: `az` (logged in as an Owner of subscription
+`25bf257c-c94e-4d61-bba3-edc635f46602`; the tenant requires MFA, so use
+`az login --tenant <tenant-id>`), `gh` (logged in with `repo` and `workflow` scopes),
+`jq`, Node 20+.
 
 ```bash
-az login   # pick the tenant that contains the subscription
 ./scripts/bootstrap.sh
 ```
 
-The script is idempotent. It:
+The script is idempotent and creates nothing outside Bicep. It:
 
-1. Creates resource group `internetresearch` (default location `eastus2`).
-2. Deploys `infra/main.bicep` (storage account, tables, static web app, budget).
-3. Writes the storage connection string into the SWA app settings as
-   `TABLES_CONNECTION_STRING`.
-4. Creates/reuses an Entra app `gh-internetresearch-infra` with a federated credential
-   for `main` and for pull requests, grants it Contributor on the resource group.
-5. Sets GitHub secrets: `AZURE_STATIC_WEB_APPS_API_TOKEN`, `AZURE_CLIENT_ID`,
-   `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`.
-6. Prints the site hostname.
+1. Checks prerequisites (az, gh, jq, Owner role) and registers the resource providers
+   the templates use.
+2. Reads the repository's GitHub OIDC subject prefix and the budget start date (existing
+   value if the budget already exists, else the current month).
+3. Runs `az deployment sub create` with `infra/main.bicep`: resource group, CI managed
+   identity with its GitHub federated credential, least-privilege custom role and role
+   assignment, storage account (locked against deletion) and tables, Log Analytics +
+   App Insights, static web app with its app settings, and the monthly budget.
+4. Waits for the role assignment to be visible, then sets GitHub secrets
+   `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identifiers, not
+   credentials) and the `BUDGET_CONTACT_EMAIL` variable.
+5. Prints the site hostname.
+
+Role assignments can take a few minutes to propagate; if the first workflow run fails
+with `AuthorizationFailed`, re-run it.
 
 Then merge to `main` (or run the *Deploy* workflow manually) and the site goes live.
 
 ## Local development
 
 ```bash
-npm install            # installs web + api workspaces
-npm run dev            # SWA CLI: web on :5173 via :4280, API on :7071, auth emulator
+npm install            # installs web + api workspaces and local tooling
+npm run dev            # Azurite + Functions host (:7071) + Vite (:5173) + SWA emulator (:4280)
 ```
 
-`npm run dev` starts Azurite (local table storage) too; `api/local.settings.json` points
-`TABLES_CONNECTION_STRING` at it. Open http://localhost:4280. The SWA emulator lets you
-"log in" as any username without a real GitHub account.
+`npm run dev` copies `api/local.settings.json.example` to `api/local.settings.json` if it
+is missing; that file points `TABLES_CONNECTION_STRING` at Azurite. Open
+http://localhost:4280. The SWA emulator lets you "log in" as any username without a real
+GitHub account. Node 22 is the target runtime; newer local versions work with a warning
+from the Functions host.
 
 ## Operations
 
-- **Logs**: SWA managed functions have no logs without Application Insights. To turn it
-  on, create an App Insights resource and set `APPLICATIONINSIGHTS_CONNECTION_STRING`
-  in the SWA app settings (first 5 GB/month free).
-- **Budget**: `internetresearch-monthly` emails at 50/80/100% of $120. Expected spend
-  is under $1.
-- **Rotate storage key**: `az storage account keys renew`, then re-run
-  `scripts/bootstrap.sh` (it re-reads key1 and updates the SWA setting).
-- **Rotate SWA deploy token**: `az staticwebapp secrets reset-api-key`, then re-run
-  bootstrap (it re-uploads the GitHub secret).
+- **Logs**: API logs and request telemetry go to App Insights `appi-internetresearch`
+  (Log Analytics workspace `log-internetresearch`, 0.1 GB/day cap, 30-day retention).
+  Bicep wires `APPLICATIONINSIGHTS_CONNECTION_STRING` into the SWA settings; do not set
+  app settings by hand, the next infra deploy replaces the whole map. Extra settings go
+  in the `additionalAppSettings` parameter.
+- **Budget**: `internetresearch-monthly` emails at 50% and 80% of actual spend and at
+  100% of forecast against $120. It alerts only. The subscription (Visual Studio
+  Enterprise credit) has its spending limit On, which disables the subscription, and
+  therefore the site, if the monthly credit is exhausted. Expected spend is under $1.
+- **Rotate storage key**: `az storage account keys renew --key key1 ...`, then re-run
+  the Infrastructure workflow (or bootstrap); Bicep re-reads key1 into the SWA setting.
+- **Rotate SWA deploy token**: `az staticwebapp secrets reset-api-key`. Nothing else to
+  do; workflows fetch the token on every run.
+- **Change infra**: edit `infra/app.bicep`, open a PR (what-if runs), merge (deploys).
+  Resource group or RBAC changes go in `infra/main.bicep`/`infra/rbac.bicep` and need a
+  bootstrap re-run by an Owner.
 - **Data export**: `az storage entity query --table-name projects ...` or use Azure
   Storage Explorer.
 
