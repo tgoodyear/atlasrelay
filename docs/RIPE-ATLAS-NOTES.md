@@ -1,0 +1,118 @@
+# RIPE Atlas research notes
+
+Source: https://atlas.ripe.net/docs/ (read 2026-09-16). These notes capture only what
+matters for a credit-exchange platform. Verify against the live docs before relying
+on any detail marked *unverified*.
+
+## Credits in one paragraph
+
+Credits are the currency of RIPE Atlas. Hosting a connected probe earns 15 credits per
+minute (~21,600/day) plus 1 credit per result delivered; anchors earn 10x. RIPE NCC
+members can claim a monthly allowance. Sponsors receive the credits of the probes they
+sponsor. Credits are spent on user-defined measurements: ping 3/result, DNS 10 (UDP) or
+20 (TCP)/result, traceroute 30/result, SSL cert 10/result. One-off measurements cost
+double. When a balance is projected to run out within five days RIPE emails a warning,
+and measurements can be stopped automatically if the account goes into deficit.
+
+## Moving credits between users (what RIPE already supports)
+
+| Mechanism | Where | Notes |
+| --- | --- | --- |
+| One-off transfer | Web UI at https://atlas.ripe.net/credits/transfer/ and `POST /api/v2/credits/transfers/` | Recipient is identified by the **email address of their RIPE NCC Access account**. |
+| Standing order | `/api/v2/credits/standing-order/` | Threshold + amount, evenly split across recipients. Recurring. |
+| Shared access ("bill me") | `/api/v2/credits/bill-me/` | Lets another user charge measurements against your balance. |
+| Vouchers | `/api/v2/credits/voucher/redeem/` | Codes issued by RIPE NCC. Not self-service. |
+
+### Transfer endpoint (verified)
+
+```
+POST https://atlas.ripe.net/api/v2/credits/transfers/
+Authorization: Key <api-key>
+Content-Type: application/json
+
+{ "recipient": "user@example.com", "amount": 1000 }
+```
+
+- Response `201 Created`: `{ "transaction": "<URL of the created transaction>" }`.
+- `amount` is an integer; `recipient` must be a RIPE NCC Access account. The docs say a
+  recipient who has never used Atlas can still receive and will see the credits after
+  visiting atlas.ripe.net.
+- The manual's page uses `/credits/transfer/` (singular) while the reference uses
+  `/credits/transfers/` (plural). The reference is generated from the API schema, so the
+  platform uses the plural form and falls back to the singular on a 404.
+- No documented amount limits or rate limits. Measurement-creation endpoints are
+  documented as more strictly rate-limited than reads; 429 = back off.
+
+### Balance endpoint (verified)
+
+`GET /api/v2/credits/` returns `current_balance`, `estimated_daily_income`,
+`estimated_daily_expenditure`, `estimated_runout_seconds`, `past_day_credits_spent`,
+plus links to `income_items`, `expense_items` and `transactions`. Requires an API key
+with a credits-read permission (the manual calls it "credits read"; the exact
+`permission_group.permission_name` id is only visible from the authenticated
+`GET /api/v2/keys/permissions/` endpoint – *unverified from public docs*).
+
+### Transactions (verified)
+
+`GET /api/v2/credits/transactions/` returns `id`, `type` (`admin` | `measurement` |
+`probe`), `reason`, `description`, `amount`, `balance_before`, `balance_after`, `date`.
+Filters: `date`, `date__gt/gte/lt/lte`, `type`, `sort`, `page_size`. Transfers appear as
+`admin` transactions; the description format is not documented, so automatic
+receipt-matching is a best-effort feature, not a guarantee.
+
+## Authentication and identity
+
+- **API keys** (preferred): `Authorization: Key <uuid>`. Keys are scoped by *grants*
+  (`permission` + optional `target`), shown once at creation, can be time-boxed
+  (`valid_from`/`valid_to`), disabled, regenerated, and are frozen after inactivity.
+  403 means missing permission, unknown key, disabled, or outside the valid window.
+- **Session auth** only works for JavaScript running on the atlas.ripe.net origin. The
+  site sets a strict CSP; third-party sites cannot use it. So a browser-side
+  "click to transfer from our site" flow against the Atlas API is impossible.
+- **Error format**: `{ "error": { "status", "code", "detail", "title", "errors": [...] } }`.
+- **Privacy**: RIPE never shows user email addresses publicly. Our platform must
+  treat the RIPE NCC Access email as private data.
+
+## Can we federate identity with RIPE NCC Access?
+
+RIPE NCC Access is a Keycloak realm. Its discovery document is public:
+
+```
+https://idp.ripe.net/realms/ripe-ncc/.well-known/openid-configuration
+issuer:                 https://idp.ripe.net/realms/ripe-ncc
+authorization_endpoint: .../protocol/openid-connect/auth
+token_endpoint:         .../protocol/openid-connect/token
+userinfo_endpoint:      .../protocol/openid-connect/userinfo
+scopes: openid profile email ... audience/whois ... 
+```
+
+Findings:
+
+1. It is standard OpenID Connect, so **technically** any OIDC relying party can use it.
+2. **Client registration is gated.** The dynamic-registration endpoint answers
+   `403 insufficient_scope – Policy 'Trusted Hosts' rejected request`. The only
+   self-service path RIPE documents is the LIR Portal (https://my.ripe.net/#/oauth2),
+   available to admin users of a member LIR, and that program is described as being
+   for RIPE Database access (scopes `audience/whois`, `whois.mntner`). There is no
+   published program for third-party Atlas apps.
+3. Even with an OIDC login, **the Atlas API has no OAuth bearer support** – it accepts
+   only API keys and same-origin session cookies. Federated login would prove *who* a
+   user is (and give us their verified RIPE NCC Access email, which is exactly the
+   transfer recipient identifier), but it would not let us move credits on their
+   behalf. Transfers still need an API key or a manual step on atlas.ripe.net.
+
+Conclusion for v1: sign users in with GitHub or Microsoft (built into the Azure
+hosting platform at no cost), ask requesters for their RIPE NCC Access email, and make
+transfers happen either through a donor-supplied, single-use, transfer-scoped API key
+or manually on atlas.ripe.net. Design the code so a RIPE NCC Access OIDC provider can
+be plugged in later (Azure Static Web Apps Standard plan, custom OIDC provider) if
+RIPE NCC issues a client; that would let us auto-verify the recipient email.
+
+## Things worth asking RIPE NCC
+
+- Whether they would issue an OIDC client for this platform (verified email claim).
+- The exact permission id for credit transfers, and whether a key can be limited to a
+  maximum transfer amount or a target recipient (grants do support `target`, but the
+  target types for credit permissions are not documented).
+- Whether transfer transactions carry a stable reference that could be matched to a
+  pledge (e.g. `description` containing sender email).

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.azurite/
+.swa/
+*.log
+.DS_Store
+api/local.settings.json
+.env
+.env.*
+!.env.example
+.claude/

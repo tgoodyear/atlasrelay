@@ -1,0 +1,80 @@
+import { HttpError } from './http';
+
+export const TAGS = ['ping', 'traceroute', 'dns', 'sslcert', 'http', 'ntp', 'ipv4', 'ipv6', 'anchors', 'other'] as const;
+export type Tag = (typeof TAGS)[number];
+
+export const MAX_CREDITS = 1_000_000_000;
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function str(input: Record<string, unknown>, key: string, opts: { max: number; min?: number; required?: boolean }): string | undefined {
+  const raw = input[key];
+  if (raw === undefined || raw === null) {
+    if (opts.required) throw new HttpError(400, `${key} is required`);
+    return undefined;
+  }
+  if (typeof raw !== 'string') throw new HttpError(400, `${key} must be a string`);
+  const value = raw.trim();
+  if (opts.required && value.length < (opts.min ?? 1)) throw new HttpError(400, `${key} is required`);
+  if (value.length > opts.max) throw new HttpError(400, `${key} must be at most ${opts.max} characters`);
+  return value;
+}
+
+export function int(input: Record<string, unknown>, key: string, opts: { min: number; max: number; required?: boolean }): number | undefined {
+  const raw = input[key];
+  if (raw === undefined || raw === null || raw === '') {
+    if (opts.required) throw new HttpError(400, `${key} is required`);
+    return undefined;
+  }
+  const n = typeof raw === 'string' ? Number(raw) : raw;
+  if (typeof n !== 'number' || !Number.isInteger(n)) throw new HttpError(400, `${key} must be a whole number`);
+  if (n < opts.min || n > opts.max) throw new HttpError(400, `${key} must be between ${opts.min} and ${opts.max}`);
+  return n;
+}
+
+export function email(input: Record<string, unknown>, key: string, required = false): string | undefined {
+  const value = str(input, key, { max: 254, required });
+  if (value === undefined || value === '') return value;
+  if (!EMAIL_RE.test(value)) throw new HttpError(400, `${key} must be a valid email address`);
+  return value.toLowerCase();
+}
+
+export function httpsUrl(input: Record<string, unknown>, key: string): string | undefined {
+  const value = str(input, key, { max: 500 });
+  if (value === undefined || value === '') return value;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new HttpError(400, `${key} must be a valid URL`);
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new HttpError(400, `${key} must start with https://`);
+  return parsed.toString();
+}
+
+export function tags(input: Record<string, unknown>, key = 'tags'): Tag[] | undefined {
+  const raw = input[key];
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) throw new HttpError(400, `${key} must be an array`);
+  const out: Tag[] = [];
+  for (const t of raw) {
+    if (typeof t !== 'string' || !(TAGS as readonly string[]).includes(t)) throw new HttpError(400, `unknown tag: ${String(t)}`);
+    if (!out.includes(t as Tag)) out.push(t as Tag);
+  }
+  if (out.length > 6) throw new HttpError(400, 'at most 6 tags');
+  return out;
+}
+
+export function isoDate(input: Record<string, unknown>, key: string): string | undefined {
+  const value = str(input, key, { max: 10 });
+  if (value === undefined || value === '') return value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value))) throw new HttpError(400, `${key} must be YYYY-MM-DD`);
+  return value;
+}
+
+export function oneOf<T extends string>(input: Record<string, unknown>, key: string, allowed: readonly T[], required = false): T | undefined {
+  const value = str(input, key, { max: 32, required });
+  if (value === undefined || value === '') return undefined;
+  if (!allowed.includes(value as T)) throw new HttpError(400, `${key} must be one of ${allowed.join(', ')}`);
+  return value as T;
+}

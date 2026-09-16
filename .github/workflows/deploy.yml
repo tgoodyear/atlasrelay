@@ -1,0 +1,76 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'infra/**'
+      - '**.md'
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'infra/**'
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build_and_deploy:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    name: Build and deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test and typecheck
+        run: npm test
+
+      - name: Build web
+        run: npm run build -w web
+
+      - name: Build API
+        run: |
+          npm run build -w api
+          # Managed functions are deployed pre-built: keep only production deps.
+          cd api && npm prune --omit=dev
+
+      - name: Deploy to Azure Static Web Apps
+        id: deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: web/dist
+          api_location: api
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
+        env:
+          SKIP_DEPLOY_ON_MISSING_SECRETS: true
+
+  close_pull_request:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close PR preview
+    steps:
+      - uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: close
+        env:
+          SKIP_DEPLOY_ON_MISSING_SECRETS: true
