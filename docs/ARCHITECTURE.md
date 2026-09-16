@@ -125,7 +125,10 @@ the partition after each change, so the project row never drifts.
 
 Authorization is enforced twice: `staticwebapp.config.json` route rules require the
 `authenticated` role on mutating routes, and every function re-checks the decoded
-`x-ms-client-principal` header and ownership.
+`x-ms-client-principal` header and ownership. Static Web Apps only supports a wildcard
+at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code only
+(it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
+the SPA shows its own sign-in prompt.
 
 ## Azure resources (all in resource group `internetresearch`)
 

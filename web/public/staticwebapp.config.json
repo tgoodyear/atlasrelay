@@ -4,24 +4,79 @@
   },
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/assets/*", "/*.{svg,png,ico,txt,json,webmanifest}"]
+    "exclude": [
+      "/assets/*",
+      "/*.{svg,png,ico,txt,json,webmanifest}"
+    ]
   },
   "routes": [
-    { "route": "/login", "redirect": "/.auth/login/github?post_login_redirect_uri=/dashboard", "statusCode": 302 },
-    { "route": "/login/microsoft", "redirect": "/.auth/login/aad?post_login_redirect_uri=/dashboard", "statusCode": 302 },
-    { "route": "/logout", "redirect": "/.auth/logout?post_logout_redirect_uri=/", "statusCode": 302 },
-    { "route": "/api/me", "allowedRoles": ["authenticated"] },
-    { "route": "/api/my", "allowedRoles": ["authenticated"] },
-    { "route": "/api/atlas/*", "allowedRoles": ["authenticated"] },
-    { "route": "/api/pledges/*", "allowedRoles": ["authenticated"] },
-    { "route": "/api/projects/*/pledges", "allowedRoles": ["authenticated"] },
-    { "route": "/api/projects", "methods": ["POST"], "allowedRoles": ["authenticated"] },
-    { "route": "/api/projects/*", "methods": ["PATCH", "PUT", "DELETE"], "allowedRoles": ["authenticated"] },
-    { "route": "/assets/*", "headers": { "cache-control": "public, max-age=31536000, immutable" } }
+    {
+      "route": "/login",
+      "redirect": "/.auth/login/github?post_login_redirect_uri=/dashboard",
+      "statusCode": 302
+    },
+    {
+      "route": "/login/microsoft",
+      "redirect": "/.auth/login/aad?post_login_redirect_uri=/dashboard",
+      "statusCode": 302
+    },
+    {
+      "route": "/logout",
+      "redirect": "/.auth/logout?post_logout_redirect_uri=/",
+      "statusCode": 302
+    },
+    {
+      "route": "/api/me",
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/api/my",
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/api/atlas/*",
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/api/pledges/*",
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/api/projects",
+      "methods": [
+        "POST"
+      ],
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/api/projects/*",
+      "methods": [
+        "POST",
+        "PATCH",
+        "PUT",
+        "DELETE"
+      ],
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/assets/*",
+      "headers": {
+        "cache-control": "public, max-age=31536000, immutable"
+      }
+    }
   ],
-  "responseOverrides": {
-    "401": { "redirect": "/login", "statusCode": 302 }
-  },
   "globalHeaders": {
     "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     "x-content-type-options": "nosniff",
