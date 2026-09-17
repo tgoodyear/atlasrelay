@@ -128,10 +128,12 @@ export async function findTransferTransaction(key: string, amount: number, since
   const rows: CreditTransaction[] = Array.isArray(body)
     ? (body as CreditTransaction[])
     : (((body as { results?: CreditTransaction[] } | null)?.results) ?? []);
-  // A transfer out is recorded as a negative amount. Match on magnitude and recency so a
-  // concurrent unrelated admin transaction is not mistaken for this one.
+  // A transfer out is recorded as a negative amount. Match the sign as well as the magnitude:
+  // an incoming credit of the same size would otherwise be recorded as this transfer. If RIPE
+  // ever records outgoing transfers differently we simply find nothing and store no id, which is
+  // the right failure: no reference beats a wrong one.
   for (const row of rows) {
-    if (Math.abs(row.amount) !== amount) continue;
+    if (row.amount !== -amount) continue;
     const when = Date.parse(row.date);
     if (Number.isFinite(when) && when + 5 * 60 * 1000 < since) continue;
     return row;

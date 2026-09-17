@@ -78,3 +78,17 @@ test('a donor may hold only one live pledge per project', () => {
   assert.equal(activePledgesBy(list, 'd2').length, 1);
   assert.equal(activePledgesBy(list, 'd3').length, 0);
 });
+
+test('concurrent pledges from one donor settle on the lowest id, deterministically', () => {
+  // Ids are time-prefixed and sortable, so every racing request picks the same winner
+  // without coordination, which is what makes the post-write settlement safe.
+  const base = { projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', createdAt: '', updatedAt: '', amount: 10, status: 'pledged' as const };
+  const racing = [{ ...base, id: '0mu45rmy60912b13q' }, { ...base, id: '0mu45rmy10912b13q' }, { ...base, id: '0mu45rmz00912b13q' }];
+  const winner = activePledgesBy(racing, 'd1').map((x) => x.id).sort()[0];
+  assert.equal(winner, '0mu45rmy10912b13q');
+  // Every participant computes the same answer regardless of the order it sees them in.
+  for (const order of [[2, 0, 1], [1, 2, 0], [0, 1, 2]]) {
+    const shuffled = order.map((i) => racing[i]);
+    assert.equal(activePledgesBy(shuffled, 'd1').map((x) => x.id).sort()[0], winner);
+  }
+});

@@ -20,8 +20,9 @@ people's credits, projects or email addresses to demonstrate a finding.
 ## What the site does with sensitive data
 
 **RIPE Atlas API keys are never stored.** A key pasted into the transfer form is
-used for at most two requests inside a single API call, a balance check and the
-transfer itself, and is then discarded. It is not written to storage, and error
+used inside a single API call for up to three requests, and is then discarded: a
+balance check before sending, the transfer itself, and a lookup of the resulting
+transaction so the pledge can carry RIPE's reference. It is used for nothing else. It is not written to storage, and error
 paths deliberately avoid echoing request bodies so a key cannot reach a log.
 Donors are advised to create a key carrying only the two permissions the site uses,
 "Transfer credits to another user" and "Get information about your credits", with a

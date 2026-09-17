@@ -167,7 +167,7 @@ export default function ProjectDetail() {
                 <dt>Requested</dt><dd>{fmt(project.creditsRequested)}</dd>
                 <dt>Received</dt><dd>{fmt(project.creditsConfirmed)}</dd>
                 <dt>Pending</dt><dd>{fmt(project.creditsPending)}</dd>
-                <dt>Posted by</dt><dd>{owner?.handle ? `${project.ownerName} (${owner.provider === 'aad' ? 'Microsoft' : owner.provider}: ${owner.handle})` : project.ownerName}</dd>
+                <dt>Posted by</dt><dd>{owner ? `${project.ownerName} (signed in with ${owner.provider === 'aad' ? 'Microsoft' : 'GitHub'})` : project.ownerName}</dd>
                 {project.deadline && (<><dt>Deadline</dt><dd>{fmtDate(project.deadline)}</dd></>)}
                 <dt>Updated</dt><dd>{fmtDate(project.updatedAt)}</dd>
               </dl>

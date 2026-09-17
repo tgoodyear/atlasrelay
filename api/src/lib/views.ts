@@ -59,7 +59,9 @@ export function publicPledge(p: Pledge) {
     message: p.message,
     // Our server saw RIPE accept the transfer. That is the meaningful assurance; the id is a
     // bonus when the donor's key could also read their transaction list.
-    apiTransfer: p.method === 'api' && Boolean(p.transferredAt),
+    // transferredAt was added later; an older api pledge carries only the transactionUrl, and it
+    // was still a transfer our server watched happen.
+    apiTransfer: p.method === 'api' && Boolean(p.transferredAt || p.transactionUrl),
     hasReference: Boolean(p.transactionId),
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,

@@ -10,7 +10,9 @@ interface Props {
 type Step = 'form' | 'manual-instructions' | 'api-done';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
-  const [amount, setAmount] = useState(String(Math.min(project.remaining > 0 ? project.remaining : project.maxPledge, 100_000)));
+  // Always bounded by the server-computed per-pledge limit, so the dialog never opens on a
+  // value the submit button would reject.
+  const [amount, setAmount] = useState(String(Math.min(project.remaining > 0 ? project.remaining : project.maxPledge, project.maxPledge, 100_000)));
   const [method, setMethod] = useState<'api' | 'manual'>('api');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');

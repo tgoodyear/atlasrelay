@@ -58,12 +58,13 @@ export interface User {
   hasAtlasEmail: boolean;
 }
 
+// Mirrors publicUser() in api/src/lib/views.ts. The sign-in handle is deliberately absent:
+// for some identity providers it is the user's email address.
 export interface PublicUser {
   id: string;
   displayName: string;
   affiliation: string;
   url: string;
-  handle: string;
   provider: string;
 }
 

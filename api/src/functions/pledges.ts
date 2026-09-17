@@ -118,10 +118,29 @@ app.http('pledges-create', {
     await createPledge(pledge);
     let updatedProject = await recomputeProjectTotals(id);
 
-    // Table Storage has no cross-partition transactions, so two pledges can pass the checks above
-    // at the same moment. Re-check reserved capacity after writing and withdraw the loser. Only a
-    // manual pledge can be withdrawn: an API pledge has already moved credits at RIPE and cannot
-    // be reversed, so it is always kept and the overshoot is reported instead.
+    // Table Storage has no cross-entity transactions, so the one-live-pledge check above is
+    // read-before-write and a burst of concurrent requests from the same donor can all pass it.
+    // Settle it after writing instead: re-read, and if this donor now holds more than one live
+    // pledge, the lowest id wins. Ids are time-prefixed and sortable, so every racing request
+    // reaches the same verdict without coordination. A loser withdraws itself and, critically,
+    // never reaches the response that would disclose the owner's address.
+    const mine = activePledgesBy(await listPledges(id), donor.id);
+    if (mine.length > 1) {
+      const winner = mine.map((x) => x.id).sort()[0];
+      if (pledge.id !== winner) {
+        if (method === 'manual') {
+          await savePledge({ ...pledge, status: 'cancelled' });
+          await recomputeProjectTotals(id);
+          throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
+        }
+        // An API pledge already moved credits at RIPE and cannot be withdrawn, so it stands.
+        overshootWarning = 'You had another pledge in progress on this project; this transfer still completed.';
+      }
+      updatedProject = await recomputeProjectTotals(id);
+    }
+
+    // Re-check reserved capacity too, for the same reason: two different donors can pass the
+    // capacity check at the same moment. Only a manual pledge can be withdrawn.
     const ceiling = maxCredits(project.creditsRequested);
     const reserved = updatedProject.creditsConfirmed + updatedProject.creditsPending;
     if (reserved > ceiling) {
