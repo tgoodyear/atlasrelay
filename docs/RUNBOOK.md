@@ -62,6 +62,41 @@ Owner-only subscription deployment. Bicep is the only writer of the zone.
 4. Put that token in `dnsApexTxtValues` in `infra/main.bicepparam` and re-run the
    subscription deployment, so a later deployment does not remove it.
 
+### A hostname stuck at "Validating"
+
+A hostname bound with the wrong validation method never recovers on its own, and the method
+cannot be changed in place. `az staticwebapp hostname set` with a different `--validation-method`
+returns 200 and changes nothing; the binding keeps its original method and its original token.
+
+Check which method a hostname is using:
+
+```bash
+az staticwebapp hostname list -n swa-internetresearch -g internetresearch -o table
+```
+
+A populated `ValidationToken` means TXT-token validation. That works for the apex, whose token is
+a TXT record on `@`, but it can never work for `www`, because the token would have to be a TXT
+record at `www`, where the CNAME already lives, and DNS forbids a CNAME alongside any other
+record at the same name. So `www` must use `cname-delegation`, which validates against the CNAME
+that is already there.
+
+The only fix is to recreate the binding, and the site carries a `CanNotDelete` lock, so:
+
+```bash
+SITE=$(az staticwebapp show -n swa-internetresearch -g internetresearch --query id -o tsv)
+az lock delete --name no-delete --resource "$SITE"
+az staticwebapp hostname delete -n swa-internetresearch -g internetresearch \
+  --hostname www.atlasrelay.org --yes
+az staticwebapp hostname set -n swa-internetresearch -g internetresearch \
+  --hostname www.atlasrelay.org --validation-method cname-delegation
+az lock create --name no-delete --lock-type CanNotDelete --resource "$SITE" \
+  --notes "Production site. Remove the lock deliberately before deleting."
+```
+
+Restore the lock in the same sitting. It is declared in `infra/rbac.bicep`, so a subscription
+deployment also restores it, but do not rely on that. The apex binding is untouched throughout.
+The certificate is issued a few minutes after the status reaches `Ready`.
+
 The zone deliberately ships no apex A or ALIAS record. Static Web Apps creates that record
 itself during apex validation, because only the service knows the target to point at; until
 then the apex does not resolve while `www` already does. The binding script refuses to run
