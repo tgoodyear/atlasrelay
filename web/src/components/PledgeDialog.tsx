@@ -10,7 +10,7 @@ interface Props {
 type Step = 'form' | 'manual-instructions' | 'api-done';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
-  const [amount, setAmount] = useState(String(Math.min(project.remaining, 100_000)));
+  const [amount, setAmount] = useState(String(Math.min(project.remaining > 0 ? project.remaining : project.capacity, 100_000)));
   const [method, setMethod] = useState<'api' | 'manual'>('api');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
@@ -30,7 +30,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   }, [onClose]);
 
   const n = Number(amount);
-  const amountOk = Number.isInteger(n) && n >= 1 && n <= project.remaining;
+  const amountOk = Number.isInteger(n) && n >= 1 && n <= project.capacity;
 
   const checkBalance = async () => {
     setChecking(true);
@@ -92,8 +92,13 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <form onSubmit={submit}>
               <div className="field">
                 <label htmlFor="amount">Amount</label>
-                <input id="amount" type="number" min={1} max={project.remaining} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
-                <span className="hint">This project still needs {fmt(project.remaining)} credits.</span>
+                <input id="amount" type="number" min={1} max={project.capacity} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                <span className="hint">
+                  {project.remaining > 0
+                    ? `This project still needs ${fmt(project.remaining)} credits to reach its goal`
+                    : 'This project has reached its goal'}
+                  {` and can accept up to ${fmt(project.capacity)} more (100× its request).`}
+                </span>
               </div>
 
               <div className="method-choice" role="radiogroup" aria-label="Transfer method">
