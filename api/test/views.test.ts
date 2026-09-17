@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { publicName, publicProject, publicUser } from '../src/lib/views';
+import { publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
+import type { Pledge } from '../src/lib/store';
 
 test('publicName never returns an email address', () => {
   // Static Web Apps supplies the email address as userDetails for some providers.
@@ -38,4 +39,27 @@ test('a project read with live totals releases an expired reservation', () => {
   assert.equal(publicProject(p).maxPledge, 0);
   // Expiry-aware totals from the read path release it.
   assert.equal(publicProject(p, { confirmed: 0, pending: 0 }).maxPledge, 1000);
+});
+
+const pledge = (over: Partial<Pledge>): Pledge => ({
+  id: 'p1', projectId: 'j1', donorId: 'd1', donorName: 'Alice', amount: 100, method: 'api',
+  status: 'confirmed', transactionUrl: '', transactionId: '', transferredAt: '2026-09-17T00:00:00.000Z',
+  transferUncertain: false, message: '', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z',
+  ...over,
+});
+
+test('an API transfer our server watched RIPE accept is marked as one', () => {
+  assert.equal(publicPledge(pledge({})).apiTransfer, true);
+});
+
+test('a transfer RIPE never answered is never shown as a watched transfer', () => {
+  // The badge asserts that our server saw RIPE accept the credits. When RIPE never replied,
+  // saying so would be a claim nobody can stand behind.
+  const p = publicPledge(pledge({ status: 'sent', transferUncertain: true }));
+  assert.equal(p.apiTransfer, false);
+  assert.equal(p.transferUncertain, true);
+});
+
+test('a manual pledge is never an API transfer', () => {
+  assert.equal(publicPledge(pledge({ method: 'manual' })).apiTransfer, false);
 });

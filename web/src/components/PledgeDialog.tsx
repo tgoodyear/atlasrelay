@@ -7,7 +7,7 @@ interface Props {
   onDone: (project: Project) => void;
 }
 
-type Step = 'form' | 'manual-instructions' | 'api-done';
+type Step = 'form' | 'manual-instructions' | 'api-done' | 'api-unknown';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
   // Always bounded by the server-computed per-pledge limit, so the dialog never opens on a
@@ -64,7 +64,18 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       }
       onDone(res.project);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong');
+      const message = err instanceof ApiError ? err.message : 'Something went wrong';
+      // A 502 on an API transfer means the server never heard back from RIPE, so the credits may
+      // or may not have moved. Leaving the form up would invite a second click that sends them
+      // twice. Every other status means RIPE refused and nothing moved, so the donor can fix the
+      // problem and try again with the key they already pasted.
+      if (method === 'api' && err instanceof ApiError && err.status === 502) {
+        setApiKey('');
+        setError(message);
+        setStep('api-unknown');
+      } else {
+        setError(message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -85,7 +96,13 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pledge-title">
         <div className="modal-head">
           <h2 id="pledge-title">
-            {step === 'form' ? 'Send credits' : step === 'api-done' ? 'Credits transferred' : 'Finish the transfer on atlas.ripe.net'}
+            {step === 'form'
+              ? 'Send credits'
+              : step === 'api-done'
+                ? 'Credits transferred'
+                : step === 'api-unknown'
+                  ? 'Check before you send again'
+                  : 'Finish the transfer on atlas.ripe.net'}
           </h2>
           <button className="close" aria-label="Close" onClick={onClose}>×</button>
         </div>
@@ -178,6 +195,34 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
               </ol>
               <p className="small muted" style={{ marginTop: '1rem' }}>
                 Use this address only to send these credits. The researcher can see that you asked for it, and you can hold one pledge per project at a time.
+              </p>
+              <div className="form-actions">
+                <button className="btn" type="button" onClick={onClose}>Done</button>
+              </div>
+            </>
+          )}
+
+          {step === 'api-unknown' && (
+            <>
+              <div className="alert alert-warn">{error}</div>
+              <p>
+                We sent the transfer to RIPE Atlas but never got an answer, so we cannot tell you whether
+                the {fmt(n)} credits left your account. Check your transaction log before doing anything else.
+              </p>
+              <ol className="steps">
+                <li>
+                  Open <a href="https://atlas.ripe.net/credits/transactions/" target="_blank" rel="noreferrer">atlas.ripe.net/credits/transactions</a>.
+                </li>
+                <li>Look for an outgoing transfer of <strong className="mono">{fmt(n)}</strong> credits in the last few minutes.</li>
+                <li>
+                  If it is there, the transfer worked. The pledge is already recorded, and the researcher
+                  confirms it once the credits show up on their side.
+                </li>
+                <li>If it is not there, cancel the pledge on your dashboard and start again.</li>
+              </ol>
+              <p className="small muted">
+                Do not send the credits a second time until you have checked. Remember to delete the API key
+                you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.
               </p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={onClose}>Done</button>

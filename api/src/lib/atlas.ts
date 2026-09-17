@@ -8,6 +8,17 @@ import { HttpError } from './http';
 
 const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Thrown when a call never reached RIPE, or RIPE never answered. The distinction matters for
+ * transfers: every other error means RIPE replied with a refusal and no credits moved, whereas
+ * this one means the outcome is unknown and the caller must not retry blindly.
+ */
+export class AtlasUnreachable extends HttpError {
+  constructor(message: string) {
+    super(502, message);
+  }
+}
+
 export function base(): string {
   return (process.env.ATLAS_API_BASE || 'https://atlas.ripe.net/api/v2').replace(/\/$/, '');
 }
@@ -66,7 +77,7 @@ async function atlasFetch(path: string, key: string, init: RequestInit = {}): Pr
     });
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
-    throw new HttpError(502, aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
+    throw new AtlasUnreachable(aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
   } finally {
     clearTimeout(timer);
   }
@@ -106,6 +117,8 @@ async function parseBody(res: Response): Promise<unknown> {
 export async function getCredits(key: string): Promise<CreditsOverview> {
   const res = await atlasFetch('/credits/', key);
   const body = await parseBody(res);
+  // RIPE answered and refused, so no credits moved. Anything thrown from atlasFetch itself is
+  // an AtlasUnreachable instead, and carries no such guarantee.
   if (!res.ok) throw new HttpError(res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   return body as CreditsOverview;
 }
@@ -143,11 +156,9 @@ export async function findTransferTransaction(key: string, amount: number, since
 
 export async function transferCredits(key: string, recipient: string, amount: number): Promise<TransferResult> {
   const payload = JSON.stringify({ recipient, amount });
-  let res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
-  if (res.status === 404) {
-    // The manual documents the singular path; the reference documents the plural.
-    res = await atlasFetch('/credits/transfer/', key, { method: 'POST', body: payload });
-  }
+  // One POST only. The manual documents a singular path too, but the plural one is what the
+  // live API serves, and re-posting a transfer to guess at a path could send credits twice.
+  const res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
   const body = await parseBody(res);
   if (!res.ok) throw new HttpError(res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   const transaction = (body as TransferResult | null)?.transaction;

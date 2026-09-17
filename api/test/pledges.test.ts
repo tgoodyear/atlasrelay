@@ -4,7 +4,7 @@ import { activePledgesBy, totals } from '../src/lib/store';
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, remainingToGoal } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
-  const base = { id: '', projectId: '', donorId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', createdAt: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '', createdAt: '', updatedAt: '' };
   const t = totals([
     { ...base, amount: 100, status: 'confirmed' },
     { ...base, amount: 50, status: 'pledged' },
@@ -48,7 +48,7 @@ test('listing keys off confirmed credits, so a pending pledge cannot hide a proj
 });
 
 test('stale pending pledges stop reserving capacity', () => {
-  const base = { id: '', projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '', updatedAt: '' };
   const asOf = Date.parse('2026-09-17T00:00:00Z');
   const fresh = new Date(asOf - 1 * 24 * 3600 * 1000).toISOString();
   const stale = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * 24 * 3600 * 1000).toISOString();
@@ -60,7 +60,7 @@ test('stale pending pledges stop reserving capacity', () => {
 });
 
 test('an expired pledge no longer locks its own donor out', () => {
-  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '', updatedAt: '' };
   const asOf = Date.parse('2026-09-17T00:00:00Z');
   const stale = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * 24 * 3600 * 1000).toISOString();
   const list = [{ ...base, donorId: 'd1', amount: 10, status: 'pledged' as const, createdAt: stale }];
@@ -68,7 +68,7 @@ test('an expired pledge no longer locks its own donor out', () => {
 });
 
 test('a donor may hold only one live pledge per project', () => {
-  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', createdAt: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '', createdAt: '', updatedAt: '' };
   const list = [
     { ...base, donorId: 'd1', amount: 10, status: 'pledged' as const },
     { ...base, donorId: 'd1', amount: 10, status: 'cancelled' as const },
@@ -82,7 +82,7 @@ test('a donor may hold only one live pledge per project', () => {
 test('concurrent pledges from one donor settle on the lowest id, deterministically', () => {
   // Ids are time-prefixed and sortable, so every racing request picks the same winner
   // without coordination, which is what makes the post-write settlement safe.
-  const base = { projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', createdAt: '', updatedAt: '', amount: 10, status: 'pledged' as const };
+  const base = { projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '', createdAt: '', updatedAt: '', amount: 10, status: 'pledged' as const };
   const racing = [{ ...base, id: '0mu45rmy60912b13q' }, { ...base, id: '0mu45rmy10912b13q' }, { ...base, id: '0mu45rmz00912b13q' }];
   const winner = activePledgesBy(racing, 'd1').map((x) => x.id).sort()[0];
   assert.equal(winner, '0mu45rmy10912b13q');
@@ -91,4 +91,13 @@ test('concurrent pledges from one donor settle on the lowest id, deterministical
     const shuffled = order.map((i) => racing[i]);
     assert.equal(activePledgesBy(shuffled, 'd1').map((x) => x.id).sort()[0], winner);
   }
+});
+
+test('a transfer of unknown outcome keeps reserving credits and keeps its donor out', () => {
+  // Parked at 'sent' because RIPE never answered. Until a human settles it, the credits it may
+  // have moved stay reserved, and its donor cannot start a second transfer on the same project.
+  const base = { id: 'a', projectId: 'j1', donorId: 'd1', donorName: '', method: 'api' as const, transactionUrl: '', transactionId: '', transferredAt: '2026-09-17T00:00:00.000Z', transferUncertain: true, message: '', createdAt: new Date().toISOString(), updatedAt: '' };
+  const pledges = [{ ...base, amount: 500, status: 'sent' as const }];
+  assert.deepEqual(totals(pledges), { confirmed: 0, pending: 500 });
+  assert.equal(activePledgesBy(pledges, 'd1').length, 1);
 });

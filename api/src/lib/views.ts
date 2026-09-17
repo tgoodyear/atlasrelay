@@ -60,9 +60,12 @@ export function publicPledge(p: Pledge) {
     // Our server saw RIPE accept the transfer. That is the meaningful assurance; the id is a
     // bonus when the donor's key could also read their transaction list.
     // transferredAt was added later; an older api pledge carries only the transactionUrl, and it
-    // was still a transfer our server watched happen.
-    apiTransfer: p.method === 'api' && Boolean(p.transferredAt || p.transactionUrl),
+    // was still a transfer our server watched happen. An uncertain transfer is excluded: RIPE
+    // never answered, so nobody watched anything and the claim would be false.
+    apiTransfer: p.method === 'api' && !p.transferUncertain && Boolean(p.transferredAt || p.transactionUrl),
     hasReference: Boolean(p.transactionId),
+    // The transfer was sent but RIPE never answered, so this pledge needs a human to settle it.
+    transferUncertain: p.transferUncertain,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   };

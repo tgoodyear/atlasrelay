@@ -38,6 +38,7 @@ export interface Pledge {
   message: string;
   apiTransfer: boolean;
   hasReference: boolean;
+  transferUncertain?: boolean;
   createdAt: string;
   updatedAt: string;
   donorId?: string;

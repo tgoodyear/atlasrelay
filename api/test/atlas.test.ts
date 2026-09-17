@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertKeyFormat, describeAtlasError } from '../src/lib/atlas';
+import { assertKeyFormat, AtlasUnreachable, describeAtlasError, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
 test('assertKeyFormat only accepts UUIDs', () => {
@@ -20,4 +20,83 @@ test('describeAtlasError has sane fallbacks', () => {
   assert.match(describeAtlasError(403, null), /rejected the API key/);
   assert.match(describeAtlasError(429, {}), /rate-limiting/);
   assert.match(describeAtlasError(500, ''), /HTTP 500/);
+});
+
+// The pledge handler decides whether to roll a reservation back or park it for a human by
+// asking one question of a failed transfer: did RIPE answer? These tests pin that answer.
+
+const KEY = '12345678-1234-1234-1234-123456789abc';
+
+async function withFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Promise<T> {
+  const real = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
+test('a refusal from RIPE is not AtlasUnreachable, because no credits moved', async () => {
+  const err = await withFetch(
+    async () => new Response(JSON.stringify({ error: { status: 400, detail: 'Not enough credits.' } }), { status: 400 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof HttpError);
+  assert.equal(err instanceof AtlasUnreachable, false);
+  assert.equal(err.status, 400);
+});
+
+test('rate limiting is a refusal too, and keeps its 429', async () => {
+  const err = await withFetch(
+    async () => new Response('{}', { status: 429 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.equal(err instanceof AtlasUnreachable, false);
+  assert.equal((err as HttpError).status, 429);
+});
+
+test('a network failure is AtlasUnreachable, because the outcome is unknown', async () => {
+  const err = await withFetch(
+    async () => {
+      throw new TypeError('fetch failed');
+    },
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable);
+  assert.equal(err.status, 502);
+});
+
+test('a timeout is AtlasUnreachable: RIPE may still have taken the credits', async () => {
+  const err = await withFetch(
+    async () => {
+      const abort = new Error('The operation was aborted');
+      abort.name = 'AbortError';
+      throw abort;
+    },
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable);
+  assert.match(err.message, /did not respond in time/);
+});
+
+test('a transfer posts exactly once, whatever the response', async () => {
+  const paths: string[] = [];
+  await withFetch(
+    async (input) => {
+      paths.push(String(input));
+      return new Response('{}', { status: 404 });
+    },
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, () => null),
+  );
+  assert.equal(paths.length, 1, 'a second POST could send the credits twice');
+  assert.match(paths[0], /\/credits\/transfers\/$/);
+});
+
+test('a 2xx without a transaction field still counts as sent', async () => {
+  const res = await withFetch(
+    async () => new Response(JSON.stringify({ amount: 10, recipient: 'someone@example.org' }), { status: 201 }),
+    () => transferCredits(KEY, 'someone@example.org', 10),
+  );
+  assert.deepEqual(res, { transaction: '' });
 });

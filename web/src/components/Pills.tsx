@@ -17,13 +17,15 @@ export function StatusPill({ project }: { project: Pick<Project, 'status' | 'fun
   return <span className="pill pill-teal">Open</span>;
 }
 
-export function PledgeStatusPill({ status, apiTransfer }: { status: Pledge['status']; apiTransfer?: boolean }) {
+export function PledgeStatusPill({ status, apiTransfer, transferUncertain }: { status: Pledge['status']; apiTransfer?: boolean; transferUncertain?: boolean }) {
   switch (status) {
     case 'confirmed':
       // "Transferred via API" means our server watched RIPE Atlas accept the transfer.
       // "Confirmed" means the researcher said the credits arrived.
       return <span className="pill pill-green">{apiTransfer ? 'Transferred via API' : 'Confirmed'}</span>;
     case 'sent':
+      // RIPE never answered this one, so neither party should read it as money in the bank.
+      if (transferUncertain) return <span className="pill pill-amber">Sent, outcome unknown</span>;
       return <span className="pill pill-amber">Sent, awaiting confirmation</span>;
     case 'cancelled':
       return <span className="pill pill-muted">Cancelled</span>;

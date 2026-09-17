@@ -92,13 +92,38 @@ the partition after each change, so the project row never drifts.
      user" and "Get information about your credits", the latter so the balance can be
      checked before sending. A transfer-only key works, with the check skipped. The
      function optionally reads the balance (`GET /credits/`) to warn on insufficient
-     funds, then calls `POST /credits/transfers/`. On 201 the pledge is stored as
-     `confirmed` with the transaction URL. The key lives only in the request scope.
-     The UI tells donors to delete or disable the key afterwards.
+     funds. The pledge row is written **before** the transfer, then the function calls
+     `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
+     and the transaction is looked up to record a real id. The key lives only in the
+     request scope. The UI tells donors to delete or disable the key afterwards.
    - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
      donor marks it `sent`; the requester marks it `confirmed`.
 3. Donor's pledges are listed on their dashboard.
+
+### Ordering, and what happens when a transfer fails
+
+Table Storage has no transaction that can span a local write and a call to RIPE, so the order of
+the two decides which way a failure hurts. The pledge row is written first. An orphan row is a
+pledge somebody cancels; a transfer with no row is credits nobody can account for.
+
+What happens next depends on a single question: did RIPE answer?
+
+| Outcome | What we know | What the platform does |
+| --- | --- | --- |
+| 201 | The credits moved | Pledge becomes `confirmed`; the transaction id is looked up and stored |
+| 4xx or 429 from RIPE | RIPE refused, nothing moved | Pledge is cancelled, the donor sees why and can try again |
+| Timeout or network failure | Unknown | Pledge is parked at `sent` and flagged uncertain |
+
+An uncertain pledge takes the same path a manual one does: it sits on both dashboards until the
+requester confirms the credits arrived or the donor cancels it. Both parties see "Sent, outcome
+unknown" rather than a badge claiming a transfer we never saw succeed. The donor is sent to
+https://atlas.ripe.net/credits/transactions/ to check before sending anything again, and the
+dialog gives them no way to resubmit.
+
+Once the credits have moved, nothing in the handler is allowed to fail the request: the
+transaction lookup and the row update are both best-effort, because a retry at that point would
+send the credits twice.
 
 ### Abuse limits
 

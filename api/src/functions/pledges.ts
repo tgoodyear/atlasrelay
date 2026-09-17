@@ -1,6 +1,6 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
-import { assertKeyFormat, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
+import { assertKeyFormat, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge, totals } from '../lib/store';
@@ -80,13 +80,47 @@ app.http('pledges-create', {
       transactionUrl: '',
       transactionId: '',
       transferredAt: '',
+      transferUncertain: false,
       message,
       createdAt: ts,
       updatedAt: ts,
     };
 
+    // The row is written before any credits move. Table Storage has no transaction that can span
+    // a local write and a call to RIPE, so the order decides which way a failure hurts. An orphan
+    // row is a pledge someone cancels; an untracked transfer is credits nobody can account for.
+    await createPledge(pledge);
+
+    /**
+     * Release the reservation and hand back the error to throw. Callers write
+     * `throw await rollback(...)` so that the exit is visible at the call site. Only safe while
+     * no credits have moved.
+     */
+    const rollback = async (err: HttpError): Promise<HttpError> => {
+      await savePledge({ ...pledge, status: 'cancelled' });
+      await recomputeProjectTotals(id);
+      return err;
+    };
+
+    // The one-live-pledge and capacity checks above read before writing, so a burst of concurrent
+    // requests from the same donor can all pass them. Settle it now that the row is visible:
+    // re-read, and where a donor holds more than one live pledge the lowest id wins. Ids are
+    // time-prefixed and sortable, so every racing request reaches the same verdict without
+    // coordination. Losing costs nothing here, because this runs before the transfer.
+    const mine = activePledgesBy(await listPledges(id), donor.id);
+    if (mine.length > 1 && pledge.id !== mine.map((x) => x.id).sort()[0]) {
+      throw await rollback(new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.'));
+    }
+
+    // Reserved capacity needs the same treatment, because two different donors can pass the
+    // capacity check at the same moment.
+    let updatedProject = await recomputeProjectTotals(id);
+    if (updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
+      throw await rollback(new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.'));
+    }
+
     let balanceWarning: string | undefined;
-    let overshootWarning: string | undefined;
+    let recordWarning: string | undefined;
     if (method === 'api') {
       const key = assertKeyFormat(body.apiKey);
       // Best-effort balance check. A transfer-only key may lack the read permission; that is fine.
@@ -96,60 +130,66 @@ app.http('pledges-create', {
           throw new HttpError(400, `Your RIPE Atlas balance is ${credits.current_balance.toLocaleString('en-US')} credits, less than the ${amount.toLocaleString('en-US')} you want to send`);
         }
       } catch (err) {
-        if (err instanceof HttpError && err.status === 400 && /balance is/.test(err.message)) throw err;
+        if (err instanceof HttpError && err.status === 400 && /balance is/.test(err.message)) throw await rollback(err);
         // Most often the key carries "Transfer credits to another user" but not
         // "Get information about your credits", which is worth naming rather than hiding.
         balanceWarning = 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.';
       }
+
       const startedAt = Date.now();
-      await transferCredits(key, owner.atlasEmail, amount);
+      try {
+        await transferCredits(key, owner.atlasEmail, amount);
+      } catch (err) {
+        if (err instanceof AtlasUnreachable) {
+          // RIPE may or may not have taken the credits, and there is no way to ask without the
+          // donor's key. Park the pledge exactly where a manual one waits after the donor says
+          // they have sent it: the owner confirms it if the credits arrive, the donor cancels it
+          // if they never do. It stays on both dashboards until somebody settles it.
+          pledge.status = 'sent';
+          pledge.transferUncertain = true;
+          pledge.transferredAt = new Date(startedAt).toISOString();
+          try {
+            await savePledge(pledge);
+            await recomputeProjectTotals(id);
+          } catch (saveErr) {
+            // The warning below matters more than the row's exact status, so say it either way.
+            console.error('Could not park an uncertain transfer:', saveErr instanceof Error ? saveErr.message : saveErr);
+          }
+          throw new HttpError(
+            502,
+            `${err.message}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. The pledge is recorded and waiting for the project owner to confirm it.`,
+          );
+        }
+        // Everything else is RIPE answering with a refusal, which means no credits moved.
+        throw await rollback(err instanceof HttpError ? err : new HttpError(400, 'RIPE Atlas rejected the transfer'));
+      }
+
+      // Past this point the credits have moved. Nothing below may throw, because there is no
+      // longer any failure the donor could usefully act on by retrying.
       pledge.status = 'confirmed';
       pledge.transferredAt = new Date(startedAt).toISOString();
-      // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
-      // the transaction up to record a real id. Best-effort: a key without the credits-read
-      // permission still completes the transfer, it just carries no id.
-      const txn = await findTransferTransaction(key, amount, startedAt);
-      if (txn) {
-        pledge.transactionId = String(txn.id);
-        pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
-      }
-    }
-
-    await createPledge(pledge);
-    let updatedProject = await recomputeProjectTotals(id);
-
-    // Table Storage has no cross-entity transactions, so the one-live-pledge check above is
-    // read-before-write and a burst of concurrent requests from the same donor can all pass it.
-    // Settle it after writing instead: re-read, and if this donor now holds more than one live
-    // pledge, the lowest id wins. Ids are time-prefixed and sortable, so every racing request
-    // reaches the same verdict without coordination. A loser withdraws itself and, critically,
-    // never reaches the response that would disclose the owner's address.
-    const mine = activePledgesBy(await listPledges(id), donor.id);
-    if (mine.length > 1) {
-      const winner = mine.map((x) => x.id).sort()[0];
-      if (pledge.id !== winner) {
-        if (method === 'manual') {
-          await savePledge({ ...pledge, status: 'cancelled' });
-          await recomputeProjectTotals(id);
-          throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
+      try {
+        // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
+        // the transaction up to record a real id. A key without the credits-read permission still
+        // completes the transfer, it just carries no id.
+        const txn = await findTransferTransaction(key, amount, startedAt);
+        if (txn) {
+          pledge.transactionId = String(txn.id);
+          pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
         }
-        // An API pledge already moved credits at RIPE and cannot be withdrawn, so it stands.
-        overshootWarning = 'You had another pledge in progress on this project; this transfer still completed.';
+      } catch {
+        // No reference beats failing a transfer that already happened.
       }
-      updatedProject = await recomputeProjectTotals(id);
-    }
 
-    // Re-check reserved capacity too, for the same reason: two different donors can pass the
-    // capacity check at the same moment. Only a manual pledge can be withdrawn.
-    const ceiling = maxCredits(project.creditsRequested);
-    const reserved = updatedProject.creditsConfirmed + updatedProject.creditsPending;
-    if (reserved > ceiling) {
-      if (method === 'manual') {
-        await savePledge({ ...pledge, status: 'cancelled' });
+      try {
+        await savePledge(pledge);
         updatedProject = await recomputeProjectTotals(id);
-        throw new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.');
+      } catch (err) {
+        // The credits are gone and we cannot mark the row confirmed. Leave it pending rather than
+        // erroring: it is on both dashboards, and the owner can confirm it by hand.
+        console.error('Transfer completed but the pledge could not be updated:', err instanceof Error ? err.message : err);
+        recordWarning = 'Your transfer completed, but recording it here did not. The project owner can confirm the pledge once the credits arrive.';
       }
-      overshootWarning = `This transfer completed, but concurrent pledges have taken the project ${(reserved - ceiling).toLocaleString('en-US')} credits beyond its ceiling.`;
     }
 
     return json(
@@ -160,7 +200,7 @@ app.http('pledges-create', {
         // exactly who that is on their dashboard, because the pledge carries the donor's name.
         recipientEmail: method === 'manual' ? owner.atlasEmail : undefined,
         transferUrl: 'https://atlas.ripe.net/credits/transfer/',
-        warning: [balanceWarning, overshootWarning].filter(Boolean).join(' ') || undefined,
+        warning: [balanceWarning, recordWarning].filter(Boolean).join(' ') || undefined,
       },
       201,
     );

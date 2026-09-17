@@ -53,6 +53,11 @@ export interface Pledge {
   transactionId: string;
   /** When our server observed RIPE accept the transfer. */
   transferredAt: string;
+  /**
+   * Set when an API transfer was sent but RIPE never answered, so we cannot say whether the
+   * credits moved. The pledge waits at `sent` for a human to settle it either way.
+   */
+  transferUncertain: boolean;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -243,6 +248,7 @@ function toPledge(e: Entity): Pledge {
     transactionUrl: String(e.transactionUrl ?? ''),
     transactionId: String(e.transactionId ?? ''),
     transferredAt: String(e.transferredAt ?? ''),
+    transferUncertain: e.transferUncertain === true,
     message: String(e.message ?? ''),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
