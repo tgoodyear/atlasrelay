@@ -36,7 +36,7 @@ if [[ -n "$me" ]]; then
 fi
 
 log "Resource providers"
-for rp in Microsoft.Web Microsoft.Storage Microsoft.ManagedIdentity Microsoft.Consumption Microsoft.OperationalInsights Microsoft.Insights Microsoft.AlertsManagement; do
+for rp in Microsoft.Web Microsoft.Storage Microsoft.ManagedIdentity Microsoft.Consumption Microsoft.OperationalInsights Microsoft.Insights Microsoft.AlertsManagement Microsoft.Network; do
   state="$(az provider show -n "$rp" "${SUB[@]}" --query registrationState -o tsv 2>/dev/null || echo Unknown)"
   if [[ "$state" != "Registered" ]]; then
     echo "  registering $rp ..."

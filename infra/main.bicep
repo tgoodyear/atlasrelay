@@ -192,6 +192,7 @@ module dns 'dns.bicep' = if (!empty(dnsZoneName)) {
   params: {
     zoneName: dnsZoneName
     staticWebAppDefaultHostname: app.outputs.staticWebAppHostname
+    staticWebAppInboundIp: app.outputs.staticWebAppInboundIp
     apexTxtValues: dnsApexTxtValues
     tags: tags
   }

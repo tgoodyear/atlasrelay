@@ -6,6 +6,11 @@
 // validation; the custom-domain binding is added afterwards with `az staticwebapp hostname set`
 // (see docs/RUNBOOK.md). Once the apex validation token is issued, record it in
 // apexTxtValues so Bicep stays the only writer of this zone.
+//
+// Apex routing. DNS forbids a CNAME at the zone apex, and an Azure DNS alias record cannot
+// target a static site (alias targets are limited to public IPs, Traffic Manager, CDN and Front
+// Door). The apex therefore uses a plain A record pointing at the site's stable inbound address,
+// taken from the resource rather than hardcoded so that redeploying corrects it if it changes.
 targetScope = 'resourceGroup'
 
 @description('Public DNS zone name, e.g. atlasrelay.org')
@@ -13,6 +18,10 @@ param zoneName string
 
 @description('Default hostname of the static web app, used for the www CNAME')
 param staticWebAppDefaultHostname string
+
+@description('''Address the static web app serves on, for the apex A record. Empty skips the
+record, which is correct on a first deployment before the platform has assigned one.''')
+param staticWebAppInboundIp string = ''
 
 @description('TTL in seconds for the records below')
 param ttl int = 3600
@@ -48,6 +57,21 @@ resource wwwCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = {
     CNAMERecord: {
       cname: staticWebAppDefaultHostname
     }
+  }
+}
+
+// Apex A record: routes atlasrelay.org itself to the site. Without it the apex resolves to
+// nothing even after the custom domain validates.
+resource apexA 'Microsoft.Network/dnsZones/A@2018-05-01' = if (!empty(staticWebAppInboundIp)) {
+  parent: zone
+  name: '@'
+  properties: {
+    TTL: ttl
+    ARecords: [
+      {
+        ipv4Address: staticWebAppInboundIp
+      }
+    ]
   }
 }
 
@@ -95,3 +119,4 @@ resource dmarc 'Microsoft.Network/dnsZones/TXT@2018-05-01' = if (rejectMail) {
 output zoneName string = zone.name
 output nameServers array = zone.properties.nameServers
 output zoneId string = zone.id
+output apexARecordIp string = staticWebAppInboundIp

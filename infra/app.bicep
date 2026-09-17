@@ -146,3 +146,12 @@ resource swaSettings 'Microsoft.Web/staticSites/config@2024-04-01' = {
 output storageAccountName string = storage.name
 output staticWebAppName string = swa.name
 output staticWebAppHostname string = swa.properties.defaultHostname
+// Address the platform serves this site on, used for the apex A record (Azure DNS alias records
+// cannot target a static site, so the apex needs a real address). Read through reference()
+// because the Bicep type for staticSites does not declare stableInboundIP, though the API
+// returns it; contains() keeps a first-ever deployment working before one is assigned.
+// The symbol form (swa.properties.stableInboundIP) fails type checking because the property is
+// absent from the Bicep type, so reference() is deliberate here.
+#disable-next-line use-resource-symbol-reference
+var swaRuntime = reference(swa.id, '2024-04-01')
+output staticWebAppInboundIp string = contains(swaRuntime, 'stableInboundIP') ? string(swaRuntime.stableInboundIP) : ''
