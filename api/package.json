@@ -15,11 +15,11 @@
     "@azure/functions": "^4.16.4"
   },
   "devDependencies": {
-    "@types/node": "^20.19.0",
+    "@types/node": "^22.20.3",
     "tsx": "^4.20.0",
-    "typescript": "^5.9.0"
+    "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   }
 }

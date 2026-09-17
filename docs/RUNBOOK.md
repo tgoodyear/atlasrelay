@@ -5,7 +5,7 @@
 Prerequisites: `az` (logged in as an Owner of subscription
 `25bf257c-c94e-4d61-bba3-edc635f46602`; the tenant requires MFA, so use
 `az login --tenant <tenant-id>`), `gh` (logged in with `repo` and `workflow` scopes),
-`jq`, Node 22+.
+`jq`, Node 22.12+.
 
 ```bash
 ./scripts/bootstrap.sh
@@ -43,8 +43,8 @@ npm run dev            # Azurite + Functions host (:7071) + Vite (:5173) + SWA e
 `npm run dev` copies `api/local.settings.json.example` to `api/local.settings.json` if it
 is missing; that file points `TABLES_CONNECTION_STRING` at Azurite. Open
 http://localhost:4280. The SWA emulator lets you "log in" as any username without a real
-GitHub account. Node 22 is the target runtime; newer local versions work with a warning
-from the Functions host.
+GitHub account. Node 22.12 or newer is required (concurrently 10 needs it); newer local versions work
+with a warning from the Functions host.
 
 ## Operations
 
