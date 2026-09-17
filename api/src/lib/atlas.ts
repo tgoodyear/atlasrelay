@@ -8,6 +8,18 @@ import { HttpError } from './http';
 
 const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Thrown when RIPE answered and refused the request. The HTTP status we hand our own caller is
+ * flattened (RIPE's 4xx becomes our 400), so RIPE's own status is kept here: it is the only way
+ * to tell "this key lacks a permission" from "RIPE is having a bad day", and those two need
+ * different words in front of a donor.
+ */
+export class AtlasRefused extends HttpError {
+  constructor(public upstreamStatus: number, status: number, message: string) {
+    super(status, message);
+  }
+}
+
 export function base(): string {
   return (process.env.ATLAS_API_BASE || 'https://atlas.ripe.net/api/v2').replace(/\/$/, '');
 }
@@ -85,7 +97,7 @@ export function describeAtlasError(status: number, body: unknown): string {
   switch (status) {
     case 401:
     case 403:
-      return 'RIPE Atlas rejected the API key. Check that it carries both "Transfer credits to another user" and "Get information about your credits", is enabled, and is within its validity window.';
+      return 'RIPE Atlas rejected the API key. Check that it carries "Transfer credits to another user", is enabled, and is within its validity window. The separate "Get information about your credits" permission is only used for the balance check and is not required.';
     case 429:
       return 'RIPE Atlas is rate-limiting requests. Wait a minute and try again.';
     default:
@@ -106,7 +118,7 @@ async function parseBody(res: Response): Promise<unknown> {
 export async function getCredits(key: string): Promise<CreditsOverview> {
   const res = await atlasFetch('/credits/', key);
   const body = await parseBody(res);
-  if (!res.ok) throw new HttpError(res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
+  if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   return body as CreditsOverview;
 }
 
@@ -132,13 +144,17 @@ export async function findTransferTransaction(key: string, amount: number, since
   // an incoming credit of the same size would otherwise be recorded as this transfer. If RIPE
   // ever records outgoing transfers differently we simply find nothing and store no id, which is
   // the right failure: no reference beats a wrong one.
-  for (const row of rows) {
-    if (row.amount !== -amount) continue;
+  const candidates = rows.filter((row) => {
+    if (row.amount !== -amount) return false;
     const when = Date.parse(row.date);
-    if (Number.isFinite(when) && when + 5 * 60 * 1000 < since) continue;
-    return row;
-  }
-  return null;
+    return !Number.isFinite(when) || when + 5 * 60 * 1000 >= since;
+  });
+  // Amount and a time window do not uniquely identify a transfer. If the donor sent the same
+  // amount twice in quick succession, or an unrelated transfer of that size landed in the window,
+  // more than one row matches and there is no way to tell which is ours. Record nothing then: the
+  // 201 already told us the credits moved, and a reference pointing at the wrong transaction is
+  // worse than no reference at all.
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 export async function transferCredits(key: string, recipient: string, amount: number): Promise<TransferResult> {
@@ -149,7 +165,7 @@ export async function transferCredits(key: string, recipient: string, amount: nu
     res = await atlasFetch('/credits/transfer/', key, { method: 'POST', body: payload });
   }
   const body = await parseBody(res);
-  if (!res.ok) throw new HttpError(res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
+  if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   const transaction = (body as TransferResult | null)?.transaction;
   // RIPE returns a list URL rather than a reference, so its absence is not worth failing on:
   // the 2xx is what tells us the credits moved.

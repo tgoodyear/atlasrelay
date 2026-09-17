@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activePledgesBy, totals } from '../src/lib/store';
+import { activePledgesBy, pledgeExpired, totals } from '../src/lib/store';
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, remainingToGoal } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
@@ -91,4 +91,17 @@ test('concurrent pledges from one donor settle on the lowest id, deterministical
     const shuffled = order.map((i) => racing[i]);
     assert.equal(activePledgesBy(shuffled, 'd1').map((x) => x.id).sort()[0], winner);
   }
+});
+
+test('a pledge past the reservation window counts as expired', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const base = { id: 'a', projectId: 'j1', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', updatedAt: '' };
+  const asOf = Date.parse('2026-09-17T00:00:00.000Z');
+  const fresh = { ...base, amount: 1, status: 'pledged' as const, createdAt: new Date(asOf - 1 * day).toISOString() };
+  const stale = { ...base, amount: 1, status: 'pledged' as const, createdAt: new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * day).toISOString() };
+  assert.equal(pledgeExpired(fresh, asOf), false);
+  assert.equal(pledgeExpired(stale, asOf), true);
+  // A settled pledge never expires: its credits are already accounted for.
+  assert.equal(pledgeExpired({ ...stale, status: 'confirmed' }, asOf), false);
+  assert.equal(pledgeExpired({ ...stale, status: 'cancelled' }, asOf), false);
 });

@@ -23,6 +23,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [step, setStep] = useState<Step>('form');
   const [recipient, setRecipient] = useState('');
   const [warning, setWarning] = useState('');
+  const [hasReference, setHasReference] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -56,6 +57,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       const res = await api.createPledge(project.id, { amount: n, method, message, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
+      setHasReference(Boolean(res.pledge?.hasReference));
       if (method === 'manual') {
         setRecipient(res.recipientEmail ?? '');
         setStep('manual-instructions');
@@ -187,7 +189,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
 
           {step === 'api-done' && (
             <>
-              <div className="alert alert-success">RIPE Atlas accepted the transfer of {fmt(n)} credits. The pledge is confirmed with the transaction reference.</div>
+              <div className="alert alert-success">
+                RIPE Atlas accepted the transfer of {fmt(n)} credits, and the pledge is confirmed.
+                {hasReference
+                  ? ' It carries RIPE\u2019s transaction reference.'
+                  : ' We could not identify a single matching transaction, so the pledge carries no reference; RIPE accepting the transfer is the record.'}
+              </div>
               {warning && <div className="alert alert-warn">{warning}</div>}
               <p>Remember to delete or disable the API key you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.</p>
               <div className="form-actions">
