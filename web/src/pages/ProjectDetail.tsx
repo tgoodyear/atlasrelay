@@ -140,7 +140,7 @@ export default function ProjectDetail() {
                 {project.remaining > 0
                   ? `${fmt(project.remaining)} credits to go, roughly ${pingsFor(project.remaining)} ping results.`
                   : project.capacity > 0
-                    ? `Goal reached. Extra credits are welcome: this project can still accept ${fmt(project.capacity)} more (up to 100× its request).`
+                    ? `The goal is reached, and the project can still accept ${fmt(project.capacity)} more credits, up to 100× its request.`
                     : 'This project has reached its ceiling of 100× its request. Thank you, donors.'}
                 {project.deadline ? ` Needed by ${fmtDate(project.deadline)}.` : ''}
               </p>

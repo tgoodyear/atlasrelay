@@ -44,7 +44,7 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>Can a project receive more than it asked for?</summary>
-            <p>Yes. The request is a goal, not a ceiling. A project keeps accepting pledges and transfers until it has received 100 times what it asked for, so researchers can bank a buffer for reruns and follow-up measurements. Once the confirmed total reaches the request the project shows as funded but stays open until the owner closes it or the 100× ceiling is reached.</p>
+            <p>Yes. A project keeps accepting pledges and transfers until it has received 100 times what it asked for, so researchers can bank a buffer for reruns and follow-up measurements. Once the confirmed total reaches the request the project shows as funded, and it stays open until the owner closes it or the 100× ceiling is reached.</p>
           </details>
           <details>
             <summary>Is this run by RIPE NCC?</summary>
