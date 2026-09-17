@@ -1,12 +1,13 @@
 // Atlas Credit Exchange – subscription-scoped entry point, run once by a subscription Owner
 // (scripts/bootstrap.sh). Everything Azure is declared here or in the modules below:
 //
-//   identity.bicep  CI managed identity + GitHub federated credential(s)      (Owner-only)
-//   rbac.bicep      least-privilege role assignment for CI, storage delete lock (Owner-only)
-//   app.bicep       storage, static web app, app settings, App Insights, budget (CI deploys this)
+//   identity.bicep  CI managed identity + GitHub federated credential(s)          (Owner-only)
+//   platform.bicep  Log Analytics + App Insights, monthly budget                    (Owner-only)
+//   rbac.bicep      least-privilege role assignment for CI, delete locks           (Owner-only)
+//   app.bicep       storage + tables, static web app + app settings                 (CI deploys this)
 //
-// Deploy:
-//   az deployment sub create --location <region> --template-file infra/main.bicep --parameters infra/main.bicepparam
+// Deploy with scripts/bootstrap.sh (it supplies the GitHub OIDC subject prefix and the budget start
+// date that main.bicepparam requires from the environment).
 targetScope = 'subscription'
 
 @description('Resource group that holds every resource')
@@ -48,8 +49,28 @@ param githubOidcSubjectPrefix string
 @description('Also trust pull_request runs (they would share production data). Off by default.')
 param enablePullRequestFederation bool = false
 
+@description('Allow pull-request preview environments on the static web app')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param stagingEnvironmentPolicy string = 'Disabled'
+
 @description('Application Insights + Log Analytics for API logs (free tier, daily cap enforced)')
 param enableApplicationInsights bool = true
+
+@description('Daily ingestion cap for Log Analytics in GB')
+param logDailyCapGb string = '0.1'
+
+@description('Which storage key the API uses (0 = key1, 1 = key2)')
+@allowed([
+  0
+  1
+])
+param storageKeyIndex int = 0
+
+@description('Extra app settings merged into the managed-functions configuration')
+param additionalAppSettings object = {}
 
 @description('Monthly budget (alerts only) in USD for the resource group')
 param budgetAmount int = 120
@@ -86,12 +107,13 @@ module identity 'identity.bicep' = {
   }
 }
 
-// Least-privilege role for CI: only the resource types app.bicep deploys, inside this group.
+// Least-privilege role for CI: only what deploying app.bicep needs, inside this group.
+// No identity, RBAC, locks, monitoring or budget write access; no key regeneration or deletes.
 resource ciRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(subscription().id, rg.id, 'atlas-credit-exchange-ci-deployer')
   properties: {
     roleName: 'Atlas Credit Exchange CI Deployer (${resourceGroupName})'
-    description: 'Deploy infra/app.bicep and read the Static Web App deployment token. No RBAC, no identity, no locks.'
+    description: 'Deploy infra/app.bicep (static site, storage) and read the Static Web App deployment token.'
     type: 'CustomRole'
     assignableScopes: [rg.id]
     permissions: [
@@ -101,13 +123,17 @@ resource ciRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
           'Microsoft.Resources/deployments/*'
           'Microsoft.Web/staticSites/*'
           'Microsoft.Storage/storageAccounts/*'
-          'Microsoft.OperationalInsights/workspaces/*'
-          'Microsoft.Insights/components/*'
-          'Microsoft.Insights/actionGroups/*'
-          'Microsoft.AlertsManagement/smartDetectorAlertRules/*'
-          'Microsoft.Consumption/budgets/*'
         ]
-        notActions: []
+        notActions: [
+          'Microsoft.Web/staticSites/delete'
+          'Microsoft.Web/staticSites/createinvitation/action'
+          'Microsoft.Web/staticSites/authproviders/users/write'
+          'Microsoft.Web/staticSites/authproviders/users/delete'
+          'Microsoft.Web/staticSites/resetapikey/action'
+          'Microsoft.Storage/storageAccounts/delete'
+          'Microsoft.Storage/storageAccounts/regeneratekey/action'
+          'Microsoft.Storage/storageAccounts/rotateKey/action'
+        ]
         dataActions: []
         notDataActions: []
       }
@@ -115,7 +141,24 @@ resource ciRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   }
 }
 
-// ---------- application resources ----------
+// ---------- monitoring + budget (Owner-only) ----------
+
+module platform 'platform.bicep' = {
+  name: 'platform'
+  scope: rg
+  params: {
+    baseName: baseName
+    location: location
+    enableApplicationInsights: enableApplicationInsights
+    logDailyCapGb: logDailyCapGb
+    budgetAmount: budgetAmount
+    budgetContactEmail: budgetContactEmail
+    budgetStartDate: budgetStartDate
+    tags: tags
+  }
+}
+
+// ---------- application resources (also deployed by CI from infra/app.bicepparam) ----------
 
 module app 'app.bicep' = {
   name: 'app'
@@ -125,10 +168,11 @@ module app 'app.bicep' = {
     location: location
     swaLocation: swaLocation
     swaSku: swaSku
+    stagingEnvironmentPolicy: stagingEnvironmentPolicy
     enableApplicationInsights: enableApplicationInsights
-    budgetAmount: budgetAmount
-    budgetContactEmail: budgetContactEmail
-    budgetStartDate: budgetStartDate
+    appInsightsName: enableApplicationInsights ? platform.outputs.appInsightsName : 'appi-${baseName}'
+    storageKeyIndex: storageKeyIndex
+    additionalAppSettings: additionalAppSettings
     tags: tags
   }
 }
@@ -142,6 +186,7 @@ module rbac 'rbac.bicep' = {
     principalId: identity.outputs.principalId
     roleDefinitionId: ciRole.id
     storageAccountName: app.outputs.storageAccountName
+    staticWebAppName: app.outputs.staticWebAppName
   }
 }
 
@@ -152,5 +197,6 @@ output staticWebAppHostname string = app.outputs.staticWebAppHostname
 output ciClientId string = identity.outputs.clientId
 output ciPrincipalId string = identity.outputs.principalId
 output ciRoleDefinitionId string = ciRole.id
+output appInsightsName string = platform.outputs.appInsightsName
 output tenantId string = tenant().tenantId
 output subscriptionId string = subscription().subscriptionId

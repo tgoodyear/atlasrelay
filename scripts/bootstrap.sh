@@ -47,25 +47,44 @@ for rp in Microsoft.Web Microsoft.Storage Microsoft.ManagedIdentity Microsoft.Co
 done
 
 log "GitHub OIDC subject prefix"
-export GITHUB_OIDC_SUBJECT_PREFIX="$(gh api "repos/$GITHUB_REPO/actions/oidc/customization/sub" --jq '.sub_claim_prefix // empty')"
-if [[ -z "$GITHUB_OIDC_SUBJECT_PREFIX" ]]; then
-  GITHUB_OIDC_SUBJECT_PREFIX="repo:$GITHUB_REPO"
+oidc_json="$(gh api "repos/$GITHUB_REPO/actions/oidc/customization/sub")" || die "could not read the repository OIDC settings"
+prefix="$(jq -r '.sub_claim_prefix // empty' <<<"$oidc_json")"
+immutable="$(jq -r '.use_immutable_subject // false' <<<"$oidc_json")"
+if [[ -z "$prefix" ]]; then
+  [[ "$immutable" == "true" ]] && die "repository uses immutable OIDC subjects but GitHub returned no prefix"
+  prefix="repo:$GITHUB_REPO"
 fi
+if [[ "$immutable" == "true" && "$prefix" != repo:*@*/*@* ]]; then
+  die "unexpected OIDC subject prefix '$prefix' (expected repo:OWNER@ID/REPO@ID)"
+fi
+export GITHUB_OIDC_SUBJECT_PREFIX="$prefix"
 echo "  $GITHUB_OIDC_SUBJECT_PREFIX"
+
+log "Shared parameters"
+"$here/scripts/check-params.sh"
 
 log "Budget period start"
 export BUDGET_START_DATE="$("$here/scripts/budget-start-date.sh" "$SUBSCRIPTION_ID" "$RESOURCE_GROUP")"
 echo "  $BUDGET_START_DATE"
 
 log "Deploying infra/main.bicep (subscription scope)"
-outputs="$(az deployment sub create \
-  --name "bootstrap-$(date -u +%Y%m%d%H%M%S)" \
-  --location "$LOCATION" \
-  --template-file "$here/infra/main.bicep" \
-  --parameters "$here/infra/main.bicepparam" \
-  --parameters resourceGroupName="$RESOURCE_GROUP" location="$LOCATION" githubRepo="$GITHUB_REPO" \
-  "${SUB[@]}" \
-  --query properties.outputs -o json)"
+deploy() {
+  az deployment sub create \
+    --name "bootstrap-$(date -u +%Y%m%d%H%M%S)" \
+    --location "$LOCATION" \
+    --template-file "$here/infra/main.bicep" \
+    --parameters "$here/infra/main.bicepparam" \
+    --parameters resourceGroupName="$RESOURCE_GROUP" location="$LOCATION" githubRepo="$GITHUB_REPO" \
+    "${SUB[@]}" \
+    --query properties.outputs -o json
+}
+# A brand-new custom role can take a little while to replicate before it can be assigned
+# (RoleDefinitionDoesNotExist). The deployment is idempotent, so retry once after a pause.
+if ! outputs="$(deploy)"; then
+  echo "  deployment failed; retrying once in 45 s (custom role replication lag is the usual cause)"
+  sleep 45
+  outputs="$(deploy)"
+fi
 
 val() { jq -r ".$1.value" <<<"$outputs"; }
 SWA_NAME="$(val staticWebAppName)"
@@ -81,18 +100,22 @@ echo "  ci identity:    $CI_CLIENT_ID"
 
 log "Waiting for the CI role assignment to be visible"
 rg_id="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
+assigned=""
 for _ in $(seq 1 24); do
-  if az role assignment list "${SUB[@]}" --scope "$rg_id" --assignee-object-id "$CI_PRINCIPAL_ID" --query "[0].id" -o tsv 2>/dev/null | grep -q .; then
-    echo "  assigned"; break
-  fi
+  # Filter by principalId in the query: works on every az version and needs no Graph lookup.
+  assigned="$(az role assignment list "${SUB[@]}" --scope "$rg_id" --query "[?principalId=='$CI_PRINCIPAL_ID'].id | [0]" -o tsv)"
+  [[ -n "$assigned" ]] && { echo "  assigned: $assigned"; break; }
   sleep 5
 done
+[[ -n "$assigned" ]] || echo "  warning: role assignment not visible yet; the first workflow run may need a retry"
 
 log "GitHub secrets/variables for OIDC login ($GITHUB_REPO)"
 gh secret set AZURE_CLIENT_ID --repo "$GITHUB_REPO" --body "$CI_CLIENT_ID"
 gh secret set AZURE_TENANT_ID --repo "$GITHUB_REPO" --body "$TENANT_ID"
 gh secret set AZURE_SUBSCRIPTION_ID --repo "$GITHUB_REPO" --body "$SUBSCRIPTION_ID"
 gh variable set BUDGET_CONTACT_EMAIL --repo "$GITHUB_REPO" --body "$BUDGET_CONTACT_EMAIL"
+# Tells the workflows that Azure exists, so a missing secret becomes a failed run instead of a silent skip.
+gh variable set AZURE_BOOTSTRAPPED --repo "$GITHUB_REPO" --body "true"
 
 log "Done"
 echo "Site: https://$SWA_HOST"

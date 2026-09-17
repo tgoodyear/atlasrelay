@@ -11,7 +11,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | --- | --- |
 | Attractive, simple UI | Single-page React app, four core screens, no dashboards to learn. |
 | Lowest cost, serverless | Azure Static Web Apps (Free) + managed Azure Functions + Azure Table Storage + App Insights inside its free allowance. Expected bill: under $1/month. A $120/month budget sends alerts; the subscription's spending limit (On) is the hard stop. |
-| CI/CD from GitHub | Two GitHub Actions workflows: app deploy (push to `main`, PR previews) and infra (Bicep). Both log in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub. |
+| CI/CD from GitHub | Two GitHub Actions workflows: app deploy (build and test on PRs, deploy on push to `main`) and infra (lint on PRs, what-if and deploy on `main`). Both log in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub. |
 | Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth. RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); the design leaves a slot for it. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
 
@@ -137,18 +137,24 @@ the SPA shows its own sign-in prompt.
 | Resource group `internetresearch` (westus2) | `infra/main.bicep` | | $0 |
 | Static Web App `swa-internetresearch` + `appsettings` | `infra/app.bicep` | Free | $0 (100 GB bandwidth/mo, 2 custom domains; staging environments disabled) |
 | Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges` | `infra/app.bicep` | Standard LRS | ≈ $0.05/mo at expected volumes |
-| Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/app.bicep` | Pay-as-you-go | $0 inside the 5 GB/month free allowance |
-| Consumption budget `internetresearch-monthly` | `infra/app.bicep` | $120, alerts at 50% and 80% actual, 100% forecast | $0 |
+| Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go | $0 inside the 5 GB/month free allowance |
+| Consumption budget `internetresearch-monthly` | `infra/platform.bicep` | $120, alerts at 50% and 80% actual, 100% forecast | $0 |
 | User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | | $0 |
-| Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write only deployments, static sites, storage, Log Analytics, App Insights, budgets | `infra/main.bicep` | | $0 |
-| Role assignment of that role to the CI identity; `CanNotDelete` lock on the storage account | `infra/rbac.bicep` | | $0 |
+| Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write deployments, the static site and storage only, minus site deletion/invitations/user roles/token reset and storage deletion/key regeneration | `infra/main.bicep` | | $0 |
+| Role assignment of that role to the CI identity; `CanNotDelete` locks on the storage account and the static site | `infra/rbac.bicep` | | $0 |
 
 `main.bicep` is subscription-scoped and is run once by a subscription Owner via
-`scripts/bootstrap.sh`. It creates the group, the CI identity, the custom role, the role
-assignment and the lock, and deploys `app.bicep`. `app.bicep` is what CI deploys on every
-infra change; it needs nothing beyond the custom role, so a compromised workflow run
-cannot change RBAC, re-federate the identity, remove the lock, or create unrelated
-resource types.
+`scripts/bootstrap.sh`. It creates the group, the CI identity, the custom role, the
+monitoring and budget resources, the role assignment and the locks, and deploys
+`app.bicep`. `app.bicep` is what CI deploys on every infra change; it needs nothing
+beyond the custom role, so a compromised workflow run cannot change RBAC, re-federate the
+identity, remove a lock, delete the site or data, regenerate storage keys, raise the log
+cap, or silence the budget. (It can still read storage keys through `listKeys`, which the
+API itself needs, and it could move the site to the Standard SKU, about $9/month.)
+
+`main.bicepparam` (bootstrap) and `app.bicepparam` (CI) both feed `app.bicep`;
+`scripts/check-params.sh` fails lint if a shared value drifts, so neither path undoes
+the other.
 
 Why a managed identity rather than an Entra app registration: the Microsoft Graph Bicep
 extension cannot be used from a personal Microsoft account, and the subscription is owned
@@ -189,15 +195,23 @@ docs/     this spec, RIPE research notes, runbook
   `azure/login` (OIDC, managed identity), read the SWA deployment token with
   `az staticwebapp secrets list` (masked, never stored), then
   `Azure/static-web-apps-deploy@v1` with `skip_app_build`/`skip_api_build`.
-- `infra.yml`: lints every template on PRs; on `main` it logs in, computes the budget
-  start date, runs `az deployment group what-if` then `create` on `infra/app.bicep`.
-- Both workflows degrade to build/lint-only until the three GitHub secrets exist, run
-  one deployment at a time (`concurrency`), and pin third-party actions to commit SHAs
-  (Dependabot keeps them current).
+- `infra.yml`: lints every template and checks parameter drift on PRs; on `main` it
+  logs in, runs `az deployment group what-if` (resource ids only, so no connection
+  string reaches the log) then `create` on `infra/app.bicep`.
+- Both workflows degrade to build/lint-only until bootstrap has run; after that
+  (`AZURE_BOOTSTRAPPED` repo variable) a missing secret fails the run instead of
+  skipping. Deployments to `main` are serialized (`concurrency`); PR runs have their own
+  groups. Third-party actions are pinned to commit SHAs and kept current by Dependabot.
+  The SWA deploy action is a Docker action that pulls `staticappsclient:stable`, so its
+  SHA pins the wrapper, not the client image.
+- The staged API artifact is built from the lockfile (`npm ci -w api --omit=dev`), so
+  the tree that ships is the tree that was tested.
 - `scripts/bootstrap.sh`: preflight checks, resource-provider registration, reads the
-  GitHub OIDC subject prefix and the budget start date, runs `az deployment sub create`
-  with `infra/main.bicep`, waits for the role assignment, and stores the identity's
-  client id, tenant id and subscription id as GitHub secrets. Nothing else is created
+  GitHub OIDC subject prefix (validated against the repository's immutable-subject
+  setting) and the budget start date, runs `az deployment sub create` with
+  `infra/main.bicep` (one retry for custom-role replication lag), waits for the role
+  assignment, and stores the identity's client id, tenant id and subscription id as
+  GitHub secrets plus the `AZURE_BOOTSTRAPPED` variable. Nothing else is created
   imperatively.
 
 ## Security notes

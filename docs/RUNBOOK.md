@@ -5,7 +5,7 @@
 Prerequisites: `az` (logged in as an Owner of subscription
 `25bf257c-c94e-4d61-bba3-edc635f46602`; the tenant requires MFA, so use
 `az login --tenant <tenant-id>`), `gh` (logged in with `repo` and `workflow` scopes),
-`jq`, Node 20+.
+`jq`, Node 22+.
 
 ```bash
 ./scripts/bootstrap.sh
@@ -18,12 +18,14 @@ The script is idempotent and creates nothing outside Bicep. It:
 2. Reads the repository's GitHub OIDC subject prefix and the budget start date (existing
    value if the budget already exists, else the current month).
 3. Runs `az deployment sub create` with `infra/main.bicep`: resource group, CI managed
-   identity with its GitHub federated credential, least-privilege custom role and role
-   assignment, storage account (locked against deletion) and tables, Log Analytics +
-   App Insights, static web app with its app settings, and the monthly budget.
+   identity with its GitHub federated credential, least-privilege custom role, Log
+   Analytics + App Insights and the monthly budget (`platform.bicep`), storage account
+   and tables plus the static web app with its app settings (`app.bicep`), then the role
+   assignment and delete locks (`rbac.bicep`). A failed first attempt is retried once
+   after 45 s (custom-role replication lag).
 4. Waits for the role assignment to be visible, then sets GitHub secrets
    `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identifiers, not
-   credentials) and the `BUDGET_CONTACT_EMAIL` variable.
+   credentials) and the variables `BUDGET_CONTACT_EMAIL` and `AZURE_BOOTSTRAPPED`.
 5. Prints the site hostname.
 
 Role assignments can take a few minutes to propagate; if the first workflow run fails
@@ -55,13 +57,20 @@ from the Functions host.
   100% of forecast against $120. It alerts only. The subscription (Visual Studio
   Enterprise credit) has its spending limit On, which disables the subscription, and
   therefore the site, if the monthly credit is exhausted. Expected spend is under $1.
-- **Rotate storage key**: `az storage account keys renew --key key1 ...`, then re-run
-  the Infrastructure workflow (or bootstrap); Bicep re-reads key1 into the SWA setting.
-- **Rotate SWA deploy token**: `az staticwebapp secrets reset-api-key`. Nothing else to
-  do; workflows fetch the token on every run.
-- **Change infra**: edit `infra/app.bicep`, open a PR (what-if runs), merge (deploys).
-  Resource group or RBAC changes go in `infra/main.bicep`/`infra/rbac.bicep` and need a
-  bootstrap re-run by an Owner.
+- **Rotate storage keys without downtime**: the API reads key `storageKeyIndex`
+  (0 = key1). Set `storageKeyIndex = 1` in both `.bicepparam` files and merge (the
+  Infrastructure workflow deploys), renew key1 (`az storage account keys renew --key
+  key1`), set the index back to 0 and merge, then renew key2. Renewing the key the API
+  currently uses takes the API down until the next infra deploy.
+- **Rotate SWA deploy token**: `az staticwebapp secrets reset-api-key` (an Owner; the
+  CI role cannot). Nothing else to do; workflows fetch the token on every run.
+- **Change app infra**: edit `infra/app.bicep` / `infra/app.bicepparam`, open a PR
+  (Bicep lint + parameter-drift check), merge (what-if, then deploy on `main`). Keep the
+  shared values in `infra/main.bicepparam` identical; `scripts/check-params.sh` fails
+  otherwise.
+- **Change platform infra** (resource group, identity, role, locks, monitoring, budget):
+  edit `infra/main.bicep` and its modules, then re-run `scripts/bootstrap.sh` as an Owner.
+- **Trigger an infra run by hand**: `gh workflow run infra.yml`.
 - **Data export**: `az storage entity query --table-name projects ...` or use Azure
   Storage Explorer.
 

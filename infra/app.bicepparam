@@ -1,15 +1,15 @@
 using './app.bicep'
 
-param baseName = 'internetresearch'
+// Deployed by the Infrastructure workflow on every merge to main.
+// Values marked (shared) must match infra/main.bicepparam; scripts/check-params.sh enforces it.
+param baseName = 'internetresearch'                 // (shared)
 param location = 'westus2'
-param swaLocation = 'westus2'
-param swaSku = 'Free'
-param stagingEnvironmentPolicy = 'Disabled'
-param enableApplicationInsights = true
-param budgetAmount = 120
-param budgetContactEmail = readEnvironmentVariable('BUDGET_CONTACT_EMAIL', 'trevor.goodyear@gmail.com')
-// Provided by scripts/budget-start-date.sh: the existing budget's start date, else the current month.
-param budgetStartDate = readEnvironmentVariable('BUDGET_START_DATE', '2026-09-01')
+param swaLocation = 'westus2'                        // (shared)
+param swaSku = 'Free'                                // (shared)
+param stagingEnvironmentPolicy = 'Disabled'          // (shared)
+param enableApplicationInsights = true               // (shared)
+param storageKeyIndex = 0                            // (shared)
+param additionalAppSettings = {}                     // (shared)
 param tags = {
   project: 'atlas-credit-exchange'
   repo: 'tgoodyear/internetresearch'

@@ -1,16 +1,20 @@
 using './main.bicep'
 
+// Deploy with scripts/bootstrap.sh: it exports GITHUB_OIDC_SUBJECT_PREFIX and BUDGET_START_DATE.
+// Values marked (shared) must match infra/app.bicepparam; scripts/check-params.sh enforces it.
 param resourceGroupName = 'internetresearch'
 param location = 'westus2'
-param baseName = 'internetresearch'
-param swaLocation = 'westus2'
-param swaSku = 'Free'
+param baseName = 'internetresearch'                 // (shared)
+param swaLocation = 'westus2'                        // (shared)
+param swaSku = 'Free'                                // (shared)
+param stagingEnvironmentPolicy = 'Disabled'          // (shared)
+param enableApplicationInsights = true               // (shared)
+param storageKeyIndex = 0                            // (shared)
+param additionalAppSettings = {}                     // (shared)
+param logDailyCapGb = '0.1'
 param githubRepo = 'tgoodyear/internetresearch'
-// scripts/bootstrap.sh reads the real value from GitHub and overrides this.
-param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX', 'repo:tgoodyear@116683/internetresearch@1373070352')
+param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX')
 param enablePullRequestFederation = false
-param enableApplicationInsights = true
 param budgetAmount = 120
 param budgetContactEmail = readEnvironmentVariable('BUDGET_CONTACT_EMAIL', 'trevor.goodyear@gmail.com')
-// Provided by scripts/budget-start-date.sh: the existing budget's start date, else the current month.
-param budgetStartDate = readEnvironmentVariable('BUDGET_START_DATE', '2026-09-01')
+param budgetStartDate = readEnvironmentVariable('BUDGET_START_DATE')

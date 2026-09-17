@@ -29,8 +29,10 @@ permissions: {}
 env:
   RESOURCE_GROUP: internetresearch
   SWA_NAME: swa-internetresearch
-  # Set by scripts/bootstrap.sh from the Bicep outputs. Until then the workflow builds and tests only.
+  # Set by scripts/bootstrap.sh from the Bicep outputs. Until then the workflow builds and tests only;
+  # once AZURE_BOOTSTRAPPED is set, missing secrets fail the run instead of skipping silently.
   AZURE_READY: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
+  AZURE_BOOTSTRAPPED: ${{ vars.AZURE_BOOTSTRAPPED == 'true' }}
 
 jobs:
   # Untrusted code (npm lifecycle scripts, tests) runs here without any Azure identity.
@@ -62,13 +64,18 @@ jobs:
         run: npm run build -w api
 
       # npm workspaces hoist the API's runtime dependencies to the repo root, and the SWA action
-      # uploads api_location verbatim (skip_api_build). Stage a self-contained folder instead.
+      # uploads api_location verbatim (skip_api_build). Stage a self-contained folder whose
+      # node_modules is exactly the lockfile-pinned production tree of the api workspace.
       - name: Stage API artifact
         run: |
           rm -rf api-deploy && mkdir api-deploy
           cp -r api/dist api/host.json api/package.json api-deploy/
-          cd api-deploy && npm install --omit=dev --no-package-lock --ignore-scripts
-          node -e "process.env.TABLES_CONNECTION_STRING='x'; require('./dist/src/index.js'); console.log('API entry point loads')"
+          npm ci -w api --omit=dev --ignore-scripts
+          cp -R node_modules api-deploy/node_modules
+          rm -rf api-deploy/node_modules/api api-deploy/node_modules/web api-deploy/node_modules/.bin api-deploy/node_modules/.package-lock.json
+          test -d api-deploy/node_modules/@azure/functions && test -d api-deploy/node_modules/@azure/data-tables
+          test ! -d api-deploy/node_modules/react
+          cd api-deploy && node -e "process.env.TABLES_CONNECTION_STRING='x'; require('./dist/src/index.js'); console.log('API entry point loads')"
 
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
@@ -92,7 +99,13 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - name: Skipping deployment (Azure secrets not configured yet)
+      - name: Azure secrets missing after bootstrap
+        if: env.AZURE_READY != 'true' && env.AZURE_BOOTSTRAPPED == 'true'
+        run: |
+          echo "::error::AZURE_BOOTSTRAPPED is set but AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_SUBSCRIPTION_ID are missing; re-run scripts/bootstrap.sh"
+          exit 1
+
+      - name: Skipping deployment (Azure not bootstrapped yet)
         if: env.AZURE_READY != 'true'
         run: echo "Run scripts/bootstrap.sh to provision Azure and set the GitHub secrets."
 
