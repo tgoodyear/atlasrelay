@@ -1,0 +1,25 @@
+{
+  "name": "api",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Atlas Credit Exchange API (Azure Functions v4, managed by Static Web Apps)",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "tsc --noEmit && node --test --import tsx test/validate.test.ts test/atlas.test.ts test/pledges.test.ts",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/data-tables": "^13.3.2",
+    "@azure/functions": "^4.16.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

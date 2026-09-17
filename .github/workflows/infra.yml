@@ -1,0 +1,102 @@
+name: Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'scripts/check-params.sh'
+      - '.github/workflows/infra.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'scripts/check-params.sh'
+      - '.github/workflows/infra.yml'
+  workflow_dispatch:
+
+# Deployments to main are serialized; PR lint runs get their own group so they are never cancelled by a deploy.
+concurrency:
+  group: infra-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  RESOURCE_GROUP: internetresearch
+  # Set by scripts/bootstrap.sh from the Bicep outputs. Until then this workflow only lints;
+  # once AZURE_BOOTSTRAPPED is set, missing secrets fail the run instead of skipping silently.
+  AZURE_READY: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
+  AZURE_BOOTSTRAPPED: ${{ vars.AZURE_BOOTSTRAPPED == 'true' }}
+  # Placeholders so the bootstrap-only parameter file compiles in lint; real values come from scripts/bootstrap.sh.
+  GITHUB_OIDC_SUBJECT_PREFIX: repo:placeholder@0/placeholder@0
+  BUDGET_START_DATE: 2000-01-01
+
+jobs:
+  lint:
+    name: Lint Bicep
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - run: |
+          for f in infra/*.bicep; do az bicep build --file "$f" --stdout > /dev/null; done
+          for f in infra/*.bicepparam; do az bicep build-params --file "$f" --stdout > /dev/null; done
+          scripts/check-params.sh
+
+  # The CI identity holds a custom role limited to deployments, the static site and storage, inside
+  # the resource group. Resource group, identity, RBAC, locks, monitoring and budget live in
+  # main.bicep and are only deployed by scripts/bootstrap.sh (subscription Owner).
+  deploy:
+    name: What-if and deploy app.bicep
+    needs: lint
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Azure secrets missing after bootstrap
+        if: env.AZURE_READY != 'true' && env.AZURE_BOOTSTRAPPED == 'true'
+        run: |
+          echo "::error::AZURE_BOOTSTRAPPED is set but AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_SUBSCRIPTION_ID are missing; re-run scripts/bootstrap.sh"
+          exit 1
+
+      - name: Skipping deployment (Azure not bootstrapped yet)
+        if: env.AZURE_READY != 'true'
+        run: echo "Run scripts/bootstrap.sh to provision Azure and set the GitHub secrets."
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        if: env.AZURE_READY == 'true'
+        with:
+          persist-credentials: false
+
+      - name: Azure login (OIDC via managed identity)
+        if: env.AZURE_READY == 'true'
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ResourceIdOnly: property diffs would print the storage connection string expression into the log.
+      - name: What-if
+        if: env.AZURE_READY == 'true'
+        run: |
+          az deployment group what-if \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/app.bicep \
+            --parameters infra/app.bicepparam \
+            --result-format ResourceIdOnly
+
+      - name: Deploy
+        if: env.AZURE_READY == 'true'
+        run: |
+          az deployment group create \
+            --name "app-${GITHUB_SHA::7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/app.bicep \
+            --parameters infra/app.bicepparam
