@@ -81,7 +81,7 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>How do I know the researcher is who they say they are?</summary>
-            <p>Projects show the poster's sign-in handle, affiliation, and links to homepages, papers or repositories. We cannot verify RIPE emails without federation, so treat this like any community exchange: look at the links, start small, and prefer API transfers, whose success proves the recipient email belongs to a real RIPE NCC Access account.</p>
+            <p>You don't, and nobody here checks. Anyone who can sign in with GitHub or Microsoft can post a project, and this site cannot confirm that a person is who they say they are or that the credits will be used as described. Projects show the poster's sign-in handle, affiliation, and links to homepages, papers or repositories, which is what there is to go on. Treat it like any community exchange: read the links, start small, and send only what you are willing to lose. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
           </details>
           <details>
             <summary>Can a project receive more than it asked for?</summary>

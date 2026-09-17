@@ -127,6 +127,8 @@ send the credits twice.
 
 ### Abuse limits
 
+- An account may hold 3 open projects at once. Posting is free, and every project hands its
+  owner's contact address to anyone who starts a pledge. Closing one frees a slot.
 - A donor may hold one live pledge per project. Without it, one account could reserve a project
   repeatedly and re-read the owner's contact address at will.
 - No single pledge may reserve a project's whole ceiling, so one free account cannot block every

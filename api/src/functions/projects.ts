@@ -2,7 +2,8 @@ import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { createProject, ensureUser, getProject, getUser, listPledges, listProjects, now, Project, saveProject, totals } from '../lib/store';
+import { createProject, ensureUser, getProject, getUser, listPledges, listProjects, listProjectsByOwner, now, Project, saveProject, totals } from '../lib/store';
+import { MAX_OPEN_PROJECTS_PER_USER } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
 
@@ -84,6 +85,14 @@ app.http('projects-create', {
     const p = requirePrincipal(req);
     const user = await ensureUser(p.userId, p.identityProvider, p.userDetails);
     if (!user.atlasEmail) throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before posting a project');
+
+    // Posting is free, and every project hands its owner's contact address to anyone who starts
+    // a pledge, so one account cannot keep an unbounded number of them open at once.
+    const open = (await listProjectsByOwner(user.id)).filter((x) => x.status === 'open').length;
+    if (open >= MAX_OPEN_PROJECTS_PER_USER) {
+      throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
+    }
+
     const body = await readJson(req);
     const fields = readProjectFields(body, true);
     const ts = now();

@@ -2,6 +2,14 @@
 export const OVERFUND_MULTIPLIER = 100;
 
 /**
+ * Open projects one account may hold at once. Posting is free and anonymous enough that without
+ * a cap one account could fill the front page, and every project exposes its owner's contact
+ * address to anyone who starts a pledge. Closing a funded project frees a slot, so an honest
+ * researcher running several studies is never blocked for long.
+ */
+export const MAX_OPEN_PROJECTS_PER_USER = 3;
+
+/**
  * A pending pledge stops reserving capacity after this long. Reservations are how a donor is
  * given time to make a manual transfer, but without an expiry one abandoned pledge would hold a
  * project's capacity for ever, so stale ones fall away on their own.

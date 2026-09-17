@@ -164,6 +164,18 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 <input id="message" type="text" maxLength={500} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Good luck with the study!" />
               </div>
 
+              <p className="small muted" style={{ marginTop: '1rem' }}>
+                Nobody checks that a request is genuine. Anyone can sign in and post a project, and
+                this site cannot verify that a person is who they say they are or that the credits
+                will be used as described. Read the project's links, start with a small amount, and
+                send only what you are willing to lose. Credits cannot be recalled once transferred.
+                {' '}
+                <a href="https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&title=Report%20a%20project" target="_blank" rel="noreferrer">
+                  Report a project
+                </a>{' '}
+                that looks fraudulent.
+              </p>
+
               {error && <div className="alert alert-error">{error}</div>}
               <div className="form-actions">
                 <button className="btn" type="submit" disabled={submitting || !amountOk || (method === 'api' && apiKey.trim().length < 36)}>

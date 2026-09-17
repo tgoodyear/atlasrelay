@@ -99,6 +99,19 @@ query charges.
 - **Trigger an infra run by hand**: `gh workflow run infra.yml`.
 - **Data export**: `az storage entity query --table-name projects ...` or use Azure
   Storage Explorer.
+- **Take a project down**: there is no admin console, so this is done against Table Storage.
+  Closing a project stops it accepting credits and takes it off the listing, which is the whole
+  remedy; it is reversible, so prefer it to deleting anything.
+
+  ```bash
+  az storage entity merge --table-name projects --account-name <storage account> --auth-mode key \
+    --entity PartitionKey=project RowKey=<project id> status=closed
+  ```
+
+  To remove the owner as well, delete their row from `users`, which also removes the stored RIPE
+  NCC Access email. Their projects and pledges stay, carrying only a display name, because other
+  people's records point at them. Note what you did and why in the abuse issue; pledges are the
+  only audit trail there is.
 - **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and RIPE never
   answered, so the platform cannot say whether the credits moved. Only the two people involved
   can settle it, and both can: the requester confirms the pledge if the credits arrived, the
