@@ -13,8 +13,11 @@ param storageKeyIndex = 0                            // (shared)
 param additionalAppSettings = {}                     // (shared)
 param logDailyCapGb = '0.1'
 param dnsZoneName = 'atlasrelay.org'
-// Set by scripts/bind-custom-domain.sh once Azure issues the apex validation token.
-param dnsApexTxtValues = []
+// Apex domain-validation token issued by Static Web Apps, published as a TXT record at the
+// apex alongside the SPF policy. Recorded here so a later deployment does not remove it.
+param dnsApexTxtValues = [
+  '_rkdd5nw27suei8qugfsuaq79khba6z0'
+]
 param githubRepo = 'tgoodyear/internetresearch'
 param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX')
 param enablePullRequestFederation = false
