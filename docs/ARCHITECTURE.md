@@ -142,6 +142,7 @@ the SPA shows its own sign-in prompt.
 | User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | | $0 |
 | Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write deployments, the static site and storage only, minus site deletion/invitations/user roles/token reset and storage deletion/key regeneration | `infra/main.bicep` | | $0 |
 | Role assignment of that role to the CI identity; `CanNotDelete` locks on the storage account and the static site | `infra/rbac.bicep` | | $0 |
+| Public DNS zone `atlasrelay.org` with a `www` CNAME to the site and mail-rejection records | `infra/dns.bicep` | Azure DNS | ≈ $0.50/mo plus query charges |
 
 `main.bicep` is subscription-scoped and is run once by a subscription Owner via
 `scripts/bootstrap.sh`. It creates the group, the CI identity, the custom role, the

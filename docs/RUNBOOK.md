@@ -46,6 +46,29 @@ http://localhost:4280. The SWA emulator lets you "log in" as any username withou
 GitHub account. Node 22.12 or newer is required (concurrently 10 needs it); newer local versions work
 with a warning from the Functions host.
 
+## Custom domain (atlasrelay.org)
+
+The public DNS zone is Azure DNS, declared in `infra/dns.bicep` and deployed by the
+Owner-only subscription deployment. Bicep is the only writer of the zone.
+
+1. At the registrar (Squarespace), replace the nameservers with the four the zone
+   reports: `az network dns zone show -n atlasrelay.org -g internetresearch --query nameServers -o tsv`.
+2. Wait for the delegation to appear in public DNS: `dig +short NS atlasrelay.org @1.1.1.1`.
+3. Bind the domain to the site: `./scripts/bind-custom-domain.sh`. It binds `www` by CNAME
+   delegation and the apex by TXT token, then prints the apex validation token.
+4. Put that token in `dnsApexTxtValues` in `infra/main.bicepparam` and re-run the
+   subscription deployment, so a later deployment does not remove it.
+
+The zone deliberately ships no apex A or ALIAS record. Static Web Apps creates that record
+itself during apex validation, because only the service knows the target to point at; until
+then the apex does not resolve while `www` already does. The binding script refuses to run
+unless all four nameservers are delegated, and fails loudly if a binding is rejected.
+
+The zone already publishes a `www` CNAME to the site, and records stating the domain sends
+no mail (RFC 7505 null MX, `v=spf1 -all`, DMARC `p=reject`). Remove `rejectMail` if the
+domain ever needs to send email. Azure DNS costs about $0.50 per zone per month plus
+query charges.
+
 ## Operations
 
 - **Logs**: API logs and request telemetry go to App Insights `appi-internetresearch`

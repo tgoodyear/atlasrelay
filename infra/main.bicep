@@ -3,6 +3,7 @@
 //
 //   identity.bicep  CI managed identity + GitHub federated credential(s)          (Owner-only)
 //   platform.bicep  Log Analytics + App Insights, monthly budget                    (Owner-only)
+//   dns.bicep       public DNS zone for the project domain                          (Owner-only)
 //   rbac.bicep      least-privilege role assignment for CI, delete locks           (Owner-only)
 //   app.bicep       storage + tables, static web app + app settings                 (CI deploys this)
 //
@@ -71,6 +72,12 @@ param storageKeyIndex int = 0
 
 @description('Extra app settings merged into the managed-functions configuration')
 param additionalAppSettings object = {}
+
+@description('Public DNS zone to create, e.g. atlasrelay.org. Empty string skips DNS entirely.')
+param dnsZoneName string = ''
+
+@description('Extra apex TXT values (e.g. the Static Web Apps domain-validation token)')
+param dnsApexTxtValues array = []
 
 @description('Monthly budget (alerts only) in USD for the resource group')
 param budgetAmount int = 120
@@ -177,6 +184,20 @@ module app 'app.bicep' = {
   }
 }
 
+// ---------- DNS (Owner-only; CI has no Microsoft.Network permissions) ----------
+
+module dns 'dns.bicep' = if (!empty(dnsZoneName)) {
+  name: 'dns'
+  scope: rg
+  params: {
+    zoneName: dnsZoneName
+    staticWebAppDefaultHostname: app.outputs.staticWebAppHostname
+    staticWebAppInboundIp: app.outputs.staticWebAppInboundIp
+    apexTxtValues: dnsApexTxtValues
+    tags: tags
+  }
+}
+
 // ---------- RBAC + locks (Owner-only) ----------
 
 module rbac 'rbac.bicep' = {
@@ -198,5 +219,7 @@ output ciClientId string = identity.outputs.clientId
 output ciPrincipalId string = identity.outputs.principalId
 output ciRoleDefinitionId string = ciRole.id
 output appInsightsName string = platform.outputs.appInsightsName
+output dnsZoneName string = empty(dnsZoneName) ? '' : dns!.outputs.zoneName
+output dnsNameServers array = empty(dnsZoneName) ? [] : dns!.outputs.nameServers
 output tenantId string = tenant().tenantId
 output subscriptionId string = subscription().subscriptionId
