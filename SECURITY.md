@@ -23,8 +23,9 @@ people's credits, projects or email addresses to demonstrate a finding.
 used for at most two requests inside a single API call, a balance check and the
 transfer itself, and is then discarded. It is not written to storage, and error
 paths deliberately avoid echoing request bodies so a key cannot reach a log.
-Donors are advised to create a key scoped to credit transfers only, with a short
-validity window, and to delete it afterwards.
+Donors are advised to create a key carrying only the two permissions the site uses,
+"Transfer credits to another user" and "Get information about your credits", with a
+short validity window, and to delete it afterwards.
 
 **RIPE NCC Access emails are not public.** They never appear on an anonymous
 endpoint. A signed-in donor is shown a researcher's address at the point they

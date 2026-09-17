@@ -87,7 +87,9 @@ the partition after each change, so the project row never drifts.
 1. Open a project, click **Send credits**, pick an amount (defaults to what is left toward the goal; anything up to 100× the request is accepted).
 2. Choose one:
    - **Transfer now with an API key**: the donor pastes a key created at
-     https://atlas.ripe.net/keys/ with only the credit-transfer permission. The
+     https://atlas.ripe.net/keys/ with two permissions, "Transfer credits to another
+     user" and "Get information about your credits", the latter so the balance can be
+     checked before sending. A transfer-only key works, with the check skipped. The
      function optionally reads the balance (`GET /credits/`) to warn on insufficient
      funds, then calls `POST /credits/transfers/`. On 201 the pledge is stored as
      `confirmed` with the transaction URL. The key lives only in the request scope.

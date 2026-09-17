@@ -123,7 +123,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <label htmlFor="apiKey">RIPE Atlas API key</label>
                   <input id="apiKey" type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(e) => { setApiKey(e.target.value); setBalance(null); }} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
                   <span className="hint">
-                    Create one at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with the credit-transfer permission only, ideally with a short validity window. Delete it afterwards.
+                    Create one at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with these two permissions, and nothing else:
+                    {' '}<strong>Transfer credits to another user</strong> and <strong>Get information about your credits</strong>.
+                    The second is what lets us check your balance before sending. Set a short validity window, and delete the key afterwards.
                   </span>
                   <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.4rem', flexWrap: 'wrap' }}>
                     <button type="button" className="btn btn-secondary btn-sm" onClick={checkBalance} disabled={checking || apiKey.trim().length < 36}>

@@ -95,7 +95,9 @@ app.http('pledges-create', {
         }
       } catch (err) {
         if (err instanceof HttpError && err.status === 400 && /balance is/.test(err.message)) throw err;
-        balanceWarning = 'Balance could not be checked before transferring.';
+        // Most often the key carries "Transfer credits to another user" but not
+        // "Get information about your credits", which is worth naming rather than hiding.
+        balanceWarning = 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.';
       }
       const result = await transferCredits(key, owner.atlasEmail, amount);
       pledge.status = 'confirmed';
