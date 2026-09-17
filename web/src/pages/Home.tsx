@@ -66,13 +66,6 @@ export default function Home() {
       </section>
 
       <section className="section container">
-        <p className="muted small" style={{ margin: 0 }}>
-          RIPE Atlas: about 12,900 probes and 810 anchors in 178 countries, 1.3 billion measurement results a day, and more than a thousand research publications built on them.{' '}
-          <a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>
-        </p>
-      </section>
-
-      <section className="section container">
         <div className="section-head">
           <h2>How it works</h2>
           <Link to="/how-it-works">Details →</Link>
