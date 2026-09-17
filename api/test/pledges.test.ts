@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { totals } from '../src/lib/store';
-import { capacity, maxCredits, OVERFUND_MULTIPLIER, remainingToGoal } from '../src/lib/pledging';
+import { capacity, exceedsCeiling, maxCredits, OVERFUND_MULTIPLIER, remainingToGoal } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
   const base = { id: '', projectId: '', donorId: '', donorName: '', method: 'manual' as const, transactionUrl: '', message: '', createdAt: '', updatedAt: '' };
@@ -23,4 +23,11 @@ test('projects accept credits up to 100x their request', () => {
   assert.equal(capacity(1000, 150_000), 0); // never negative
   assert.equal(remainingToGoal(1000, 250), 750);
   assert.equal(remainingToGoal(1000, 5000), 0);
+});
+
+test('pending pledges reserve capacity and confirmation is checked against the ceiling', () => {
+  assert.equal(capacity(1000, 90_000, 10_000), 0); // fully reserved by pending pledges
+  assert.equal(capacity(1000, 90_000, 4_000), 6_000);
+  assert.equal(exceedsCeiling(1000, 99_000, 1_000), false);
+  assert.equal(exceedsCeiling(1000, 99_000, 1_001), true);
 });

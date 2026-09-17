@@ -3,9 +3,9 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge } from '../lib/store';
+import { createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
-import { capacity, OVERFUND_MULTIPLIER } from '../lib/pledging';
+import { capacity, exceedsCeiling, maxCredits, OVERFUND_MULTIPLIER } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
 
 app.http('pledges-list', {
@@ -47,7 +47,9 @@ app.http('pledges-create', {
     const message = str(body, 'message', { max: 500 }) ?? '';
 
     // Projects accept credits beyond their goal, up to OVERFUND_MULTIPLIER times the request.
-    const cap = capacity(project.creditsRequested, project.creditsConfirmed);
+    // Pending pledges reserve capacity, so the check uses live totals rather than the cached row.
+    const live = totals(await listPledges(id));
+    const cap = capacity(project.creditsRequested, live.confirmed, live.pending);
     if (cap === 0) throw new HttpError(409, `This project has reached its ceiling of ${OVERFUND_MULTIPLIER}× its request and is not accepting more credits`);
     if (amount > cap) throw new HttpError(400, `This project can accept at most ${cap.toLocaleString('en-US')} more credits (${OVERFUND_MULTIPLIER}× its request)`);
 
@@ -85,7 +87,17 @@ app.http('pledges-create', {
     }
 
     await createPledge(pledge);
-    const updatedProject = await recomputeProjectTotals(id);
+    let updatedProject = await recomputeProjectTotals(id);
+
+    // Table Storage has no cross-partition transactions, so two manual pledges can pass the
+    // check above at the same time. Re-check after writing and withdraw the loser. An API
+    // transfer has already happened at RIPE and cannot be undone, so it is always kept.
+    if (method === 'manual' && updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
+      await savePledge({ ...pledge, status: 'cancelled' });
+      updatedProject = await recomputeProjectTotals(id);
+      throw new HttpError(409, 'Another pledge took the remaining capacity a moment ago. Please try a smaller amount.');
+    }
+
     return json(
       {
         pledge: privatePledge(pledge),
@@ -133,6 +145,14 @@ app.http('pledges-update', {
     const role = isOwner ? 'owner' : 'donor';
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
+
+    // Confirming must never push confirmed credits past the ceiling, whatever was reserved.
+    if (status === 'confirmed') {
+      const live = totals(await listPledges(projectId));
+      if (exceedsCeiling(project.creditsRequested, live.confirmed, pledge.amount)) {
+        throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
+      }
+    }
 
     const updated = await savePledge({ ...pledge, status });
     const updatedProject = await recomputeProjectTotals(projectId);

@@ -7,8 +7,8 @@ export function publicProject(p: Project) {
     ...p,
     funded: p.creditsConfirmed >= p.creditsRequested,
     remaining: remainingToGoal(p.creditsRequested, p.creditsConfirmed),
-    // Credits the project can still accept (it keeps accepting up to 100× its request).
-    capacity: capacity(p.creditsRequested, p.creditsConfirmed),
+    // Credits the project can still accept (it keeps accepting up to 100× its request); pending pledges count.
+    capacity: capacity(p.creditsRequested, p.creditsConfirmed, p.creditsPending),
     maxCredits: maxCredits(p.creditsRequested),
   };
 }
