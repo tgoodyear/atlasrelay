@@ -53,7 +53,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `title` (≤120), `summary` (≤280), `description` (≤8000, plain text with paragraphs) | |
 | `creditsRequested` | Integer 1..1e9. |
 | `creditsConfirmed`, `creditsPending` | Cached sums recomputed from pledges after every pledge change. |
-| `status` | `open` \| `closed`. `funded` is derived (`creditsConfirmed >= creditsRequested`). |
+| `status` | `open` \| `closed`. `funded` is derived (`creditsConfirmed >= creditsRequested`) and does not stop pledges; `capacity` (100× request minus confirmed) does. |
 | `tags` | Subset of: ping, traceroute, dns, sslcert, http, ntp, ipv4, ipv6, anchors, other. |
 | `affiliation`, `homepageUrl`, `repoUrl`, `paperUrl`, `deadline` | Optional. |
 | `createdAt`, `updatedAt` | |
@@ -63,7 +63,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | Field | Notes |
 | --- | --- |
 | `donorId`, `donorName` | |
-| `amount` | Integer ≥ 1, capped at the project's remaining need at pledge time. |
+| `amount` | Integer ≥ 1, capped at the project's remaining *capacity* at pledge time: projects accept credits until they have received 100× their request (`OVERFUND_MULTIPLIER`). |
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. `api` pledges go straight to `confirmed` with `transactionUrl` proof because our server observed RIPE's 201. |
 | `transactionUrl` | The URL RIPE returned, when method is `api`. |
@@ -84,7 +84,7 @@ the partition after each change, so the project row never drifts.
    https://atlas.ripe.net/credits/ (transactions list). Close the project when done.
 
 ### Donor
-1. Open a project, click **Send credits**, pick an amount (defaults to what's left).
+1. Open a project, click **Send credits**, pick an amount (defaults to what is left toward the goal; anything up to 100× the request is accepted).
 2. Choose one:
    - **Transfer now with an API key** – donor pastes a key created at
      https://atlas.ripe.net/keys/ with only the credit-transfer permission. The

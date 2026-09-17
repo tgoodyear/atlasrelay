@@ -43,8 +43,8 @@ export default function HowItWorks() {
             <p>Projects show the poster's sign-in handle, affiliation, and links to homepages, papers or repositories. We cannot verify RIPE emails without federation, so treat this like any community exchange: look at the links, start small, and prefer API transfers, whose success proves the recipient email belongs to a real RIPE NCC Access account.</p>
           </details>
           <details>
-            <summary>Can a project ask for more than it needs?</summary>
-            <p>Pledges are capped at the unfunded remainder of each project. Once the confirmed total reaches the request, the project shows as funded and stops accepting pledges unless the owner raises the request.</p>
+            <summary>Can a project receive more than it asked for?</summary>
+            <p>Yes. The request is a goal, not a ceiling. A project keeps accepting pledges and transfers until it has received 100 times what it asked for, so researchers can bank a buffer for reruns and follow-up measurements. Once the confirmed total reaches the request the project shows as funded but stays open until the owner closes it or the 100× ceiling is reached.</p>
           </details>
           <details>
             <summary>Is this run by RIPE NCC?</summary>

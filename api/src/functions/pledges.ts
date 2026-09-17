@@ -5,12 +5,8 @@ import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
+import { capacity, OVERFUND_MULTIPLIER } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
-
-/** Largest pledge a project will accept right now: what is still unconfirmed. Exported for tests. */
-export function maxPledge(creditsRequested: number, creditsConfirmed: number): number {
-  return Math.max(0, creditsRequested - creditsConfirmed);
-}
 
 app.http('pledges-list', {
   route: 'projects/{id}/pledges',
@@ -50,9 +46,10 @@ app.http('pledges-create', {
     const amount = int(body, 'amount', { min: 1, max: MAX_CREDITS, required: true })!;
     const message = str(body, 'message', { max: 500 }) ?? '';
 
-    const cap = maxPledge(project.creditsRequested, project.creditsConfirmed);
-    if (cap === 0) throw new HttpError(409, 'This project is already fully funded');
-    if (amount > cap) throw new HttpError(400, `This project only needs ${cap.toLocaleString('en-US')} more credits`);
+    // Projects accept credits beyond their goal, up to OVERFUND_MULTIPLIER times the request.
+    const cap = capacity(project.creditsRequested, project.creditsConfirmed);
+    if (cap === 0) throw new HttpError(409, `This project has reached its ceiling of ${OVERFUND_MULTIPLIER}× its request and is not accepting more credits`);
+    if (amount > cap) throw new HttpError(400, `This project can accept at most ${cap.toLocaleString('en-US')} more credits (${OVERFUND_MULTIPLIER}× its request)`);
 
     const ts = now();
     const pledge: Pledge = {

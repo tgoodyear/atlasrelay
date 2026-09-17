@@ -1,12 +1,15 @@
+import { capacity, maxCredits, remainingToGoal } from './pledging';
 import { Pledge, Project, User } from './store';
 
 /** Public shape of a project. Never includes the owner's email. */
 export function publicProject(p: Project) {
-  const remaining = Math.max(0, p.creditsRequested - p.creditsConfirmed);
   return {
     ...p,
     funded: p.creditsConfirmed >= p.creditsRequested,
-    remaining,
+    remaining: remainingToGoal(p.creditsRequested, p.creditsConfirmed),
+    // Credits the project can still accept (it keeps accepting up to 100× its request).
+    capacity: capacity(p.creditsRequested, p.creditsConfirmed),
+    maxCredits: maxCredits(p.creditsRequested),
   };
 }
 
