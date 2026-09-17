@@ -1,4 +1,4 @@
-# Atlas Credit Exchange – architecture
+# Atlas Credit Exchange architecture
 
 A small marketplace where RIPE Atlas users who need measurement credits post a
 project, and users who have spare credits send them. The platform never holds
@@ -86,13 +86,13 @@ the partition after each change, so the project row never drifts.
 ### Donor
 1. Open a project, click **Send credits**, pick an amount (defaults to what is left toward the goal; anything up to 100× the request is accepted).
 2. Choose one:
-   - **Transfer now with an API key** – donor pastes a key created at
+   - **Transfer now with an API key**: the donor pastes a key created at
      https://atlas.ripe.net/keys/ with only the credit-transfer permission. The
      function optionally reads the balance (`GET /credits/`) to warn on insufficient
      funds, then calls `POST /credits/transfers/`. On 201 the pledge is stored as
      `confirmed` with the transaction URL. The key lives only in the request scope.
      The UI tells donors to delete or disable the key afterwards.
-   - **I'll transfer on atlas.ripe.net** – we show the recipient email and amount with
+   - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
      donor marks it `sent`; the requester marks it `confirmed`.
 3. Donor's pledges are listed on their dashboard.
@@ -179,7 +179,7 @@ Upgrade path that stays well inside budget: SWA Standard ($9/mo) for custom OIDC
 web/      Vite + React + TypeScript SPA; public/staticwebapp.config.json
 api/      Azure Functions v4 (Node 22, TypeScript)
 infra/    main.bicep (subscription scope) → identity.bicep, rbac.bicep, app.bicep (+ .bicepparam)
-scripts/  bootstrap.sh – one-time provisioning + GitHub secret wiring; budget-start-date.sh
+scripts/  bootstrap.sh (one-time provisioning + GitHub secret wiring), budget-start-date.sh
 .github/workflows/deploy.yml   build + test on PRs; build + deploy app & API on main
 .github/workflows/infra.yml    Bicep lint on PRs; what-if + deploy app.bicep on main (OIDC login)
 docs/     this spec, RIPE research notes, runbook
