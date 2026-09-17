@@ -35,7 +35,19 @@ export interface CreditsOverview {
 }
 
 export interface TransferResult {
+  /** Whatever RIPE returned in the `transaction` field. In practice this is a filtered list URL
+   *  such as .../credits/transactions/?sort=-date&type=admin, identical for every transfer and
+   *  readable only with the donor's own key, so it is not a per-transfer reference. */
   transaction: string;
+}
+
+export interface CreditTransaction {
+  id: number;
+  type: string;
+  amount: number;
+  date: string;
+  description?: string;
+  balance_after?: number;
 }
 
 async function atlasFetch(path: string, key: string, init: RequestInit = {}): Promise<Response> {
@@ -98,6 +110,35 @@ export async function getCredits(key: string): Promise<CreditsOverview> {
   return body as CreditsOverview;
 }
 
+/**
+ * Find the transaction RIPE recorded for a transfer we just made, so a pledge can carry a real
+ * reference rather than the generic list URL the transfer endpoint returns. Needs the
+ * "Get information about your credits" permission; returns null when that is absent or when no
+ * matching row is found, in which case the caller records the transfer without an id.
+ */
+export async function findTransferTransaction(key: string, amount: number, since: number): Promise<CreditTransaction | null> {
+  let res: Response;
+  try {
+    res = await atlasFetch('/credits/transactions/?sort=-date&type=admin&page_size=25', key);
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const body = await parseBody(res);
+  const rows: CreditTransaction[] = Array.isArray(body)
+    ? (body as CreditTransaction[])
+    : (((body as { results?: CreditTransaction[] } | null)?.results) ?? []);
+  // A transfer out is recorded as a negative amount. Match on magnitude and recency so a
+  // concurrent unrelated admin transaction is not mistaken for this one.
+  for (const row of rows) {
+    if (Math.abs(row.amount) !== amount) continue;
+    const when = Date.parse(row.date);
+    if (Number.isFinite(when) && when + 5 * 60 * 1000 < since) continue;
+    return row;
+  }
+  return null;
+}
+
 export async function transferCredits(key: string, recipient: string, amount: number): Promise<TransferResult> {
   const payload = JSON.stringify({ recipient, amount });
   let res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
@@ -108,6 +149,7 @@ export async function transferCredits(key: string, recipient: string, amount: nu
   const body = await parseBody(res);
   if (!res.ok) throw new HttpError(res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   const transaction = (body as TransferResult | null)?.transaction;
-  if (typeof transaction !== 'string') throw new HttpError(502, 'RIPE Atlas accepted the transfer but returned no transaction reference');
-  return { transaction };
+  // RIPE returns a list URL rather than a reference, so its absence is not worth failing on:
+  // the 2xx is what tells us the credits moved.
+  return { transaction: typeof transaction === 'string' ? transaction : '' };
 }

@@ -49,6 +49,10 @@ export interface Pledge {
   method: PledgeMethod;
   status: PledgeStatus;
   transactionUrl: string;
+  /** RIPE's transaction id, when it could be looked up. The only per-transfer reference. */
+  transactionId: string;
+  /** When our server observed RIPE accept the transfer. */
+  transferredAt: string;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -237,6 +241,8 @@ function toPledge(e: Entity): Pledge {
     method: (e.method as PledgeMethod) ?? 'manual',
     status: (e.status as PledgeStatus) ?? 'pledged',
     transactionUrl: String(e.transactionUrl ?? ''),
+    transactionId: String(e.transactionId ?? ''),
+    transferredAt: String(e.transferredAt ?? ''),
     message: String(e.message ?? ''),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),

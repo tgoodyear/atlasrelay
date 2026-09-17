@@ -4,7 +4,7 @@ import { activePledgesBy, totals } from '../src/lib/store';
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, remainingToGoal } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
-  const base = { id: '', projectId: '', donorId: '', donorName: '', method: 'manual' as const, transactionUrl: '', message: '', createdAt: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', createdAt: '', updatedAt: '' };
   const t = totals([
     { ...base, amount: 100, status: 'confirmed' },
     { ...base, amount: 50, status: 'pledged' },
@@ -48,7 +48,7 @@ test('listing keys off confirmed credits, so a pending pledge cannot hide a proj
 });
 
 test('stale pending pledges stop reserving capacity', () => {
-  const base = { id: '', projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', message: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', updatedAt: '' };
   const asOf = Date.parse('2026-09-17T00:00:00Z');
   const fresh = new Date(asOf - 1 * 24 * 3600 * 1000).toISOString();
   const stale = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * 24 * 3600 * 1000).toISOString();
@@ -60,7 +60,7 @@ test('stale pending pledges stop reserving capacity', () => {
 });
 
 test('an expired pledge no longer locks its own donor out', () => {
-  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', message: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', updatedAt: '' };
   const asOf = Date.parse('2026-09-17T00:00:00Z');
   const stale = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * 24 * 3600 * 1000).toISOString();
   const list = [{ ...base, donorId: 'd1', amount: 10, status: 'pledged' as const, createdAt: stale }];
@@ -68,7 +68,7 @@ test('an expired pledge no longer locks its own donor out', () => {
 });
 
 test('a donor may hold only one live pledge per project', () => {
-  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', message: '', createdAt: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', message: '', createdAt: '', updatedAt: '' };
   const list = [
     { ...base, donorId: 'd1', amount: 10, status: 'pledged' as const },
     { ...base, donorId: 'd1', amount: 10, status: 'cancelled' as const },

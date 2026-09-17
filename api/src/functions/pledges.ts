@@ -1,6 +1,6 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
-import { assertKeyFormat, getCredits, transferCredits } from '../lib/atlas';
+import { assertKeyFormat, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge, totals } from '../lib/store';
@@ -78,6 +78,8 @@ app.http('pledges-create', {
       method,
       status: 'pledged',
       transactionUrl: '',
+      transactionId: '',
+      transferredAt: '',
       message,
       createdAt: ts,
       updatedAt: ts,
@@ -99,9 +101,18 @@ app.http('pledges-create', {
         // "Get information about your credits", which is worth naming rather than hiding.
         balanceWarning = 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.';
       }
-      const result = await transferCredits(key, owner.atlasEmail, amount);
+      const startedAt = Date.now();
+      await transferCredits(key, owner.atlasEmail, amount);
       pledge.status = 'confirmed';
-      pledge.transactionUrl = result.transaction;
+      pledge.transferredAt = new Date(startedAt).toISOString();
+      // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
+      // the transaction up to record a real id. Best-effort: a key without the credits-read
+      // permission still completes the transfer, it just carries no id.
+      const txn = await findTransferTransaction(key, amount, startedAt);
+      if (txn) {
+        pledge.transactionId = String(txn.id);
+        pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
+      }
     }
 
     await createPledge(pledge);

@@ -108,7 +108,7 @@ export default function ProjectDetail() {
                           <span>
                             <strong>{p.donorName || 'Anonymous donor'}</strong> · {fmt(p.amount)} credits
                           </span>
-                          <PledgeStatusPill status={p.status} hasProof={p.hasProof} />
+                          <PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} />
                         </div>
                         {p.message && <p className="message">{p.message}</p>}
                         <div className="when">{fmtDate(p.createdAt)}{p.method === 'api' ? ' · via API' : ''}</div>

@@ -57,14 +57,17 @@ export function publicPledge(p: Pledge) {
     method: p.method,
     status: p.status,
     message: p.message,
-    hasProof: Boolean(p.transactionUrl),
+    // Our server saw RIPE accept the transfer. That is the meaningful assurance; the id is a
+    // bonus when the donor's key could also read their transaction list.
+    apiTransfer: p.method === 'api' && Boolean(p.transferredAt),
+    hasReference: Boolean(p.transactionId),
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   };
 }
 
 export function privatePledge(p: Pledge) {
-  return { ...publicPledge(p), donorId: p.donorId, transactionUrl: p.transactionUrl };
+  return { ...publicPledge(p), donorId: p.donorId, transactionUrl: p.transactionUrl, transactionId: p.transactionId, transferredAt: p.transferredAt };
 }
 
 export function privateUser(u: User) {

@@ -36,11 +36,14 @@ export interface Pledge {
   method: 'api' | 'manual';
   status: 'pledged' | 'sent' | 'confirmed' | 'cancelled';
   message: string;
-  hasProof: boolean;
+  apiTransfer: boolean;
+  hasReference: boolean;
   createdAt: string;
   updatedAt: string;
   donorId?: string;
   transactionUrl?: string;
+  transactionId?: string;
+  transferredAt?: string;
   projectTitle?: string;
 }
 

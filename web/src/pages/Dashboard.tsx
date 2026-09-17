@@ -96,8 +96,8 @@ export default function Dashboard() {
                   <tr key={p.id}>
                     <td><Link to={`/projects/${p.projectId}`}>{p.projectTitle || p.projectId}</Link></td>
                     <td className="mono">{fmt(p.amount)}</td>
-                    <td>{p.method === 'api' ? 'API' : 'Manual'}{p.transactionUrl ? ' · proof recorded' : ''}</td>
-                    <td><PledgeStatusPill status={p.status} hasProof={p.hasProof} /></td>
+                    <td>{p.method === 'api' ? 'API' : 'Manual'}{p.transactionId ? ` · RIPE txn ${p.transactionId}` : ''}</td>
+                    <td><PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} /></td>
                     <td>{fmtDate(p.createdAt)}</td>
                     <td>
                       {p.status === 'pledged' && <button className="btn btn-sm" disabled={busy === p.id} onClick={() => updatePledge(p, 'sent')}>Mark sent</button>}
