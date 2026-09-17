@@ -23,6 +23,6 @@
     "concurrently": "^10.0.5"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   }
 }

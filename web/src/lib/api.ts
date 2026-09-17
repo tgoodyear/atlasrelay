@@ -14,6 +14,8 @@ export interface Project {
   status: 'open' | 'closed';
   funded: boolean;
   remaining: number;
+  capacity: number;
+  maxCredits: number;
   tags: Tag[];
   affiliation: string;
   homepageUrl: string;

@@ -39,7 +39,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: |
@@ -69,14 +69,14 @@ jobs:
         if: env.AZURE_READY != 'true'
         run: echo "Run scripts/bootstrap.sh to provision Azure and set the GitHub secrets."
 
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.AZURE_READY == 'true'
         with:
           persist-credentials: false
 
       - name: Azure login (OIDC via managed identity)
         if: env.AZURE_READY == 'true'
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}

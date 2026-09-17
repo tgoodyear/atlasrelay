@@ -87,7 +87,7 @@ export default function ProjectForm() {
     <div className="narrow">
       <div className="page-head">
         <h1>{editing ? 'Edit project' : 'Post a project'}</h1>
-        <p>Tell donors what you are measuring and why. Specific, honest asks get funded.</p>
+        <p>Tell donors what you are measuring, which probes you need, how you arrived at the credit estimate, and where the results will be published.</p>
       </div>
       <form className="card" onSubmit={submit}>
         <div className="card-body">
@@ -97,14 +97,18 @@ export default function ProjectForm() {
           <Field label="One-paragraph summary" htmlFor="summary" hint={`${summary.length}/280. Shown on project cards.`}>
             <textarea id="summary" maxLength={280} value={summary} onChange={(e) => setSummary(e.target.value)} required style={{ minHeight: 80 }} />
           </Field>
-          <Field label="Full description" htmlFor="description" hint="Methodology, probe selection, measurement schedule, how results will be published. Plain text; blank lines make paragraphs.">
+          <Field label="Full description" htmlFor="description" hint="Methodology, probe selection, measurement schedule, how results will be published, and whether built-in or existing public measurements were considered first. Plain text; blank lines make paragraphs.">
             <textarea id="description" maxLength={8000} value={description} onChange={(e) => setDescription(e.target.value)} required />
           </Field>
           <div className="form-row">
             <Field
               label="Credits needed"
               htmlFor="credits"
-              hint={credits > 0 ? `≈ ${pingsFor(credits)} ping results, or ${Math.floor(credits / 30).toLocaleString('en-US')} traceroutes.` : 'Whole number. A ping result costs 3 credits, a traceroute 30.'}
+              hint={
+                credits > 0
+                  ? `≈ ${pingsFor(credits)} ping results, or ${Math.floor(credits / 30).toLocaleString('en-US')} traceroutes.${credits > 1_000_000 ? ` RIPE Atlas caps spending at 1M credits per user per day, so this takes at least ${Math.ceil(credits / 1_000_000)} days to spend.` : ''}`
+                  : 'Whole number. A ping result costs 3 credits, a traceroute 30. Each user can spend at most 1M credits per day.'
+              }
             >
               <input id="credits" type="number" min={1} max={1000000000} step={1} value={creditsRequested} onChange={(e) => setCreditsRequested(e.target.value)} required />
             </Field>
