@@ -2,10 +2,11 @@
 
 ## First deployment
 
-Prerequisites: `az` (logged in as an Owner of subscription
-`25bf257c-c94e-4d61-bba3-edc635f46602`; the tenant requires MFA, so use
-`az login --tenant <tenant-id>`), `gh` (logged in with `repo` and `workflow` scopes),
-`jq`, Node 22.12+.
+Prerequisites: `az`, logged in as an Owner of the target subscription and with it
+selected (`az account set -s <id>`), or with `SUBSCRIPTION_ID` exported. If the tenant
+enforces MFA, use `az login --tenant <tenant-id>`. Also `gh` (logged in with `repo` and
+`workflow` scopes), `jq`, and Node 22.12+. Set `BUDGET_CONTACT_EMAIL` to the address that
+should receive Azure budget alerts.
 
 ```bash
 ./scripts/bootstrap.sh

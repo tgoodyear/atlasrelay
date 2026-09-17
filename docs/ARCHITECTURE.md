@@ -53,7 +53,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `title` (≤120), `summary` (≤280), `description` (≤8000, plain text with paragraphs) | |
 | `creditsRequested` | Integer 1..1e9. |
 | `creditsConfirmed`, `creditsPending` | Cached sums recomputed from pledges after every pledge change. |
-| `status` | `open` \| `closed`. `funded` is derived (`creditsConfirmed >= creditsRequested`) and does not stop pledges; `capacity` (100× request minus confirmed) does. |
+| `status` | `open` \| `closed`. `funded` is derived and does not stop pledges. Whether a project is *listed* depends on confirmed credits alone, so a pending pledge can never hide it. A pending pledge reserves capacity for `PENDING_RESERVATION_DAYS` (14) and then stops counting, so an abandoned pledge releases what it held. |
 | `tags` | Subset of: ping, traceroute, dns, sslcert, http, ntp, ipv4, ipv6, anchors, other. |
 | `affiliation`, `homepageUrl`, `repoUrl`, `paperUrl`, `deadline` | Optional. |
 | `createdAt`, `updatedAt` | |
@@ -63,7 +63,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | Field | Notes |
 | --- | --- |
 | `donorId`, `donorName` | |
-| `amount` | Integer ≥ 1, capped at the project's remaining *capacity* at pledge time: projects accept credits until they have received 100× their request (`OVERFUND_MULTIPLIER`). |
+| `amount` | Integer ≥ 1. Capped two ways: by the project's remaining *capacity* (100× the request, minus confirmed, minus live reservations) and by `maxSinglePledge`, which is what is left to the goal, or one goal's worth once the goal is met. The second cap stops any one pledge reserving the whole ceiling. |
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. `api` pledges go straight to `confirmed` with `transactionUrl` proof because our server observed RIPE's 201. |
 | `transactionUrl` | The URL RIPE returned, when method is `api`. |
@@ -97,6 +97,27 @@ the partition after each change, so the project row never drifts.
      donor marks it `sent`; the requester marks it `confirmed`.
 3. Donor's pledges are listed on their dashboard.
 
+### Abuse limits
+
+- A donor may hold one live pledge per project. Without it, one account could reserve a project
+  repeatedly and re-read the owner's contact address at will.
+- No single pledge may reserve a project's whole ceiling, so one free account cannot block every
+  other donor.
+- Reservations expire after 14 days, so the site heals without a background job.
+- Listing and statistics key off confirmed credits, so reservations never affect what is visible.
+
+### Privacy
+
+The RIPE NCC Access email is the one piece of personal data the platform holds that matters. It
+never appears on an anonymous endpoint. A signed-in donor sees it when they begin a manual
+pledge, because they need it to transfer the credits, and the owner sees that donor by name
+against the pledge. `DELETE /api/me` removes the profile and the address; projects and pledges
+remain, carrying only the chosen display name, because other people rely on that record.
+
+Sign-in handles are never returned publicly. Static Web Apps fills `userDetails` with the email
+address for some identity providers, and that value seeds both the handle and the initial display
+name, so `publicName()` reduces anything email-shaped to its local part before it leaves the API.
+
 ### Trust model
 - Requester identity is a GitHub/Microsoft account plus a self-declared RIPE email.
   We cannot verify the email against RIPE without federation. Mitigations: the email is
@@ -112,6 +133,7 @@ the partition after each change, so the project row never drifts.
 | --- | --- | --- |
 | `GET /api/me` | user | Profile + client principal. Creates the user row on first call. |
 | `PUT /api/me` | user | Update `displayName`, `atlasEmail`, `affiliation`, `url`. |
+| `DELETE /api/me` | user | Delete the profile, including the stored RIPE NCC Access email. |
 | `GET /api/projects?status=open&tag=dns&q=` | public | List. Never includes emails. |
 | `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message). |
 | `POST /api/projects` | user (needs `atlasEmail`) | Create. |

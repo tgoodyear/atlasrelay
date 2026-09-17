@@ -1,7 +1,7 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
 import { handle, json, readJson } from '../lib/http';
-import { ensureUser, updateUser } from '../lib/store';
+import { deleteUser, ensureUser, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { privateUser } from '../lib/views';
 
@@ -35,5 +35,19 @@ app.http('me-put', {
     if (url !== undefined) patch.url = url;
     const user = await updateUser(p.userId, patch);
     return json({ user: privateUser(user) });
+  }),
+});
+
+app.http('me-delete', {
+  route: 'me',
+  methods: ['DELETE'],
+  authLevel: 'anonymous',
+  handler: handle(async (req: HttpRequest) => {
+    const p = requirePrincipal(req);
+    // Deletes the profile, including the RIPE NCC Access email. Projects and pledges are left in
+    // place because donors and owners rely on that record, but nothing identifying remains beyond
+    // the display name the person chose.
+    await deleteUser(p.userId);
+    return json({ deleted: true });
   }),
 });

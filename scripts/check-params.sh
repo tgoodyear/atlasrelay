@@ -5,6 +5,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 export GITHUB_OIDC_SUBJECT_PREFIX="${GITHUB_OIDC_SUBJECT_PREFIX:-repo:placeholder@0/placeholder@0}"
 export BUDGET_START_DATE="${BUDGET_START_DATE:-2000-01-01}"
+export BUDGET_CONTACT_EMAIL="${BUDGET_CONTACT_EMAIL:-nobody@example.invalid}"
 main="$(az bicep build-params --file "$here/infra/main.bicepparam" --stdout | jq -c '.parametersJson | fromjson | .parameters')"
 app="$(az bicep build-params --file "$here/infra/app.bicepparam" --stdout | jq -c '.parametersJson | fromjson | .parameters')"
 status=0

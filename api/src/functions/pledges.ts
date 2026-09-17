@@ -3,9 +3,9 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge, totals } from '../lib/store';
+import { activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
-import { capacity, exceedsCeiling, maxCredits, OVERFUND_MULTIPLIER } from '../lib/pledging';
+import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
 
 app.http('pledges-list', {
@@ -48,10 +48,25 @@ app.http('pledges-create', {
 
     // Projects accept credits beyond their goal, up to OVERFUND_MULTIPLIER times the request.
     // Pending pledges reserve capacity, so the check uses live totals rather than the cached row.
-    const live = totals(await listPledges(id));
+    const livePledges = await listPledges(id);
+    const live = totals(livePledges);
+    if (!acceptsMorePledges(project.creditsRequested, live.confirmed)) {
+      throw new HttpError(409, `This project has reached its ceiling of ${OVERFUND_MULTIPLIER}× its request and is not accepting more credits`);
+    }
     const cap = capacity(project.creditsRequested, live.confirmed, live.pending);
-    if (cap === 0) throw new HttpError(409, `This project has reached its ceiling of ${OVERFUND_MULTIPLIER}× its request and is not accepting more credits`);
-    if (amount > cap) throw new HttpError(400, `This project can accept at most ${cap.toLocaleString('en-US')} more credits (${OVERFUND_MULTIPLIER}× its request)`);
+    if (cap === 0) throw new HttpError(409, 'Other donors have reserved the remaining capacity. Try again later.');
+
+    // One live pledge per donor per project. Without this, a single account could reserve a
+    // project repeatedly, and could re-read the owner's contact address at will.
+    if (activePledgesBy(livePledges, donor.id).length > 0) {
+      throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
+    }
+
+    // No single pledge may reserve the whole ceiling, which would lock every other donor out.
+    const perPledge = maxSinglePledge(project.creditsRequested, live.confirmed, live.pending);
+    if (amount > perPledge) {
+      throw new HttpError(400, `The largest pledge this project accepts right now is ${perPledge.toLocaleString('en-US')} credits`);
+    }
 
     const ts = now();
     const pledge: Pledge = {
@@ -92,7 +107,7 @@ app.http('pledges-create', {
     // Table Storage has no cross-partition transactions, so two manual pledges can pass the
     // check above at the same time. Re-check after writing and withdraw the loser. An API
     // transfer has already happened at RIPE and cannot be undone, so it is always kept.
-    if (method === 'manual' && updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
+    if (method === 'manual' && updatedProject.creditsConfirmed > maxCredits(project.creditsRequested)) {
       await savePledge({ ...pledge, status: 'cancelled' });
       updatedProject = await recomputeProjectTotals(id);
       throw new HttpError(409, 'Another pledge took the remaining capacity a moment ago. Please try a smaller amount.');
@@ -102,7 +117,8 @@ app.http('pledges-create', {
       {
         pledge: privatePledge(pledge),
         project: publicProject(updatedProject),
-        // Only a committed donor sees where to send credits.
+        // Only a donor with a live manual pledge sees where to send credits. The owner can see
+        // exactly who that is on their dashboard, because the pledge carries the donor's name.
         recipientEmail: method === 'manual' ? owner.atlasEmail : undefined,
         transferUrl: 'https://atlas.ripe.net/credits/transfer/',
         warning: balanceWarning,
@@ -148,8 +164,8 @@ app.http('pledges-update', {
 
     // Confirming must never push confirmed credits past the ceiling, whatever was reserved.
     if (status === 'confirmed') {
-      const live = totals(await listPledges(projectId));
-      if (exceedsCeiling(project.creditsRequested, live.confirmed, pledge.amount)) {
+      const liveTotals = totals(await listPledges(projectId));
+      if (liveTotals.confirmed + pledge.amount > maxCredits(project.creditsRequested)) {
         throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
       }
     }

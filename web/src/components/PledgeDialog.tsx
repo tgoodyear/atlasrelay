@@ -10,7 +10,7 @@ interface Props {
 type Step = 'form' | 'manual-instructions' | 'api-done';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
-  const [amount, setAmount] = useState(String(Math.min(project.remaining > 0 ? project.remaining : project.capacity, 100_000)));
+  const [amount, setAmount] = useState(String(Math.min(project.remaining > 0 ? project.remaining : project.maxPledge, 100_000)));
   const [method, setMethod] = useState<'api' | 'manual'>('api');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
@@ -30,7 +30,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   }, [onClose]);
 
   const n = Number(amount);
-  const amountOk = Number.isInteger(n) && n >= 1 && n <= project.capacity;
+  const amountOk = Number.isInteger(n) && n >= 1 && n <= project.maxPledge;
 
   const checkBalance = async () => {
     setChecking(true);
@@ -92,12 +92,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <form onSubmit={submit}>
               <div className="field">
                 <label htmlFor="amount">Amount</label>
-                <input id="amount" type="number" min={1} max={project.capacity} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                <input id="amount" type="number" min={1} max={project.maxPledge} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
                 <span className="hint">
                   {project.remaining > 0
-                    ? `This project still needs ${fmt(project.remaining)} credits to reach its goal`
-                    : 'This project has reached its goal'}
-                  {` and can accept up to ${fmt(project.capacity)} more (100× its request).`}
+                    ? `This project still needs ${fmt(project.remaining)} credits to reach its goal. `
+                    : 'This project has reached its goal. '}
+                  {`The largest single pledge it accepts right now is ${fmt(project.maxPledge)} credits, and it can take ${fmt(project.capacity)} in total.`}
                 </span>
               </div>
 
@@ -113,7 +113,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <input type="radio" name="method" checked={method === 'manual'} onChange={() => setMethod('manual')} />
                   <div>
                     <strong>I'll transfer on atlas.ripe.net myself</strong>
-                    <span>We show you the recipient and amount. You mark it sent; the researcher confirms.</span>
+                    <span>We show you the researcher's RIPE NCC Access email so you can send the credits. They will see your name against this pledge.</span>
                   </div>
                 </label>
               </div>
@@ -172,7 +172,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 </li>
                 <li>Back on your dashboard, mark the pledge as <strong>sent</strong>. The researcher will confirm once the credits appear.</li>
               </ol>
-              <p className="small muted" style={{ marginTop: '1rem' }}>Please keep the recipient email to yourself; it is only shown to committed donors.</p>
+              <p className="small muted" style={{ marginTop: '1rem' }}>
+                Use this address only to send these credits. The researcher can see that you asked for it, and you can hold one pledge per project at a time.
+              </p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={onClose}>Done</button>
               </div>

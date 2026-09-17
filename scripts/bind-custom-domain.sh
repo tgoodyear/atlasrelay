@@ -15,7 +15,9 @@ set -euo pipefail
 ZONE="${1:-atlasrelay.org}"
 SWA="${2:-swa-internetresearch}"
 RG="${3:-internetresearch}"
-SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-25bf257c-c94e-4d61-bba3-edc635f46602}"
+# No subscription is hardcoded. Set SUBSCRIPTION_ID, or the currently selected one is used.
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-$(az account show --query id -o tsv 2>/dev/null || true)}"
+[[ -n "$SUBSCRIPTION_ID" ]] || { echo "set SUBSCRIPTION_ID, or run: az login" >&2; exit 1; }
 SUB=(--subscription "$SUBSCRIPTION_ID")
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }

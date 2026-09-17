@@ -27,6 +27,12 @@ al., [*Day in the Life of RIPE Atlas*](https://arxiv.org/abs/2511.22474), 2025).
 | CI/CD | GitHub Actions with OIDC through a user-assigned managed identity; all resources in Bicep | $0 |
 | Guardrail | Azure budget with alerts at $120; subscription spending limit as the hard stop | $0 |
 
+## Contributing and security
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please report
+security problems privately rather than in an issue, as described in [SECURITY.md](SECURITY.md).
+Licensed under the [MIT License](LICENSE).
+
 ## Quick start
 
 ```bash
@@ -34,10 +40,13 @@ npm install
 npm run dev        # http://localhost:4280 (SWA emulator + API + Azurite)
 ```
 
-Deploy for the first time (as a subscription Owner):
+Deploy for the first time, as an owner of the target subscription:
 
 ```bash
-./scripts/bootstrap.sh
+BUDGET_CONTACT_EMAIL=you@example.org ./scripts/bootstrap.sh
 ```
+
+No subscription id or contact address is stored in this repository; the script reads the
+subscription you have selected and takes the alert address from the environment.
 
 Every push to `main` deploys; pull requests build, test and lint only.

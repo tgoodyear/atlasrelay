@@ -17,7 +17,7 @@ app.http('projects-list', {
     const sort = req.query.get('sort') ?? 'newest';
 
     let projects = (await listProjects()).map(publicProject);
-    if (status === 'open') projects = projects.filter((p) => p.status === 'open' && p.capacity > 0);
+    if (status === 'open') projects = projects.filter((p) => p.open);
     else if (status === 'funded') projects = projects.filter((p) => p.funded);
     else if (status === 'closed') projects = projects.filter((p) => p.status === 'closed');
     if (tag) projects = projects.filter((p) => (p.tags as string[]).includes(tag));

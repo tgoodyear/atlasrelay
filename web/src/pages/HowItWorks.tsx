@@ -12,7 +12,7 @@ export default function HowItWorks() {
         <div className="card"><div className="card-body">
           <h2>If you need credits</h2>
           <ol className="steps">
-            <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. That email is where donors send credits. It is never shown publicly, only to a donor who has committed to a pledge.</li>
+            <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. That email is where donors send credits. It never appears on a public page, and a signed-in donor sees it when they start a manual pledge to your project, so that they can send the transfer. You see each of those donors by name.</li>
             <li>Post a project: what you are measuring, why it matters, how many credits you need, and by when. Rough guide from the <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">RIPE Atlas docs</a>: a ping result costs 3 credits, DNS 10 to 20, traceroute 30, one-off measurements double.</li>
             <li>When a donor sends credits manually, they appear in your <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">Atlas credits page</a>. Confirm the pledge on your dashboard. API-driven transfers are confirmed automatically.</li>
             <li>Close the project when you are done and, ideally, link your results so donors see what they enabled.</li>
@@ -41,6 +41,31 @@ export default function HowItWorks() {
           </ol>
           <p className="small muted" style={{ marginTop: '1rem', marginBottom: 0 }}>
             Source: Nosyk, Tashiro, Lone, Kisteleki, Duda and Korczyński, <a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer"><em>Day in the Life of RIPE Atlas: Operational Insights and Applications in Network Measurements</em></a>, arXiv:2511.22474, November 2025.
+          </p>
+        </div></div>
+
+        <div className="card"><div className="card-body">
+          <h2>What this site stores about you</h2>
+          <p className="muted">
+            Signing in records an identifier from GitHub or Microsoft, your display name, and
+            anything you choose to add: affiliation, a homepage, and the email of your RIPE NCC
+            Access account. Projects and pledges you create are stored with your display name.
+          </p>
+          <p className="muted">
+            Your RIPE NCC Access email is never shown on a public page. It is shown to a signed-in
+            donor at the point they begin a manual pledge to your project, because they need it to
+            transfer the credits, and each such donor appears by name on your project. Nothing else
+            is shared, there is no tracking, and no analytics or advertising service receives your
+            data.
+          </p>
+          <p className="muted">
+            RIPE Atlas API keys are never stored. A key you paste is used for a single transfer
+            request and discarded; it is not written to storage or to logs.
+          </p>
+          <p className="muted">
+            You can delete your profile, including your RIPE email, at any time from your{' '}
+            <Link to="/profile">profile page</Link>. Projects and pledges remain, carrying only the
+            display name you chose, because other people rely on that record.
           </p>
         </div></div>
 

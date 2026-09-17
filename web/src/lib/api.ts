@@ -13,8 +13,10 @@ export interface Project {
   creditsPending: number;
   status: 'open' | 'closed';
   funded: boolean;
+  open: boolean;
   remaining: number;
   capacity: number;
+  maxPledge: number;
   maxCredits: number;
   tags: Tag[];
   affiliation: string;
@@ -108,6 +110,7 @@ export const api = {
   updateProject: (id: string, body: unknown) => request<{ project: Project }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   me: () => request<{ user: User }>('/api/me'),
   updateMe: (body: unknown) => request<{ user: User }>('/api/me', { method: 'PUT', body: JSON.stringify(body) }),
+  deleteMe: () => request<{ deleted: boolean }>('/api/me', { method: 'DELETE' }),
   my: () => request<{ projects: Project[]; pledges: Pledge[] }>('/api/my'),
   pledges: (projectId: string) => request<{ pledges: Pledge[]; isOwner: boolean }>(`/api/projects/${projectId}/pledges`),
   createPledge: (projectId: string, body: unknown) =>

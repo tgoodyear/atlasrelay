@@ -1,5 +1,6 @@
 import { TableClient, TableEntity, odata, RestError } from '@azure/data-tables';
 import { HttpError } from './http';
+import { PENDING_RESERVATION_DAYS } from './pledging';
 import { Tag } from './validate';
 
 export type ProjectStatus = 'open' | 'closed';
@@ -139,9 +140,20 @@ export async function ensureUser(id: string, provider: string, handle: string): 
   const existing = await getUser(id);
   if (existing) return existing;
   const ts = now();
-  const user: User = { id, provider, handle, displayName: handle, atlasEmail: '', affiliation: '', url: '', createdAt: ts, updatedAt: ts };
+  // Some identity providers put the email address in the handle, and the display name is shown
+  // to anonymous visitors, so seed it with a non-address form of the handle.
+  const displayName = handle.includes('@') ? handle.split('@')[0] : handle;
+  const user: User = { id, provider, handle, displayName, atlasEmail: '', affiliation: '', url: '', createdAt: ts, updatedAt: ts };
   await (await table('users')).upsertEntity({ partitionKey: USERS_PK, rowKey: id, ...user }, 'Merge');
   return user;
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  try {
+    await (await table('users')).deleteEntity(USERS_PK, id);
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 404)) throw err;
+  }
 }
 
 export async function updateUser(id: string, patch: Partial<Pick<User, 'displayName' | 'atlasEmail' | 'affiliation' | 'url'>>): Promise<User> {
@@ -263,14 +275,29 @@ export async function savePledge(p: Pledge): Promise<Pledge> {
   return updated;
 }
 
-export function totals(pledges: Pledge[]): { confirmed: number; pending: number } {
+/**
+ * Sum a project's pledges. Pending pledges older than PENDING_RESERVATION_DAYS stop counting
+ * towards the reserved total, so an abandoned pledge releases the capacity it was holding
+ * instead of blocking the project for ever.
+ */
+export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirmed: number; pending: number } {
+  const cutoff = asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
   let confirmed = 0;
   let pending = 0;
   for (const p of pledges) {
-    if (p.status === 'confirmed') confirmed += p.amount;
-    else if (p.status === 'pledged' || p.status === 'sent') pending += p.amount;
+    if (p.status === 'confirmed') {
+      confirmed += p.amount;
+    } else if (p.status === 'pledged' || p.status === 'sent') {
+      const created = Date.parse(p.createdAt);
+      if (!Number.isFinite(created) || created >= cutoff) pending += p.amount;
+    }
   }
   return { confirmed, pending };
+}
+
+/** Pledges by this donor on this project that still hold a reservation. */
+export function activePledgesBy(pledges: Pledge[], donorId: string): Pledge[] {
+  return pledges.filter((p) => p.donorId === donorId && (p.status === 'pledged' || p.status === 'sent'));
 }
 
 /** Recompute cached totals on the project from its pledges. */

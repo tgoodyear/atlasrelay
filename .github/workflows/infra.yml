@@ -31,6 +31,8 @@ env:
   # Placeholders so the bootstrap-only parameter file compiles in lint; real values come from scripts/bootstrap.sh.
   GITHUB_OIDC_SUBJECT_PREFIX: repo:placeholder@0/placeholder@0
   BUDGET_START_DATE: 2000-01-01
+  # Lint only compiles the templates, so a placeholder address is enough there.
+  BUDGET_CONTACT_EMAIL_PLACEHOLDER: nobody@example.invalid
 
 jobs:
   lint:
@@ -42,7 +44,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: |
+      - env:
+          BUDGET_CONTACT_EMAIL: ${{ env.BUDGET_CONTACT_EMAIL_PLACEHOLDER }}
+        run: |
           for f in infra/*.bicep; do az bicep build --file "$f" --stdout > /dev/null; done
           for f in infra/*.bicepparam; do az bicep build-params --file "$f" --stdout > /dev/null; done
           scripts/check-params.sh

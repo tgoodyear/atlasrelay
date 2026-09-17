@@ -46,7 +46,7 @@ export default function ProjectDetail() {
   if (error) return <div className="narrow"><div className="empty" style={{ marginTop: '3rem' }}>{error}. <Link to="/projects">All projects</Link></div></div>;
   if (!project) return <div className="container"><Spinner /></div>;
 
-  const canPledge = project.status === 'open' && project.capacity > 0 && !isOwner;
+  const canPledge = project.open && project.maxPledge > 0 && !isOwner;
 
   const updatePledge = async (p: Pledge, status: Pledge['status']) => {
     setBusy(p.id);
@@ -139,7 +139,7 @@ export default function ProjectDetail() {
               <p className="small muted" style={{ margin: '0.75rem 0 1rem' }}>
                 {project.remaining > 0
                   ? `${fmt(project.remaining)} credits to go, roughly ${pingsFor(project.remaining)} ping results.`
-                  : project.capacity > 0
+                  : project.maxPledge > 0
                     ? `The goal is reached, and the project can still accept ${fmt(project.capacity)} more credits, up to 100× its request.`
                     : 'This project has reached its ceiling of 100× its request. Thank you, donors.'}
                 {project.deadline ? ` Needed by ${fmtDate(project.deadline)}.` : ''}
