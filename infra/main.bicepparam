@@ -12,6 +12,9 @@ param enableApplicationInsights = true               // (shared)
 param storageKeyIndex = 0                            // (shared)
 param additionalAppSettings = {}                     // (shared)
 param logDailyCapGb = '0.1'
+param dnsZoneName = 'atlasrelay.org'
+// Set by scripts/bind-custom-domain.sh once Azure issues the apex validation token.
+param dnsApexTxtValues = []
 param githubRepo = 'tgoodyear/internetresearch'
 param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX')
 param enablePullRequestFederation = false
