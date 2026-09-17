@@ -59,6 +59,14 @@ test('stale pending pledges stop reserving capacity', () => {
   assert.deepEqual(t, { confirmed: 0, pending: 100 });
 });
 
+test('an expired pledge no longer locks its own donor out', () => {
+  const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', message: '', updatedAt: '' };
+  const asOf = Date.parse('2026-09-17T00:00:00Z');
+  const stale = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * 24 * 3600 * 1000).toISOString();
+  const list = [{ ...base, donorId: 'd1', amount: 10, status: 'pledged' as const, createdAt: stale }];
+  assert.equal(activePledgesBy(list, 'd1', asOf).length, 0);
+});
+
 test('a donor may hold only one live pledge per project', () => {
   const base = { id: '', projectId: '', donorName: '', method: 'manual' as const, transactionUrl: '', message: '', createdAt: '', updatedAt: '' };
   const list = [

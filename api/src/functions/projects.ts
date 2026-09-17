@@ -2,7 +2,7 @@ import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { createProject, ensureUser, getProject, getUser, listPledges, listProjects, now, Project, saveProject } from '../lib/store';
+import { createProject, ensureUser, getProject, getUser, listPledges, listProjects, now, Project, saveProject, totals } from '../lib/store';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
 
@@ -16,7 +16,7 @@ app.http('projects-list', {
     const q = (req.query.get('q') ?? '').trim().toLowerCase();
     const sort = req.query.get('sort') ?? 'newest';
 
-    let projects = (await listProjects()).map(publicProject);
+    let projects = (await listProjects()).map((p) => publicProject(p));
     if (status === 'open') projects = projects.filter((p) => p.open);
     else if (status === 'funded') projects = projects.filter((p) => p.funded);
     else if (status === 'closed') projects = projects.filter((p) => p.status === 'closed');
@@ -41,8 +41,11 @@ app.http('projects-get', {
     if (!project) throw new HttpError(404, 'Not found');
     const [owner, pledges] = await Promise.all([getUser(project.ownerId), listPledges(id)]);
     const principal = getPrincipal(req);
+    // The pledges are already loaded here, so use expiry-aware totals rather than the cached
+    // counters: a lapsed reservation is released on reads too, not only after the next write.
+    const live = totals(pledges);
     return json({
-      project: publicProject(project),
+      project: publicProject(project, live),
       owner: owner ? publicUser(owner) : null,
       pledges: pledges.filter((p) => p.status !== 'cancelled').map(publicPledge),
       viewer: principal ? { isOwner: principal.userId === project.ownerId, userId: principal.userId } : null,

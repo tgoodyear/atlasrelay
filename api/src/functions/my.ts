@@ -20,7 +20,7 @@ app.http('my', {
       }),
     );
     return json({
-      projects: projects.map(publicProject),
+      projects: projects.map((p) => publicProject(p)),
       pledges: pledges.map((x) => ({ ...privatePledge(x), projectTitle: titles.get(x.projectId) ?? '' })),
     });
   }),

@@ -17,11 +17,13 @@ SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-$(az account show --query id -o tsv 2>/dev/n
 RESOURCE_GROUP="${RESOURCE_GROUP:-internetresearch}"
 LOCATION="${LOCATION:-westus2}"
 GITHUB_REPO="${GITHUB_REPO:-tgoodyear/internetresearch}"
-# Where Azure sends budget alerts. Not kept in the repository.
-if [[ -z "${BUDGET_CONTACT_EMAIL:-}" ]]; then
-  BUDGET_CONTACT_EMAIL="$(az account show --query user.name -o tsv 2>/dev/null || true)"
-fi
-[[ -n "$BUDGET_CONTACT_EMAIL" ]] || { echo "set BUDGET_CONTACT_EMAIL to receive budget alerts" >&2; exit 1; }
+# Where Azure sends budget alerts. Must be given explicitly: deriving it from the Azure login
+# would quietly reintroduce the operator's personal address, which is what this avoids.
+[[ -n "${BUDGET_CONTACT_EMAIL:-}" ]] || {
+  echo "set BUDGET_CONTACT_EMAIL to the address that should receive Azure budget alerts, e.g." >&2
+  echo "  BUDGET_CONTACT_EMAIL=alerts@example.org $0" >&2
+  exit 1
+}
 export BUDGET_CONTACT_EMAIL
 
 here="$(cd "$(dirname "$0")/.." && pwd)"

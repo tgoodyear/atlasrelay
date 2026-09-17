@@ -1,7 +1,8 @@
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal } from './pledging';
 import { Pledge, Project, User } from './store';
 
-const EMAIL_SHAPED = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Any '@' at all, not just a dotted domain: alice@localhost is still an address.
+const EMAIL_SHAPED = /@/;
 
 /**
  * A name safe to show to anonymous visitors. Static Web Apps fills userDetails with the email
@@ -20,19 +21,29 @@ export function publicName(displayName: string, handle: string, id: string): str
 }
 
 /** Public shape of a project. Never includes the owner's email. */
-export function publicProject(p: Project) {
+/**
+ * Public shape of a project. Pass live totals when they are already to hand (a single-project
+ * read loads the pledges anyway), so that expired reservations are reflected on reads too.
+ * Without this the cached creditsPending would keep maxPledge at 0 after a stale pledge expired,
+ * and nothing on the read path would ever release it.
+ */
+export function publicProject(p: Project, live?: { confirmed: number; pending: number }) {
+  const confirmed = live ? live.confirmed : p.creditsConfirmed;
+  const pending = live ? live.pending : p.creditsPending;
   return {
     ...p,
+    creditsConfirmed: confirmed,
+    creditsPending: pending,
     ownerName: publicName(p.ownerName, '', p.ownerId),
-    funded: p.creditsConfirmed >= p.creditsRequested,
-    remaining: remainingToGoal(p.creditsRequested, p.creditsConfirmed),
-    // Credits the project can still accept; pending pledges reserve their share.
-    capacity: capacity(p.creditsRequested, p.creditsConfirmed, p.creditsPending),
+    funded: confirmed >= p.creditsRequested,
+    remaining: remainingToGoal(p.creditsRequested, confirmed),
+    // Credits the project can still accept; live pledges reserve their share.
+    capacity: capacity(p.creditsRequested, confirmed, pending),
     // Largest single pledge, so no one donor can reserve the whole ceiling.
-    maxPledge: maxSinglePledge(p.creditsRequested, p.creditsConfirmed, p.creditsPending),
+    maxPledge: maxSinglePledge(p.creditsRequested, confirmed, pending),
     maxCredits: maxCredits(p.creditsRequested),
-    // Listing and stats key off confirmed credits alone, so a pending pledge cannot hide a project.
-    open: p.status === 'open' && acceptsMorePledges(p.creditsRequested, p.creditsConfirmed),
+    // Listing and stats key off confirmed credits alone, so a reservation cannot hide a project.
+    open: p.status === 'open' && acceptsMorePledges(p.creditsRequested, confirmed),
   };
 }
 

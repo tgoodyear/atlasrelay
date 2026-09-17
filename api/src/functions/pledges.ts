@@ -84,6 +84,7 @@ app.http('pledges-create', {
     };
 
     let balanceWarning: string | undefined;
+    let overshootWarning: string | undefined;
     if (method === 'api') {
       const key = assertKeyFormat(body.apiKey);
       // Best-effort balance check. A transfer-only key may lack the read permission; that is fine.
@@ -104,13 +105,19 @@ app.http('pledges-create', {
     await createPledge(pledge);
     let updatedProject = await recomputeProjectTotals(id);
 
-    // Table Storage has no cross-partition transactions, so two manual pledges can pass the
-    // check above at the same time. Re-check after writing and withdraw the loser. An API
-    // transfer has already happened at RIPE and cannot be undone, so it is always kept.
-    if (method === 'manual' && updatedProject.creditsConfirmed > maxCredits(project.creditsRequested)) {
-      await savePledge({ ...pledge, status: 'cancelled' });
-      updatedProject = await recomputeProjectTotals(id);
-      throw new HttpError(409, 'Another pledge took the remaining capacity a moment ago. Please try a smaller amount.');
+    // Table Storage has no cross-partition transactions, so two pledges can pass the checks above
+    // at the same moment. Re-check reserved capacity after writing and withdraw the loser. Only a
+    // manual pledge can be withdrawn: an API pledge has already moved credits at RIPE and cannot
+    // be reversed, so it is always kept and the overshoot is reported instead.
+    const ceiling = maxCredits(project.creditsRequested);
+    const reserved = updatedProject.creditsConfirmed + updatedProject.creditsPending;
+    if (reserved > ceiling) {
+      if (method === 'manual') {
+        await savePledge({ ...pledge, status: 'cancelled' });
+        updatedProject = await recomputeProjectTotals(id);
+        throw new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.');
+      }
+      overshootWarning = `This transfer completed, but concurrent pledges have taken the project ${(reserved - ceiling).toLocaleString('en-US')} credits beyond its ceiling.`;
     }
 
     return json(
@@ -121,7 +128,7 @@ app.http('pledges-create', {
         // exactly who that is on their dashboard, because the pledge carries the donor's name.
         recipientEmail: method === 'manual' ? owner.atlasEmail : undefined,
         transferUrl: 'https://atlas.ripe.net/credits/transfer/',
-        warning: balanceWarning,
+        warning: [balanceWarning, overshootWarning].filter(Boolean).join(' ') || undefined,
       },
       201,
     );

@@ -295,9 +295,19 @@ export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirme
   return { confirmed, pending };
 }
 
-/** Pledges by this donor on this project that still hold a reservation. */
-export function activePledgesBy(pledges: Pledge[], donorId: string): Pledge[] {
-  return pledges.filter((p) => p.donorId === donorId && (p.status === 'pledged' || p.status === 'sent'));
+/**
+ * Pledges by this donor on this project that still hold a reservation. Expiry is applied here as
+ * well as in totals(), so that once a reservation lapses the donor may start a replacement rather
+ * than being locked out for ever by their own abandoned pledge.
+ */
+export function activePledgesBy(pledges: Pledge[], donorId: string, asOf: number = Date.now()): Pledge[] {
+  const cutoff = asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
+  return pledges.filter((p) => {
+    if (p.donorId !== donorId) return false;
+    if (p.status !== 'pledged' && p.status !== 'sent') return false;
+    const created = Date.parse(p.createdAt);
+    return !Number.isFinite(created) || created >= cutoff;
+  });
 }
 
 /** Recompute cached totals on the project from its pledges. */
