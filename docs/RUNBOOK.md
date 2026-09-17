@@ -95,7 +95,10 @@ az lock create --name no-delete --lock-type CanNotDelete --resource "$SITE" \
 
 Restore the lock in the same sitting. It is declared in `infra/rbac.bicep`, so a subscription
 deployment also restores it, but do not rely on that. The apex binding is untouched throughout.
-The certificate is issued a few minutes after the status reaches `Ready`.
+
+This was run against `www.atlasrelay.org` on 2026-09-17. Rebinding with `cname-delegation`
+returned `Ready` immediately, because the CNAME it validates against was already published, and
+the DigiCert certificate was serving within a minute. Both hostnames now answer 200 over TLS.
 
 The zone deliberately ships no apex A or ALIAS record. Static Web Apps creates that record
 itself during apex validation, because only the service knows the target to point at; until
