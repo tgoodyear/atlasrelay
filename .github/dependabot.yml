@@ -11,3 +11,8 @@ updates:
     groups:
       all:
         patterns: ["*"]
+    ignore:
+      # TypeScript 7 removes compiler options this project uses (moduleResolution: node);
+      # take that upgrade deliberately, not as part of a routine bump.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
