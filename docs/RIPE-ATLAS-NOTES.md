@@ -117,8 +117,8 @@ November 2025, https://arxiv.org/abs/2511.22474) analyses one full day of the pl
 
 - **Scale**: about 12.9K connected probes and 810 anchors in 178 countries and 4K+
   ASes; 50.9K active measurements produced 1.3 billion results (1.1 TB) in 24 hours.
-  Germany and the United States each host roughly 28% of devices; 32 countries have a
-  single device, and the authors call for more probes in underrepresented regions.
+  Germany and the United States together host about 28% of devices; 32 countries have
+  a single device, and the authors call for more probes in underrepresented regions.
 - **Where results come from**: anchoring measurements yield 67.5% of all results and
   built-in measurements 21.1%; user-defined measurements, the ones that cost credits,
   only 11.4%. A large share of existing data is free to reuse.

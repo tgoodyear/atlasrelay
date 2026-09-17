@@ -68,7 +68,7 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>How big is RIPE Atlas, and does anyone use the data?</summary>
-            <p>On a single day in February 2024 the platform had about 12,900 connected probes and 810 anchors in 178 countries and more than 4,000 networks, running 50,900 measurements that produced 1.3 billion results. Over a thousand scientific publications build on it, mostly with traceroute, DNS and ping measurements. Coverage is uneven. Germany and the United States each host roughly 28% of devices, 32 countries have a single device, and projects that measure from underrepresented regions are especially valuable (<a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>).</p>
+            <p>On a single day in February 2024 the platform had about 12,900 connected probes and 810 anchors in 178 countries and more than 4,000 networks, running 50,900 measurements that produced 1.3 billion results. Over a thousand scientific publications build on it, mostly with traceroute, DNS and ping measurements. Coverage is uneven. Germany and the United States together host about 28% of devices, 32 countries have a single device, and projects that measure from underrepresented regions are especially valuable (<a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>).</p>
           </details>
         </div></div>
 
