@@ -55,7 +55,7 @@ export default function Layout() {
       <footer className="site-footer">
         <div className="container">
           <span>
-            Atlas Credit Exchange is a community project. Not affiliated with or endorsed by the RIPE NCC.
+            Atlas Credit Exchange is a community project and is not affiliated with or endorsed by the RIPE NCC.
           </span>
           <span>
             <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">About RIPE Atlas credits</a>

@@ -28,6 +28,22 @@ export default function HowItWorks() {
           </ol>
         </div></div>
 
+        <div className="card"><div className="card-body">
+          <h2>Before you ask for credits</h2>
+          <p className="muted">
+            A 2025 operational study of RIPE Atlas found that user-defined measurements, the ones that cost credits, produce only about 11% of the platform's 1.3 billion daily results; anchoring and built-in measurements produce the rest and are free to reuse. The same study documents the per-user quotas: at most 100 concurrent measurements, 1,000 probes per measurement and 1,000,000 credits spent per day.
+          </p>
+          <ol className="steps">
+            <li>Check whether <a href="https://atlas.ripe.net/docs/getting-started/built-in-measurements/" target="_blank" rel="noreferrer">built-in</a>, anchoring or existing public measurements already answer your question. Say so in your project description; donors appreciate it.</li>
+            <li>Size the request and the deadline against the 1M credits/day quota: a 30M-credit campaign takes at least 30 days of measuring, however fast the credits arrive.</li>
+            <li>Prefer recurring measurements over repeated one-offs (one-offs cost double), tag and describe them so others can reuse them, and avoid DNS queries for domains that are sensitive in some jurisdictions.</li>
+            <li>RIPE NCC also considers direct credit requests from researchers; contact the <a href="https://atlas.ripe.net/contact/" target="_blank" rel="noreferrer">RIPE Atlas team</a>. This exchange complements that route.</li>
+          </ol>
+          <p className="small muted" style={{ marginTop: '1rem', marginBottom: 0 }}>
+            Source: Nosyk, Tashiro, Lone, Kisteleki, Duda and Korczyński, <a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer"><em>Day in the Life of RIPE Atlas: Operational Insights and Applications in Network Measurements</em></a>, arXiv:2511.22474, November 2025.
+          </p>
+        </div></div>
+
         <div className="card"><div className="card-body faq">
           <h2>Questions</h2>
           <details>
@@ -50,10 +66,14 @@ export default function HowItWorks() {
             <summary>Is this run by RIPE NCC?</summary>
             <p>No. It is an independent community tool built on the public <a href="https://atlas.ripe.net/docs/apis/rest-api-manual/credits/transferring-credits/" target="_blank" rel="noreferrer">RIPE Atlas REST API</a>. RIPE Atlas also offers standing orders and "bill me" sharing between users you already know.</p>
           </details>
+          <details>
+            <summary>How big is RIPE Atlas, and does anyone use the data?</summary>
+            <p>On a single day in February 2024 the platform had about 12,900 connected probes and 810 anchors in 178 countries and more than 4,000 networks, running 50,900 measurements that produced 1.3 billion results. Over a thousand scientific publications build on it, mostly with traceroute, DNS and ping measurements. Coverage is uneven. Germany and the United States each host roughly 28% of devices, 32 countries have a single device, and projects that measure from underrepresented regions are especially valuable (<a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>).</p>
+          </details>
         </div></div>
 
         <p className="muted small">
-          Ready? <Link to="/projects">Browse projects</Link> or <Link to="/projects/new">post one</Link>.
+          <Link to="/projects">Browse projects</Link> or <Link to="/projects/new">post one</Link>.
         </p>
       </div>
     </div>

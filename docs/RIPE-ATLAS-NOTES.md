@@ -50,7 +50,7 @@ Content-Type: application/json
 plus links to `income_items`, `expense_items` and `transactions`. Requires an API key
 with a credits-read permission (the manual calls it "credits read"; the exact
 `permission_group.permission_name` id is only visible from the authenticated
-`GET /api/v2/keys/permissions/` endpoint – *unverified from public docs*).
+`GET /api/v2/keys/permissions/` endpoint, so it is *unverified from public docs*).
 
 ### Transactions (verified)
 
@@ -58,7 +58,7 @@ with a credits-read permission (the manual calls it "credits read"; the exact
 `probe`), `reason`, `description`, `amount`, `balance_before`, `balance_after`, `date`.
 Filters: `date`, `date__gt/gte/lt/lte`, `type`, `sort`, `page_size`. Transfers appear as
 `admin` transactions; the description format is not documented, so automatic
-receipt-matching is a best-effort feature, not a guarantee.
+receipt-matching is best-effort.
 
 ## Authentication and identity
 
@@ -90,12 +90,12 @@ Findings:
 
 1. It is standard OpenID Connect, so **technically** any OIDC relying party can use it.
 2. **Client registration is gated.** The dynamic-registration endpoint answers
-   `403 insufficient_scope – Policy 'Trusted Hosts' rejected request`. The only
+   `403 insufficient_scope, Policy 'Trusted Hosts' rejected request`. The only
    self-service path RIPE documents is the LIR Portal (https://my.ripe.net/#/oauth2),
    available to admin users of a member LIR, and that program is described as being
    for RIPE Database access (scopes `audience/whois`, `whois.mntner`). There is no
    published program for third-party Atlas apps.
-3. Even with an OIDC login, **the Atlas API has no OAuth bearer support** – it accepts
+3. Even with an OIDC login, **the Atlas API has no OAuth bearer support**. It accepts
    only API keys and same-origin session cookies. Federated login would prove *who* a
    user is (and give us their verified RIPE NCC Access email, which is exactly the
    transfer recipient identifier), but it would not let us move credits on their
@@ -107,6 +107,42 @@ transfers happen either through a donor-supplied, single-use, transfer-scoped AP
 or manually on atlas.ripe.net. Design the code so a RIPE NCC Access OIDC provider can
 be plugged in later (Azure Static Web Apps Standard plan, custom OIDC provider) if
 RIPE NCC issues a client; that would let us auto-verify the recipient email.
+
+## Scale, quotas and research impact (Nosyk et al., 2025)
+
+"Day in the Life of RIPE Atlas: Operational Insights and Applications in Network
+Measurements" (Nosyk, Tashiro, Lone, Kisteleki, Duda, Korczyński; arXiv:2511.22474,
+November 2025, https://arxiv.org/abs/2511.22474) analyses one full day of the platform
+(21 February 2024). Facts from it that matter for this exchange:
+
+- **Scale**: about 12.9K connected probes and 810 anchors in 178 countries and 4K+
+  ASes; 50.9K active measurements produced 1.3 billion results (1.1 TB) in 24 hours.
+  Germany and the United States each host roughly 28% of devices; 32 countries have a
+  single device, and the authors call for more probes in underrepresented regions.
+- **Where results come from**: anchoring measurements yield 67.5% of all results and
+  built-in measurements 21.1%; user-defined measurements, the ones that cost credits,
+  only 11.4%. A large share of existing data is free to reuse.
+- **Credits and quotas** (section 2.2): each measurement's cost is proportional to the
+  load it places on probes; a user cannot run more than 100 measurements at once, use
+  more than 1,000 probes per measurement, or spend more than 1M credits per day. The
+  Atlas team considers exceptions case by case. Anchors earn ten times the credits of
+  probes.
+- **Researcher access** (section 1): the platform "is open for anyone to launch custom
+  measurements, provided a user possesses a sufficient amount of RIPE Atlas credits",
+  and "if in need, researchers can request them by contacting the RIPE Atlas team
+  directly". This exchange complements that route.
+- **Research impact** (section 3): over a thousand publications use Atlas; 79 papers at
+  top venues between 2019 and 2023 were analysed, dominated by traceroute, DNS and ping.
+- **Guidance for new campaigns** (section 6): check whether built-in, anchoring or
+  existing public measurements already answer the question; prefer recurring
+  measurements over redundant one-offs; tag and describe measurements so others can
+  find and reuse them (Measurement Bundles); assess ethics, including DNS queries for
+  domains that are sensitive in some jurisdictions.
+
+Implications for the platform: the project form asks requesters whether existing
+measurements were considered and reminds them of the 1M credits/day quota when sizing
+a request and a deadline; the how-it-works page cites the paper and points to the
+direct-request route.
 
 ## Things worth asking RIPE NCC
 
