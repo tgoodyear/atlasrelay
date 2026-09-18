@@ -490,8 +490,11 @@ export async function releasePledgeClaim(projectId: string, donorId: string, ple
 }
 
 export async function createPledge(p: Pledge): Promise<Pledge> {
-  await (await table('pledges')).createEntity({ partitionKey: p.projectId, rowKey: p.id, ...p });
-  return p;
+  // Keep the version the create returned. Without it every later conditional write on this row
+  // would be handed undefined and silently fall back to an unconditional one, which is a guard
+  // that reads as present and does nothing.
+  const res = await (await table('pledges')).createEntity({ partitionKey: p.projectId, rowKey: p.id, ...p });
+  return { ...p, etag: res.etag };
 }
 
 export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {

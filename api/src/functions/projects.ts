@@ -133,6 +133,32 @@ function readProjectFields(body: Record<string, unknown>, required: boolean): Pa
   return out;
 }
 
+/**
+ * Bring an owner back under the open-project cap after a write that may have breached it.
+ *
+ * A count read before writing cannot enforce a limit: concurrent creates, concurrent reopens, and
+ * an edit form that submits status "open" on every save can each pass the check and then all
+ * write. Settling afterwards works because every racer re-reads and sees the others, and ids are
+ * time-prefixed so they all pick the same surplus set. Returns true when the caller's own project
+ * was the surplus, so the caller can report that rather than pretending the write stood.
+ *
+ * Closing a surplus row is best effort. Failing here after the row is already written would leave
+ * the account over the cap AND fail the request, and the next write settles it again anyway.
+ */
+async function settleOpenProjectCap(ownerId: string, ownId: string): Promise<boolean> {
+  const mine = (await listProjectsByOwner(ownerId)).filter((x) => x.status === 'open');
+  if (mine.length <= MAX_OPEN_PROJECTS_PER_USER) return false;
+  const surplus = mine.sort((a, b) => (a.id < b.id ? -1 : 1)).slice(MAX_OPEN_PROJECTS_PER_USER);
+  for (const extra of surplus) {
+    // Only the status: these rows were read a moment ago and a pledge recompute or an owner edit
+    // may have landed since, so writing a whole snapshot back would revert it.
+    await patchProject(extra.id, { status: 'closed' }).catch((err) => {
+      console.error(`Could not close surplus project ${extra.id}:`, err instanceof Error ? err.message : err);
+    });
+  }
+  return surplus.some((x) => x.id === ownId);
+}
+
 app.http('projects-create', {
   route: 'projects',
   methods: ['POST'],
@@ -191,22 +217,8 @@ app.http('projects-create', {
     // close themselves back down to it. Ids are time-prefixed, so the newest row always sees every
     // older one and every racer reaches the same verdict without coordination. Unlike a transfer,
     // nothing irreversible has happened, so closing is a complete remedy.
-    const mine = (await listProjectsByOwner(user.id)).filter((x) => x.status === 'open');
-    if (mine.length > MAX_OPEN_PROJECTS_PER_USER) {
-      // Close every surplus row, not just this request's own. A request that only withdrew itself
-      // would leave the cap broken whenever the row it should have closed belongs to a rival that
-      // has already returned: the newest rows are the surplus, and the request holding an older id
-      // is the one that sees them all. Ids are time-prefixed, so every racer that gets here picks
-      // the same surplus set, and closing twice is harmless.
-      const surplus = mine.sort((a, b) => (a.id < b.id ? -1 : 1)).slice(MAX_OPEN_PROJECTS_PER_USER);
-      for (const extra of surplus) {
-        // Only the status. These rows were read a moment ago and a pledge recompute or an owner
-        // edit may have landed since; writing the whole snapshot back would revert it.
-        await patchProject(extra.id, { status: 'closed' });
-      }
-      if (surplus.some((x) => x.id === project.id)) {
-        throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
-      }
+    if (await settleOpenProjectCap(user.id, project.id)) {
+      throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
     }
 
     return json({ project: publicProject(project) }, 201);
@@ -267,6 +279,19 @@ app.http('projects-update', {
     if (updated.status === 'open' && !(await getUser(p.userId))?.atlasEmail) {
       const reclosed = await patchProject(id, { status: 'closed' });
       return json({ project: publicProject(reclosed) });
+    }
+
+    // Settle the cap after any write that leaves this project open, exactly as creation does. The
+    // count check above reads before writing, so two reopens can both pass it, and the edit form
+    // submits status "open" on every save, which can reopen a row the creation settlement had just
+    // closed. Neither is caught by a preflight; both are caught here.
+    if (updated.status === 'open' && (await settleOpenProjectCap(p.userId, id))) {
+      const reclosed = await getProject(id);
+      return json(
+        { project: publicProject(reclosed ?? updated) },
+        200,
+        {},
+      );
     }
 
     return json({ project: publicProject(updated) });

@@ -180,7 +180,7 @@ export function describeAtlasError(status: number, body: unknown): string {
 
 export async function getCredits(key: string): Promise<CreditsOverview> {
   const { ok, status, body } = await atlasCall('/credits/', key, {}, BEST_EFFORT_TIMEOUT_MS);
-  // RIPE answered and refused, so no credits moved. Anything thrown from atlasFetch itself is
+  // RIPE answered and refused, so no credits moved. Anything thrown from atlasCall itself is
   // an AtlasUnreachable instead, and carries no such guarantee.
   if (!ok) throw new AtlasRefused(status, status === 429 ? 429 : 400, describeAtlasError(status, body));
   return body as CreditsOverview;

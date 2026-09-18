@@ -19,9 +19,11 @@ people's credits, projects or email addresses to demonstrate a finding.
 
 ## Reporting abuse, or asking for a takedown
 
-Nobody vets the projects posted here. Anyone who can sign in with GitHub or
-Microsoft can ask for credits, and the site cannot tell a real research project
-from an invented one. That is stated on the page where donors transfer credits,
+Nobody vets the projects posted here. Posting needs a GitHub or Microsoft
+sign-in and a RIPE NCC Access email added to the profile, which is where the
+credits would go. Neither is checked against anything: the address is
+self-declared, and the site cannot tell a real research project from an invented
+one. That is stated on the page where donors transfer credits,
 because it is the moment it matters.
 
 If a project is fraudulent, misrepresents who is behind it, or should come down

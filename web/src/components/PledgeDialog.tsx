@@ -83,7 +83,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       const refusedBeforeSending = serverAnswered && REFUSED_BEFORE_SENDING.includes((err as ApiError).status);
       if (method === 'api' && !refusedBeforeSending) {
         setApiKey('');
-        setError(serverAnswered ? message : 'The connection was lost before we got an answer.');
+        setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');
         setStep('api-unknown');
       } else {
         // A refusal means nothing moved and the donor can correct and retry, but the key is
@@ -180,9 +180,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
               </div>
 
               <p className="small muted" style={{ marginTop: '1rem' }}>
-                Nobody checks that a request is genuine. Anyone can sign in and post a project, and
-                this site cannot verify that a person is who they say they are or that the credits
-                will be used as described. Read the project's links, start with a small amount, and
+                Nobody checks that a request is genuine. Posting needs a sign-in and a RIPE NCC
+                Access email, both self-declared, and this site cannot verify that a person is who
+                they say they are or that the credits will be used as described. Read the project's links, start with a small amount, and
                 send only what you are willing to lose. Credits cannot be recalled once transferred.
                 {' '}
                 <a
@@ -237,9 +237,10 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <>
               <div className="alert alert-warn">{error}</div>
               <p>
-                We cannot tell you whether the {fmt(n)} credits left your account, because we never got
-                an answer back. The transfer may have gone through. Check your transaction log before
-                doing anything else.
+                We cannot tell you whether the {fmt(n)} credits left your account. RIPE Atlas either
+                never answered, or answered in a way that does not say whether it completed the
+                transfer. It may have gone through. Check your transaction log before doing anything
+                else.
               </p>
               <ol className="steps">
                 <li>

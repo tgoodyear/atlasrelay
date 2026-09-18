@@ -168,8 +168,11 @@ query charges.
   so the same GitHub or Microsoft account signing in again is reconnected to that history rather
   than starting clean; deletion is not a ban. Note what you did and why in the abuse issue; pledges
   are the only audit trail there is.
-- **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and RIPE never
-  answered, so the platform cannot say whether the credits moved. Only the two people involved
+- **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and did not get an
+  answer it could act on, so the platform cannot say whether the credits moved. Three things reach
+  this state and they are worth telling apart: the request timed out, the connection failed, or
+  RIPE answered with a 5xx. Only the last means RIPE replied at all, and none of them says whether
+  the transfer was processed first. Only the two people involved
   can settle it, and both can: the requester confirms the pledge if the credits arrived, the
   donor cancels it if their transaction log at https://atlas.ripe.net/credits/transactions/
   shows nothing. Neither party needs an operator. If one is abandoned, the 14-day reservation
