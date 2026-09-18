@@ -67,13 +67,16 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       onDone(res.project);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Something went wrong';
-      // A 502 on an API transfer means the server never heard back from RIPE, so the credits may
-      // or may not have moved. Leaving the form up would invite a second click that sends them
-      // twice. Every other status means RIPE refused and nothing moved, so the donor can fix the
-      // problem and try again with the key they already pasted.
-      if (method === 'api' && err instanceof ApiError && err.status === 502) {
+      // What matters is whether the server answered. An ApiError means it did, and its status
+      // says whether RIPE refused (nothing moved, retrying is right) or never replied (502,
+      // unknown). Anything that is not an ApiError is the browser losing the connection, and by
+      // then the server may already have sent the transfer, so it is unknown in exactly the same
+      // way. Both must end the dialog rather than leave a populated form and a live button.
+      const serverAnswered = err instanceof ApiError;
+      const outcomeUnknown = !serverAnswered || (err as ApiError).status === 502;
+      if (method === 'api' && outcomeUnknown) {
         setApiKey('');
-        setError(message);
+        setError(serverAnswered ? message : 'The connection was lost before we got an answer.');
         setStep('api-unknown');
       } else {
         setError(message);
@@ -224,8 +227,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <>
               <div className="alert alert-warn">{error}</div>
               <p>
-                We sent the transfer to RIPE Atlas but never got an answer, so we cannot tell you whether
-                the {fmt(n)} credits left your account. Check your transaction log before doing anything else.
+                We cannot tell you whether the {fmt(n)} credits left your account, because we never got
+                an answer back. The transfer may have gone through. Check your transaction log before
+                doing anything else.
               </p>
               <ol className="steps">
                 <li>

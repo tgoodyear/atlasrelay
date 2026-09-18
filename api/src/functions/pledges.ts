@@ -90,6 +90,10 @@ app.http('pledges-create', {
     // the only mutual exclusion available: creating one Table Storage row is atomic, so exactly
     // one concurrent request can hold the slot. The list check above is a courtesy that gives a
     // better message; this is what actually prevents two simultaneous transfers.
+    // Validate the key before taking the slot. assertKeyFormat throws, and a throw before the
+    // rollback helper exists would strand the slot and block the donor's corrected retry.
+    const apiKey = method === 'api' ? assertKeyFormat(body.apiKey) : '';
+
     if (!(await acquirePledgeClaim(id, donor.id, pledge.id))) {
       throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
     }
@@ -123,7 +127,7 @@ app.http('pledges-create', {
     let balanceWarning: string | undefined;
     let recordWarning: string | undefined;
     if (method === 'api') {
-      const key = assertKeyFormat(body.apiKey);
+      const key = apiKey;
       // Best-effort balance check. A transfer-only key may lack the read permission; that is fine.
       try {
         const credits = await getCredits(key);
@@ -153,7 +157,10 @@ app.http('pledges-create', {
           // if they never do. It stays on both dashboards until somebody settles it.
           pledge.status = 'sent';
           pledge.transferUncertain = true;
-          pledge.transferredAt = new Date(startedAt).toISOString();
+          // transferredAt records the moment our server watched RIPE accept the transfer, and
+          // here nothing was watched. Leaving it empty keeps that field honest; the status and
+          // the uncertain flag are what describe this pledge.
+
           try {
             await savePledge(pledge);
             await recomputeProjectTotals(id);
@@ -187,15 +194,25 @@ app.http('pledges-create', {
         // No reference beats failing a transfer that already happened.
       }
 
+      // These two are reported separately because they fail differently. If the row never reaches
+      // 'confirmed' the owner still has to confirm it by hand; if only the cached totals are stale
+      // the pledge is already confirmed and telling the owner to confirm it would be wrong, since
+      // there is no transition left for them to make.
+      let saved = false;
       try {
         await savePledge(pledge);
-        updatedProject = await recomputeProjectTotals(id);
+        saved = true;
       } catch (err) {
-        // The credits are gone and we cannot mark the row confirmed. Leave it pending rather than
-        // erroring: it is on both dashboards, and the owner can confirm it by hand.
         console.error('Transfer completed but the pledge could not be updated:', err instanceof Error ? err.message : err);
         recordWarning = 'Your transfer completed, but recording it here did not. The project owner can confirm the pledge once the credits arrive.';
       }
+      try {
+        updatedProject = await recomputeProjectTotals(id);
+      } catch (err) {
+        console.error('Transfer completed but project totals could not be recomputed:', err instanceof Error ? err.message : err);
+        if (saved) recordWarning = 'Your transfer completed and is recorded. The project totals shown here may lag for a moment.';
+      }
+      if (saved) await releasePledgeClaim(id, donor.id, pledge.id);
     }
 
     return json(

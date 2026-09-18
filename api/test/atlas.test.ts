@@ -153,3 +153,41 @@ test('a connection that dies mid-body is AtlasUnreachable, not a refusal', async
   assert.ok(err instanceof AtlasUnreachable, `expected AtlasUnreachable, got ${err?.constructor?.name}`);
   assert.equal(err.status, 502);
 });
+
+test('a transfer posts exactly once, whatever the response', async () => {
+  // A retry against a second path could send the credits twice, and would also make a key's use
+  // four outbound requests rather than the three SECURITY.md discloses.
+  const real = globalThis.fetch;
+  const paths: string[] = [];
+  globalThis.fetch = (async (input: unknown) => {
+    paths.push(String(input));
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  try {
+    await transferCredits('12345678-1234-1234-1234-123456789abc', 'someone@example.org', 10).catch(() => null);
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.equal(paths.length, 1);
+  assert.match(paths[0], /\/credits\/transfers\/$/);
+});
+
+test('a truncated refusal is still a refusal, not an unknown outcome', async () => {
+  // RIPE answered with a 4xx and the body was lost. The status is a complete answer on its own:
+  // nothing moved. Parking this as uncertain would strand a pledge that should simply be cancelled.
+  const err = await withFetch(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'));
+          },
+        }),
+        { status: 400 },
+      ),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.equal(err instanceof AtlasUnreachable, false, 'a refusal must not read as unknown');
+  assert.ok(err instanceof HttpError);
+  assert.equal(err.status, 400);
+});

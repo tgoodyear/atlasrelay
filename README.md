@@ -9,7 +9,8 @@ The platform never holds credits or long-lived API keys. RIPE Atlas stays the le
 
 RIPE Atlas runs about 12,900 probes and 810 anchors in 178 countries and produces 1.3
 billion results a day. Anyone can launch their own measurements if they hold enough
-credits, each user may spend at most 1M credits per day, and the user-defined
+credits, each user has a daily spend limit that defaults to 1M credits but is set per
+account and can be raised on request, and the user-defined
 measurements that credits pay for make up about 11% of the platform's output (Nosyk et
 al., [*Day in the Life of RIPE Atlas*](https://arxiv.org/abs/2511.22474), 2025).
 
