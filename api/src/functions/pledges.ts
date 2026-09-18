@@ -84,6 +84,7 @@ app.http('pledges-create', {
       transferUncertain: false,
       // An API transfer is in flight from the moment the row exists until the attempt resolves.
       inFlight: method === 'api',
+      inFlightSince: '',
       message,
       createdAt: ts,
       updatedAt: ts,
@@ -189,6 +190,11 @@ app.http('pledges-create', {
       }
 
       const startedAt = Date.now();
+      // Start the in-flight window here, not at row creation. Everything above this line, the
+      // claim, the write and the balance check, happens first, and anchoring the window to
+      // createdAt could let it lapse before the transfer was even issued.
+      pledge.inFlightSince = new Date(startedAt).toISOString();
+      await savePledge(pledge).catch(() => undefined);
       try {
         await transferCredits(key, owner.atlasEmail, amount);
       } catch (err) {
@@ -272,7 +278,18 @@ app.http('pledges-create', {
         console.error('Transfer completed but project totals could not be recomputed:', err instanceof Error ? err.message : err);
         if (saved) recordWarning = 'Your transfer completed and is recorded. The project totals shown here may lag for a moment.';
       }
-      if (saved) await releasePledgeClaim(id, donor.id, pledge.id);
+      if (saved) {
+        // The last unguarded await after the credits moved, and the most dangerous one. Letting a
+        // Table Storage blip here escape turns a completed transfer into a 500, and the dialog
+        // then re-arms with the key still loaded while the settled pledge has already made the
+        // slot reclaimable, so one more click sends the credits again. A stranded slot heals
+        // itself once its pledge is settled; a 500 after an irreversible transfer does not.
+        try {
+          await releasePledgeClaim(id, donor.id, pledge.id);
+        } catch (releaseErr) {
+          console.error('Could not release a pledge slot after a completed transfer:', releaseErr instanceof Error ? releaseErr.message : releaseErr);
+        }
+      }
     }
 
     return json(

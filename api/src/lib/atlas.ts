@@ -93,9 +93,20 @@ interface AtlasReply {
  * say what happened. A reply that comes back at all is returned, refusal or not, so the caller
  * can tell "RIPE said no" from "we do not know".
  */
-async function atlasCall(path: string, key: string, init: RequestInit = {}): Promise<AtlasReply> {
+/**
+ * Per-call deadlines. One pledge can make three RIPE calls, and at twenty seconds each the worst
+ * case ran past the Static Web Apps edge timeout, so the edge could give up on a request whose
+ * transfer then succeeded: the donor saw a gateway error over credits that had actually moved.
+ * The transfer keeps the full budget because it is the one that matters; the two best-effort
+ * calls around it are given far less, since neither is worth waiting on and both already treat
+ * failure as "carry on without it".
+ */
+const TRANSFER_TIMEOUT_MS = 20_000;
+const BEST_EFFORT_TIMEOUT_MS = 5_000;
+
+async function atlasCall(path: string, key: string, init: RequestInit = {}, timeoutMs = TRANSFER_TIMEOUT_MS): Promise<AtlasReply> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${base()}${path}`, {
       ...init,
@@ -160,7 +171,7 @@ export function describeAtlasError(status: number, body: unknown): string {
 
 
 export async function getCredits(key: string): Promise<CreditsOverview> {
-  const { ok, status, body } = await atlasCall('/credits/', key);
+  const { ok, status, body } = await atlasCall('/credits/', key, {}, BEST_EFFORT_TIMEOUT_MS);
   // RIPE answered and refused, so no credits moved. Anything thrown from atlasFetch itself is
   // an AtlasUnreachable instead, and carries no such guarantee.
   if (!ok) throw new AtlasRefused(status, status === 429 ? 429 : 400, describeAtlasError(status, body));
@@ -178,7 +189,7 @@ export async function findTransferTransaction(key: string, amount: number, since
   // must never raise anything the caller could mistake for a failed transfer.
   let body: unknown;
   try {
-    const reply = await atlasCall('/credits/transactions/?sort=-date&type=admin&page_size=25', key);
+    const reply = await atlasCall('/credits/transactions/?sort=-date&type=admin&page_size=25', key, {}, BEST_EFFORT_TIMEOUT_MS);
     if (!reply.ok) return null;
     body = reply.body;
   } catch {
@@ -221,7 +232,9 @@ export async function transferCredits(key: string, recipient: string, amount: nu
   // inside RIPE, which is no evidence about whether the transfer had already been processed, so
   // it is reported as unknown. Calling it a refusal would release the reservation and invite a
   // retry that sends the same credits a second time.
-  if (status >= 500) {
+  // 4xx only. A 3xx means fetch declined to follow a redirect, which says nothing about whether
+  // RIPE processed anything, and calling it a refusal would free the slot and invite a retry.
+  if (status >= 500 || (status >= 300 && status < 400)) {
     throw new AtlasUnreachable(`RIPE Atlas returned HTTP ${status} without saying whether the transfer completed`);
   }
   if (!ok) throw new AtlasRefused(status, status === 429 ? 429 : 400, describeAtlasError(status, body));
