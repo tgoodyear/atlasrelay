@@ -90,3 +90,26 @@ test('a conditional project patch actually carries the row version', () => {
   void projectUpdateArgs(fake, 'j1', { status: 'closed' }, undefined);
   assert.equal(calls[1]?.options, undefined);
 })
+
+test('an anonymous project carries no account identifier', () => {
+  // The profile page tells people the account link is internal and that retained records show
+  // only their chosen display name. That has to be true of the API, not just the wording.
+  const p = publicProject({
+    id: 'j1', ownerId: 'github|12345', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
+    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
+    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
+    createdAt: '', updatedAt: '',
+  });
+  assert.equal('ownerId' in p, false);
+  assert.equal(JSON.stringify(p).includes('github|12345'), false);
+});
+
+test('an anonymous user view carries no account identifier', () => {
+  const u = publicUser({
+    id: 'github|12345', provider: 'github', handle: 'alice@example.org', displayName: 'Alice',
+    atlasEmail: 'alice@example.org', affiliation: '', url: '', createdAt: '', updatedAt: '',
+  });
+  assert.equal('id' in u, false);
+  assert.equal(JSON.stringify(u).includes('github|12345'), false);
+  assert.equal(JSON.stringify(u).includes('@'), false);
+});

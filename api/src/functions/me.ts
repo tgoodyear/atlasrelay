@@ -44,9 +44,9 @@ app.http('me-delete', {
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
     const p = requirePrincipal(req);
-    // Close any open project first. Pledging to a project whose owner is gone cannot work: the
-    // handler needs the owner's RIPE address to name a recipient. Leaving them open would
-    // advertise projects that fail at the moment a donor tries to give to them.
+    // Pledging to a project whose owner is gone cannot work: the handler needs the owner's RIPE
+    // address to name a recipient. Leaving them open would advertise projects that fail at the
+    // moment a donor tries to give to them.
     const closeOpen = async (): Promise<number> => {
       const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open');
       for (const project of open) {
@@ -55,16 +55,23 @@ app.http('me-delete', {
       return open.length;
     };
 
-    // Close, delete, then close again. Listing and closing is not atomic with project creation, so
-    // a request that validated the profile a moment earlier can create or reopen a project between
-    // the two, which would leave exactly what this is meant to prevent: an open project whose owner
-    // has no address to receive credits. The second pass catches anything that landed in that
-    // window, and creating one after the user row is gone is already refused, because both posting
-    // and reopening require a profile with a RIPE address.
-    const closed = await closeOpen();
+    // The profile goes first. Sweeping projects is unbounded serial work over a shared partition,
+    // and letting it run ahead of the delete means a person with many projects could have the
+    // request time out with their RIPE address still stored, against a page that promises deletion
+    // outright. Removing the row first makes the promise unconditional; the sweep is cleanup.
     await deleteUser(p.userId);
-    const late = await closeOpen();
-    return json({ deleted: true, projectsClosed: closed + late });
+
+    // Then close what they own. A project left briefly open cannot be pledged to, because the
+    // handler needs the owner's address to name a recipient, so the window is a clean failure
+    // rather than a disclosure. Projects written after this sweep close themselves: creation and
+    // reopening both re-check for the owner after writing.
+    let closed = 0;
+    try {
+      closed = await closeOpen();
+    } catch (err) {
+      console.error('Profile deleted but its projects could not all be closed:', err instanceof Error ? err.message : err);
+    }
+    return json({ deleted: true, projectsClosed: closed });
 
   }),
 });

@@ -32,7 +32,11 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
   const pending = live ? live.pending : p.creditsPending;
   // etag is a storage row version used for conditional writes. It is internal, and this function
   // spreads the row, so it has to be removed explicitly rather than merely not mentioned.
-  const { etag: _etag, ...rest } = p;
+  // ownerId is the identity-provider account id. The profile page tells people that retained
+  // records show only their chosen display name and that the account link is internal, so it
+  // cannot also appear on an anonymous endpoint. Whether the viewer owns a project is decided
+  // server-side and returned as `viewer.isOwner`, so nothing needs it out here.
+  const { etag: _etag, ownerId: _ownerId, totalsCheckedAt: _totalsCheckedAt, ...rest } = p;
   return {
     ...rest,
     creditsConfirmed: confirmed,
@@ -86,7 +90,8 @@ export function privateUser(u: User) {
 // providers it is the user's email address, and this is returned on an unauthenticated endpoint.
 export function publicUser(u: User) {
   return {
-    id: u.id,
+    // No id, for the same reason publicProject drops ownerId: it is the account identifier, the
+    // privacy copy calls it internal, and nothing in the UI reads it.
     displayName: publicName(u.displayName, u.handle, u.id),
     affiliation: u.affiliation,
     url: u.url,
