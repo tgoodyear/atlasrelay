@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertKeyFormat, AtlasRefused, describeAtlasError, findTransferTransaction, getCredits } from '../src/lib/atlas';
+import { assertKeyFormat, AtlasRefused, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
 test('assertKeyFormat only accepts UUIDs', () => {
@@ -54,4 +54,22 @@ test('a refusal carries RIPE own status so a key problem is not confused with an
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test('a transfer posts exactly once, whatever the response', async () => {
+  // A retry against a second path could send the credits twice, and would also make a key's use
+  // four outbound requests rather than the three SECURITY.md discloses.
+  const real = globalThis.fetch;
+  const paths: string[] = [];
+  globalThis.fetch = (async (input: unknown) => {
+    paths.push(String(input));
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  try {
+    await transferCredits('12345678-1234-1234-1234-123456789abc', 'someone@example.org', 10).catch(() => null);
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.equal(paths.length, 1);
+  assert.match(paths[0], /\/credits\/transfers\/$/);
 });

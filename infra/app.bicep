@@ -62,6 +62,10 @@ var tableNames = [
   'users'
   'projects'
   'pledges'
+  // One row per (project, donor) holding that donor's single live-pledge slot. Creating a row is
+  // the only atomic operation Table Storage offers, and it is what stops two concurrent requests
+  // both transferring credits.
+  'claims'
 ]
 
 // ---------- data ----------

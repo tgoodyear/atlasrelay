@@ -3,7 +3,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, savePledge, totals } from '../lib/store';
+import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -85,8 +85,16 @@ app.http('pledges-create', {
       updatedAt: ts,
     };
 
+    // Take the donor's single live-pledge slot before anything happens. Reading the pledge list
+    // and then writing cannot enforce one live pledge per donor: a request that reads before a
+    // rival writes sees nothing to conflict with, and both proceed. Creating one Table Storage row
+    // is atomic, so exactly one concurrent request can hold the slot and the rest stop here,
+    // before a transfer is sent and before the owner's address is disclosed.
+    if (!(await acquirePledgeClaim(id, donor.id, pledge.id))) {
+      throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
+    }
+
     let balanceWarning: string | undefined;
-    let overshootWarning: string | undefined;
     if (method === 'api') {
       const key = assertKeyFormat(body.apiKey);
       // Best-effort balance check. A transfer-only key may lack the read permission; that is fine.
@@ -96,7 +104,10 @@ app.http('pledges-create', {
           throw new HttpError(400, `Your RIPE Atlas balance is ${credits.current_balance.toLocaleString('en-US')} credits, less than the ${amount.toLocaleString('en-US')} you want to send`);
         }
       } catch (err) {
-        if (err instanceof HttpError && err.status === 400 && /balance is/.test(err.message)) throw err;
+        if (err instanceof HttpError && err.status === 400 && /balance is/.test(err.message)) {
+          await releasePledgeClaim(id, donor.id, pledge.id);
+          throw err;
+        }
         // Why the check failed decides what to tell the donor. A 401 or 403 really is the key
         // lacking "Get information about your credits", which is worth naming. Anything else is
         // RIPE being slow, rate-limiting or broken, and blaming the donor's key for that sends
@@ -107,7 +118,12 @@ app.http('pledges-create', {
           : 'Your balance could not be checked first because RIPE Atlas did not answer the balance request.';
       }
       const startedAt = Date.now();
-      await transferCredits(key, owner.atlasEmail, amount);
+      try {
+        await transferCredits(key, owner.atlasEmail, amount);
+      } catch (err) {
+        await releasePledgeClaim(id, donor.id, pledge.id);
+        throw err;
+      }
       pledge.status = 'confirmed';
       pledge.transferredAt = new Date(startedAt).toISOString();
       // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
@@ -123,35 +139,16 @@ app.http('pledges-create', {
     await createPledge(pledge);
     let updatedProject = await recomputeProjectTotals(id);
 
-    // Table Storage has no cross-entity transactions, so the one-live-pledge check above is
-    // read-before-write and a burst of concurrent requests from the same donor can all pass it.
-    // Settle it after writing instead: re-read, and if this donor now holds more than one live
-    // pledge, the lowest id wins. Ids are time-prefixed and sortable, so every racing request
-    // reaches the same verdict without coordination. A loser withdraws itself and, critically,
-    // never reaches the response that would disclose the owner's address.
-    const mine = activePledgesBy(await listPledges(id), donor.id);
-    if (mine.length > 1) {
-      const winner = mine.map((x) => x.id).sort()[0];
-      if (pledge.id !== winner) {
-        if (method === 'manual') {
-          await savePledge({ ...pledge, status: 'cancelled' });
-          await recomputeProjectTotals(id);
-          throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
-        }
-        // An API pledge already moved credits at RIPE and cannot be withdrawn, so it stands.
-        overshootWarning = 'You had another pledge in progress on this project; this transfer still completed.';
-      }
-      updatedProject = await recomputeProjectTotals(id);
-    }
-
-    // Re-check reserved capacity too, for the same reason: two different donors can pass the
-    // capacity check at the same moment. Only a manual pledge can be withdrawn.
+    // Reserved capacity still needs a post-write settlement, because it spans different donors and
+    // no single row can arbitrate between them. Only a manual pledge can be withdrawn.
+    let overshootWarning: string | undefined;
     const ceiling = maxCredits(project.creditsRequested);
     const reserved = updatedProject.creditsConfirmed + updatedProject.creditsPending;
     if (reserved > ceiling) {
       if (method === 'manual') {
         await savePledge({ ...pledge, status: 'cancelled' });
         updatedProject = await recomputeProjectTotals(id);
+        await releasePledgeClaim(id, donor.id, pledge.id);
         throw new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.');
       }
       overshootWarning = `This transfer completed, but concurrent pledges have taken the project ${(reserved - ceiling).toLocaleString('en-US')} credits beyond its ceiling.`;
@@ -224,6 +221,10 @@ app.http('pledges-update', {
 
     const updated = await savePledge({ ...pledge, status });
     const updatedProject = await recomputeProjectTotals(projectId);
+    // Confirmed and cancelled are both terminal, so the donor's slot on this project is free again.
+    if (status === 'confirmed' || status === 'cancelled') {
+      await releasePledgeClaim(projectId, pledge.donorId, pledge.id);
+    }
     return json({ pledge: privatePledge(updated), project: publicProject(updatedProject) });
   }),
 });

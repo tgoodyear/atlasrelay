@@ -159,11 +159,10 @@ export async function findTransferTransaction(key: string, amount: number, since
 
 export async function transferCredits(key: string, recipient: string, amount: number): Promise<TransferResult> {
   const payload = JSON.stringify({ recipient, amount });
-  let res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
-  if (res.status === 404) {
-    // The manual documents the singular path; the reference documents the plural.
-    res = await atlasFetch('/credits/transfer/', key, { method: 'POST', body: payload });
-  }
+  // One POST only. The manual documents a singular path too, but the plural one is what the live
+  // API serves, and re-posting a transfer to guess at a path could send the credits twice. It also
+  // keeps a key's use to the three requests SECURITY.md discloses.
+  const res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
   const body = await parseBody(res);
   if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   const transaction = (body as TransferResult | null)?.transaction;
