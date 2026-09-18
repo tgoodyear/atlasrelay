@@ -261,14 +261,20 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   confirms it once the credits show up on their side.
                 </li>
                 <li>
-                  If it is not there, nothing moved. Ask the researcher to cancel the pledge, which they
-                  can do from their own dashboard, and then send it again. Only they can close a transfer
-                  we sent, because cancelling frees your slot and a transfer that did go through would
-                  otherwise be sent twice.
+                  If it is not there, wait a couple of minutes and look again. RIPE does not publish a
+                  transfer to your log at the moment it accepts it; we have measured the entry appearing
+                  40 to 70 seconds later. An empty log straight away is not evidence that the credits
+                  stayed put.
+                </li>
+                <li>
+                  If it is still not there after that, tell the researcher what you found and let them
+                  settle the pledge. Only they can close a transfer we sent: cancelling frees your slot,
+                  and if the credits did move after all, your next pledge would send them a second time.
                 </li>
               </ol>
               <p className="small muted">
-                Do not send the credits a second time until you have checked. Remember to delete the API key
+                Do not send the credits a second time on the strength of an empty log you have only just
+                looked at. Remember to delete the API key
                 you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.
               </p>
               <div className="form-actions">

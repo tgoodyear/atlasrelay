@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
+import { describeErrorForLog, HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
 import { activePledgesBy, claimIsReclaimable, pledgeExpired, pledgeInFlight, totals } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
@@ -286,4 +286,28 @@ test('an unexpected failure before a transfer still says nothing was sent', () =
   // The original message is never published. An unknown error can carry the request body, and on
   // this route the request body holds an API key.
   assert.equal(/apiKey|exploded/.test((marked as HttpError).message), false);
+});
+
+test('an unknown error is described for the log without its message', () => {
+  // SECURITY.md promises a pasted API key cannot reach a log. An unknown error is unknown: whatever
+  // threw it may have folded the request body into free text, and on the pledge route that body
+  // carries the donor's key. This shipped the other way round twice -- a comment saying the message
+  // must not be published, with console.error(err.message) directly under it.
+  const leaky = new Error('request failed: {"apiKey":"84c9393b-a2a2-4be5-8bfe-761f357ff9f0"}');
+  const described = describeErrorForLog(leaky);
+  assert.equal(/apiKey|84c9393b|request failed/.test(described), false);
+  assert.equal(described, 'Error');
+
+  // Azure storage errors are what actually reach these paths, and their fixed identifiers survive,
+  // so the log still says something useful about what went wrong.
+  const azure = Object.assign(new Error('The specified entity already exists. RequestId:...'), {
+    name: 'RestError', code: 'EntityAlreadyExists', statusCode: 409,
+  });
+  assert.equal(describeErrorForLog(azure), 'RestError code=EntityAlreadyExists status=409');
+  assert.equal(/specified entity|RequestId/.test(describeErrorForLog(azure)), false);
+
+  // Something thrown that is not an Error at all must not be stringified either: a thrown object
+  // could be the parsed request body itself.
+  assert.equal(describeErrorForLog({ apiKey: 'secret' }), 'object');
+  assert.equal(describeErrorForLog('84c9393b-a2a2-4be5-8bfe-761f357ff9f0'), 'string');
 });

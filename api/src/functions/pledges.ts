@@ -2,7 +2,7 @@ import { app, HttpRequest } from '@azure/functions';
 import { RestError } from '@azure/data-tables';
 import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
-import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
+import { describeErrorForLog, handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
@@ -421,11 +421,12 @@ app.http('pledges-create', {
       );
     } catch (err) {
       if (transferIssued) throw err;
-      // markNotSent replaces an unexpected failure with a generic 500, so log the original here:
-      // handle() will not see it any more, and its message must not be published because an
-      // unknown error can carry the request body, which on this route holds an API key.
+      // markNotSent replaces an unexpected failure with a generic 500, so log it here: handle()
+      // will not see the original any more. By type only. The comment this replaces said the
+      // message must not be published because an unknown error can carry the request body, which
+      // on this route holds an API key, and then passed that message straight to console.error.
       if (!(err instanceof HttpError)) {
-        console.error('Unexpected failure before a transfer was issued:', err instanceof Error ? err.message : err);
+        console.error('Unexpected failure before a transfer was issued:', describeErrorForLog(err));
       }
       throw markNotSent(err);
     }
