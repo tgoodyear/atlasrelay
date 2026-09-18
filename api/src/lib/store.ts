@@ -48,6 +48,13 @@ export interface Project {
    * freshly edited to the people reading it.
    */
   totalsCheckedAt?: string;
+  /**
+   * Set when a recompute could not be written. Both maintenance refreshers only look at projects
+   * showing a reservation, and a confirmed API pledge leaves pending at zero, so without this a
+   * failed write would never be repaired: there is no "next pledge" to fix it and nothing else
+   * rebuilds the cache.
+   */
+  totalsDirty?: boolean;
 }
 
 export interface Pledge {
@@ -235,6 +242,7 @@ function toProject(e: Entity): Project {
     deadline: String(e.deadline ?? ''),
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
+    totalsDirty: e.totalsDirty === true,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };

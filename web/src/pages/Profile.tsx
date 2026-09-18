@@ -108,7 +108,23 @@ export default function Profile() {
               if (!confirm('Delete your profile and remove your RIPE NCC Access email?')) return;
               setDeleting(true);
               try {
-                await api.deleteMe();
+                const res = await api.deleteMe();
+                // The profile is gone either way, which is the promise that matters. But the copy
+                // above also says every open project is closed, and the sweep can fail partway, so
+                // logging out silently would leave someone believing something untrue about what
+                // is still listed under their name.
+                if (!res.sweepComplete) {
+                  const n = res.projectsNotClosed;
+                  setError(
+                    `Your profile and RIPE NCC Access email have been deleted. ${
+                      n && n > 0
+                        ? `${n} of your projects could not be closed and may still be listed.`
+                        : 'Your projects could not all be closed and some may still be listed.'
+                    } Nobody can pledge to them, because there is no longer an address to send credits to. Please report this so they can be closed by hand.`,
+                  );
+                  setDeleting(false);
+                  return;
+                }
                 window.location.href = '/.auth/logout?post_logout_redirect_uri=/';
               } catch (err) {
                 setError(err instanceof ApiError ? err.message : 'Could not delete your profile');

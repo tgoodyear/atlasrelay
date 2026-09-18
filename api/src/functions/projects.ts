@@ -40,7 +40,7 @@ app.http('projects-list', {
     // updatedAt, which belongs to the project's own history and must not move for maintenance.
     const checked = (x: Project): string => x.totalsCheckedAt ?? '';
     const stale = rows
-      .filter((p) => p.creditsPending > 0)
+      .filter((p) => p.creditsPending > 0 || p.totalsDirty)
       .sort((a, b) => (checked(a) < checked(b) ? -1 : checked(a) > checked(b) ? 1 : 0))
       .slice(0, STALE_REFRESH_LIMIT);
     const live = new Map<string, { confirmed: number; pending: number }>();
@@ -62,7 +62,7 @@ app.http('projects-list', {
         {
           creditsConfirmed: t.confirmed,
           creditsPending: t.pending,
-          totalsCheckedAt: now(),
+          totalsCheckedAt: now(), totalsDirty: false,
           // Always preserved, correcting or not. This runs on anonymous listing traffic, and
           // expiring a reservation is bookkeeping rather than something the owner did, so moving
           // updatedAt would tell every reader the project had just been edited. Rotation runs off
