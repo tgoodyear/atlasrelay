@@ -263,10 +263,15 @@ app.http('pledges-create', {
           // nothing here to roll back and nothing to send. Rolling back would overwrite the thing
           // the guard just protected.
           if (markErr instanceof RestError && markErr.statusCode === 412) {
-            // Nothing was sent, but do not say not-sent: that is the marker the form reads as
-            // "correct it and try again", and it would let the donor start a second API transfer
-            // against a pledge somebody has just marked sent or confirmed. What they need is to
-            // look at the row first, which is what the unknown outcome asks for.
+            // Somebody else acted on the row. Which of the two things they did decides what to
+            // offer, exactly as on the manual branch below. A cancellation is unambiguous: nothing
+            // was sent, the claim went back with it, and the donor should be free to try again. A
+            // row now marked sent or confirmed means somebody believes credits have moved, and
+            // saying not-sent there would let the donor start a second transfer against it.
+            const settled = await getPledge(id, pledge.id).catch(() => null);
+            if (settled && settled.status === 'cancelled') {
+              throw new HttpError(409, 'This pledge was cancelled while the transfer was being set up, so nothing was sent. You can start a new one.', NOT_SENT);
+            }
             throw new HttpError(409, 'This pledge was settled while the transfer was being set up, so nothing was sent. Open it on your dashboard before sending anything.', { transfer: 'unknown' });
           }
           console.error('Could not record the transfer start marker:', describeErrorForLog(markErr));
@@ -323,13 +328,14 @@ app.http('pledges-create', {
             // safe direction: it sends the donor to tell the researcher, which is harmless if a row
             // did exist and necessary if it did not.
             if (!recorded) {
-              // Any surviving row counts, not only one that reached `sent`. createPledge succeeded
-              // long before this, so a failed transition leaves the earlier row rather than no row,
-              // and the question this answers is whether the researcher has something on their
-              // dashboard to settle -- which they do. Requiring `sent` reported "no pledge exists"
-              // over a pledge the owner could see.
+              // What this decides is whether the donor is told a pledge is waiting for the owner
+              // to settle it. A row still open counts, whether the failed transition left it at
+              // `pledged` or landed it at `sent`: createPledge succeeded long before this, so the
+              // earlier row survives either way and the owner can see it. A row already settled
+              // does not: telling somebody their cancelled pledge is waiting for confirmation hides
+              // that its claim went back and that nothing is tracking the transfer any more.
               const stored = await getPledge(id, pledge.id).catch(() => null);
-              if (stored) recorded = true;
+              if (stored && (stored.status === 'sent' || stored.status === 'pledged')) recorded = true;
             }
             // If the row was updated but the totals were not, nothing revisits a project whose
             // cached pending is zero, so mark it for the refreshers to pick up.
