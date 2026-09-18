@@ -44,15 +44,24 @@ log "Checking delegation of $ZONE"
 expected="$(az network dns zone show -n "$ZONE" -g "$RG" "${SUB[@]}" \
   --query nameServers -o tsv | sed 's/\.$//' | tr 'A-Z' 'a-z' | sort)"
 [[ -n "$expected" ]] || die "zone $ZONE not found in $RG"
-actual="$(dig +short NS "$ZONE" @1.1.1.1 | sed 's/\.$//' | tr 'A-Z' 'a-z' | sort)"
-echo "  expected: $(tr '\n' ' ' <<<"$expected")"
-echo "  public:   $(tr '\n' ' ' <<<"${actual:-<none>}")"
+
+# Ask the parent zone's nameservers, not a recursive resolver. The parent is authoritative for
+# the delegation, whereas recursors serve stale negative answers for a while after a change and
+# disagree with each other, which made this check fail seconds after the delegation went live.
+parent="${ZONE#*.}"
+parent_ns="$(dig +short NS "$parent." | head -1)"
+[[ -n "$parent_ns" ]] || die "could not find nameservers for the parent zone $parent"
+actual="$(dig +norecurse "@$parent_ns" "$ZONE" NS +noall +authority \
+  | awk '$4=="NS"{print tolower($5)}' | sed 's/\.$//' | sort)"
+echo "  parent zone:  $parent (via $parent_ns)"
+echo "  expected:     $(tr '\n' ' ' <<<"$expected")"
+echo "  delegated:    $(tr '\n' ' ' <<<"${actual:-<none>}")"
 [[ -n "$actual" ]] || die "$ZONE is not delegated yet; set the nameservers at the registrar and wait"
 # Every Azure nameserver must be present, not merely one of them: a partial delegation resolves
-# intermittently and makes domain validation fail in ways that are tedious to diagnose.
+# intermittently and makes validation fail in ways that are tedious to diagnose.
 missing="$(comm -23 <(echo "$expected") <(echo "$actual"))"
 [[ -z "$missing" ]] || die "delegation incomplete, missing: $(tr '\n' ' ' <<<"$missing")"
-echo "  all $(grep -c . <<<"$expected") nameservers delegated"
+echo "  all $(grep -c . <<<"$expected") nameservers delegated at the parent"
 
 log "Binding hostnames"
 bind "www.$ZONE" cname-delegation
