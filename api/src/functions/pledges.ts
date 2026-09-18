@@ -1,11 +1,11 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
-import { assertKeyFormat, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
+import { assertKeyFormat, AtlasRefused, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge, totals } from '../lib/store';
+import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
-import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER } from '../lib/pledging';
+import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
 
 app.http('pledges-list', {
@@ -86,6 +86,14 @@ app.http('pledges-create', {
       updatedAt: ts,
     };
 
+    // Take the donor's single live-pledge slot on this project before writing anything. This is
+    // the only mutual exclusion available: creating one Table Storage row is atomic, so exactly
+    // one concurrent request can hold the slot. The list check above is a courtesy that gives a
+    // better message; this is what actually prevents two simultaneous transfers.
+    if (!(await acquirePledgeClaim(id, donor.id, pledge.id))) {
+      throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
+    }
+
     // The row is written before any credits move. Table Storage has no transaction that can span
     // a local write and a call to RIPE, so the order decides which way a failure hurts. An orphan
     // row is a pledge someone cancels; an untracked transfer is credits nobody can account for.
@@ -99,21 +107,14 @@ app.http('pledges-create', {
     const rollback = async (err: HttpError): Promise<HttpError> => {
       await savePledge({ ...pledge, status: 'cancelled' });
       await recomputeProjectTotals(id);
+      await releasePledgeClaim(id, donor.id, pledge.id);
       return err;
     };
 
-    // The one-live-pledge and capacity checks above read before writing, so a burst of concurrent
-    // requests from the same donor can all pass them. Settle it now that the row is visible:
-    // re-read, and where a donor holds more than one live pledge the lowest id wins. Ids are
-    // time-prefixed and sortable, so every racing request reaches the same verdict without
-    // coordination. Losing costs nothing here, because this runs before the transfer.
-    const mine = activePledgesBy(await listPledges(id), donor.id);
-    if (mine.length > 1 && pledge.id !== mine.map((x) => x.id).sort()[0]) {
-      throw await rollback(new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.'));
-    }
-
-    // Reserved capacity needs the same treatment, because two different donors can pass the
-    // capacity check at the same moment.
+    // Reserved capacity still needs a post-write settlement, because it spans different donors and
+    // no single row can arbitrate between them. Over-reserving is recoverable in a way a double
+    // transfer is not: it only holds pending credits, it is re-checked when a pledge is confirmed,
+    // and it expires. Losing here costs nothing, because this runs before the transfer.
     let updatedProject = await recomputeProjectTotals(id);
     if (updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
       throw await rollback(new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.'));
@@ -131,9 +132,14 @@ app.http('pledges-create', {
         }
       } catch (err) {
         if (err instanceof HttpError && err.status === 400 && /balance is/.test(err.message)) throw await rollback(err);
-        // Most often the key carries "Transfer credits to another user" but not
-        // "Get information about your credits", which is worth naming rather than hiding.
-        balanceWarning = 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.';
+        // Why the check failed decides what to tell the donor. A 401 or 403 really is the key
+        // lacking "Get information about your credits", which is worth naming. Anything else is
+        // RIPE being slow, rate-limiting or broken, and blaming the donor's key for that sends
+        // them off editing permissions that were never the problem.
+        const status = err instanceof AtlasRefused ? err.upstreamStatus : 0;
+        balanceWarning = status === 401 || status === 403
+          ? 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.'
+          : 'Your balance could not be checked first because RIPE Atlas did not answer the balance request.';
       }
 
       const startedAt = Date.now();
@@ -241,6 +247,14 @@ app.http('pledges-update', {
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
 
+    // A reservation that has expired no longer holds capacity, and that capacity may already have
+    // been given to someone else. Letting it move forward would invite a donor to send credits
+    // against a reservation that is gone, and could push the project past its ceiling on confirm.
+    // Cancelling stays available, so the row can always be cleared away.
+    if (status !== 'cancelled' && pledgeExpired(pledge)) {
+      throw new HttpError(409, `This pledge has been pending for more than ${PENDING_RESERVATION_DAYS} days and no longer holds its reservation. Cancel it and start again.`);
+    }
+
     // Confirming must never push confirmed credits past the ceiling, whatever was reserved.
     if (status === 'confirmed') {
       const liveTotals = totals(await listPledges(projectId));
@@ -251,6 +265,10 @@ app.http('pledges-update', {
 
     const updated = await savePledge({ ...pledge, status });
     const updatedProject = await recomputeProjectTotals(projectId);
+    // Confirmed and cancelled are both terminal, so the donor's slot on this project is free again.
+    if (status === 'confirmed' || status === 'cancelled') {
+      await releasePledgeClaim(projectId, pledge.donorId, pledge.id);
+    }
     return json({ pledge: privatePledge(updated), project: publicProject(updatedProject) });
   }),
 });

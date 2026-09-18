@@ -1,7 +1,7 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
 import { handle, json, readJson } from '../lib/http';
-import { deleteUser, ensureUser, updateUser } from '../lib/store';
+import { deleteUser, ensureUser, listProjectsByOwner, saveProject, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { privateUser } from '../lib/views';
 
@@ -44,10 +44,16 @@ app.http('me-delete', {
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
     const p = requirePrincipal(req);
-    // Deletes the profile, including the RIPE NCC Access email. Projects and pledges are left in
-    // place because donors and owners rely on that record, but nothing identifying remains beyond
-    // the display name the person chose.
+    // Close any open project first. Pledging to a project whose owner is gone cannot work: the
+    // handler needs the owner's RIPE address to name a recipient. Leaving them open would
+    // advertise projects that fail at the moment a donor tries to give to them.
+    const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open');
+    for (const project of open) {
+      await saveProject({ ...project, status: 'closed' });
+    }
+    // Then the profile itself, including the RIPE NCC Access email. Projects and pledges stay,
+    // because donors and owners rely on that record.
     await deleteUser(p.userId);
-    return json({ deleted: true });
+    return json({ deleted: true, projectsClosed: open.length });
   }),
 });

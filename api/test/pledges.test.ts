@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activePledgesBy, totals } from '../src/lib/store';
+import { activePledgesBy, claimIsReclaimable, pledgeExpired, totals } from '../src/lib/store';
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, remainingToGoal } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
@@ -100,4 +100,42 @@ test('a transfer of unknown outcome keeps reserving credits and keeps its donor 
   const pledges = [{ ...base, amount: 500, status: 'sent' as const }];
   assert.deepEqual(totals(pledges), { confirmed: 0, pending: 500 });
   assert.equal(activePledgesBy(pledges, 'd1').length, 1);
+});
+
+test('a pledge past the reservation window counts as expired', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const base = { id: 'a', projectId: 'j1', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '', updatedAt: '' };
+  const asOf = Date.parse('2026-09-17T00:00:00.000Z');
+  const fresh = { ...base, amount: 1, status: 'pledged' as const, createdAt: new Date(asOf - 1 * day).toISOString() };
+  const stale = { ...base, amount: 1, status: 'pledged' as const, createdAt: new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * day).toISOString() };
+  assert.equal(pledgeExpired(fresh, asOf), false);
+  assert.equal(pledgeExpired(stale, asOf), true);
+  // A settled pledge never expires: its credits are already accounted for.
+  assert.equal(pledgeExpired({ ...stale, status: 'confirmed' }, asOf), false);
+  assert.equal(pledgeExpired({ ...stale, status: 'cancelled' }, asOf), false);
+});
+
+test('a pledge slot is reclaimable once its pledge settles, or once it goes stale', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const asOf = Date.parse('2026-09-17T00:00:00.000Z');
+  const recent = new Date(asOf - day).toISOString();
+  const ancient = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * day).toISOString();
+  const pledge = (status: 'pledged' | 'sent' | 'confirmed' | 'cancelled') => ({
+    id: 'p1', projectId: 'j1', donorId: 'd1', donorName: '', amount: 1, method: 'api' as const, status,
+    transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '',
+    createdAt: recent, updatedAt: recent,
+  });
+
+  // A live pledge holds its slot. This is the case that stops a second transfer.
+  assert.equal(claimIsReclaimable(recent, pledge('pledged'), asOf), false);
+  assert.equal(claimIsReclaimable(recent, pledge('sent'), asOf), false);
+  // A settled pledge releases it, even if the release call never ran.
+  assert.equal(claimIsReclaimable(recent, pledge('confirmed'), asOf), true);
+  assert.equal(claimIsReclaimable(recent, pledge('cancelled'), asOf), true);
+  // A slot pointing at a pledge that no longer exists is not a permanent lockout.
+  assert.equal(claimIsReclaimable(recent, null, asOf), true);
+  // Nor is one older than the reservation window, whatever its pledge says.
+  assert.equal(claimIsReclaimable(ancient, pledge('pledged'), asOf), true);
+  // Nor is one with an unreadable timestamp.
+  assert.equal(claimIsReclaimable('', pledge('pledged'), asOf), true);
 });

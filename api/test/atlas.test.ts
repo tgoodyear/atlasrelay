@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertKeyFormat, AtlasUnreachable, describeAtlasError, transferCredits } from '../src/lib/atlas';
+import { assertKeyFormat, AtlasRefused, AtlasUnreachable, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
 test('assertKeyFormat only accepts UUIDs', () => {
@@ -99,4 +99,57 @@ test('a 2xx without a transaction field still counts as sent', async () => {
     () => transferCredits(KEY, 'someone@example.org', 10),
   );
   assert.deepEqual(res, { transaction: '' });
+});
+
+test('an ambiguous transaction match records no reference at all', async () => {
+  // Two outgoing rows of the same size inside the window: there is no way to tell which is ours,
+  // and a reference pointing at the wrong transfer is worse than none.
+  const real = globalThis.fetch;
+  const rows = [
+    { id: 11, type: 'admin', amount: -500, date: '2026-09-17T12:00:05Z' },
+    { id: 12, type: 'admin', amount: -500, date: '2026-09-17T12:00:03Z' },
+  ];
+  globalThis.fetch = (async () => new Response(JSON.stringify({ results: rows }), { status: 200 })) as typeof fetch;
+  try {
+    const since = Date.parse('2026-09-17T12:00:00Z');
+    assert.equal(await findTransferTransaction('12345678-1234-1234-1234-123456789abc', 500, since), null);
+    // One match is unambiguous and is recorded.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ results: [rows[0]] }), { status: 200 })) as typeof fetch;
+    const one = await findTransferTransaction('12345678-1234-1234-1234-123456789abc', 500, since);
+    assert.equal(one?.id, 11);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('a refusal carries RIPE own status so a key problem is not confused with an outage', async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('{}', { status: 403 })) as typeof fetch;
+  try {
+    const err = await getCredits('12345678-1234-1234-1234-123456789abc').then(() => null, (e) => e);
+    assert.ok(err instanceof AtlasRefused);
+    assert.equal(err.upstreamStatus, 403);
+    assert.equal(err.status, 400, 'our own status stays flattened');
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('a connection that dies mid-body is AtlasUnreachable, not a refusal', async () => {
+  // The status line arrived, so the request definitely reached RIPE, but the body never finished.
+  // Treating that as a refusal would roll the pledge back and invite a retry that sends twice.
+  const err = await withFetch(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'));
+          },
+        }),
+        { status: 201 },
+      ),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable, `expected AtlasUnreachable, got ${err?.constructor?.name}`);
+  assert.equal(err.status, 502);
 });

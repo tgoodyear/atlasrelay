@@ -17,7 +17,16 @@ app.http('projects-list', {
     const q = (req.query.get('q') ?? '').trim().toLowerCase();
     const sort = req.query.get('sort') ?? 'newest';
 
-    let projects = (await listProjects()).map((p) => publicProject(p));
+    // Expiry is a read-time rule, so the list has to apply it as well. Without this an abandoned
+    // pledge keeps showing as reserved on every card for ever, and the project keeps advertising a
+    // maxPledge of 0, until some unrelated write happens to recompute that row.
+    // Only a project that currently shows reserved credits can be holding a stale reservation, and
+    // the cached total is rewritten on every pledge write, so a cached pending of 0 is trustworthy.
+    // That keeps this to a handful of partition reads rather than one per project.
+    const rows = await listProjects();
+    const live = await Promise.all(rows.map(async (p) =>
+      (p.creditsPending > 0 ? totals(await listPledges(p.id)) : undefined)));
+    let projects = rows.map((p, i) => publicProject(p, live[i]));
     if (status === 'open') projects = projects.filter((p) => p.open);
     else if (status === 'funded') projects = projects.filter((p) => p.funded);
     else if (status === 'closed') projects = projects.filter((p) => p.status === 'closed');

@@ -23,7 +23,7 @@ export default function HowItWorks() {
           <h2>If you have credits to share</h2>
           <ol className="steps">
             <li>Open a project and click <strong>Send credits</strong>. Choose an amount; you can't exceed what the project still needs.</li>
-            <li><strong>Transfer through the API.</strong> Create a key at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with two permissions and no others: <strong>Transfer credits to another user</strong>, which sends the credits, and <strong>Get information about your credits</strong>, which lets us check your balance first so a transfer cannot fail halfway. Give it a short validity window. Paste it in, and we call <code>POST /api/v2/credits/transfers/</code> once, record RIPE's transaction reference as proof, and discard the key. Delete the key afterwards. A key with only the transfer permission still works, but the balance check is skipped.</li>
+            <li><strong>Transfer through the API.</strong> Create a key at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with two permissions and no others: <strong>Transfer credits to another user</strong>, which sends the credits, and <strong>Get information about your credits</strong>, which lets us check your balance first, so the commonest reason a transfer fails is caught before anything moves. Give it a short validity window. Paste it in, and we call <code>POST /api/v2/credits/transfers/</code> exactly once, then discard the key. RIPE accepting that call is what confirms the credits moved. We also try to look up the matching transaction so the pledge can carry a reference, which needs the credits-read permission and is skipped when we cannot identify the transaction unambiguously. Delete the key afterwards. A key with only the transfer permission still works, but the balance check is skipped.</li>
             <li><strong>Or transfer by hand.</strong> We show you the recipient email and amount with a link to <a href="https://atlas.ripe.net/credits/transfer/" target="_blank" rel="noreferrer">the Atlas transfer page</a>. Mark the pledge as sent; the researcher confirms receipt.</li>
           </ol>
         </div></div>
@@ -54,9 +54,11 @@ export default function HowItWorks() {
           <p className="muted">
             Your RIPE NCC Access email is never shown on a public page. It is shown to a signed-in
             donor at the point they begin a manual pledge to your project, because they need it to
-            transfer the credits, and each such donor appears by name on your project. Nothing else
-            is shared, there is no tracking, and no analytics or advertising service receives your
-            data.
+            transfer the credits, and each such donor appears by name on your project. No advertising
+            service receives anything, and there are no tracking cookies. The site does send
+            operational telemetry to Azure Application Insights, which is what tells us the API is
+            working: request paths, status codes, timings and errors, kept for 30 days. That stream
+            carries no profile fields, no RIPE NCC Access email and no API key.
           </p>
           <p className="muted">
             RIPE Atlas API keys are never stored. A key you paste is used for a single transfer
