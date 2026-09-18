@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
 import type { Pledge } from '../src/lib/store';
-import { projectPatchEntity } from '../src/lib/store';
+import { projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
 import type { Tag } from '../src/lib/validate';
 
 test('publicName never returns an email address', () => {
@@ -98,3 +98,19 @@ test('a project never publishes its storage row version', () => {
   });
   assert.equal('etag' in p, false);
 });
+
+test('a conditional project patch actually carries the row version', () => {
+  // This exists because the opposite shipped: patchProject accepted an ifMatch argument and threw
+  // it away, so every caller that believed it was writing conditionally was overwriting whatever
+  // had landed in between, and the 412 the retry logic waits for could never arrive.
+  const calls: Array<{ mode: string; options: unknown }> = [];
+  const fake = {
+    updateEntity: async (_e: unknown, mode: string, options: unknown) => {
+      calls.push({ mode, options });
+    },
+  };
+  void projectUpdateArgs(fake, 'j1', { status: 'closed' }, 'W/"v1"');
+  assert.deepEqual(calls[0]?.options, { etag: 'W/"v1"' });
+  void projectUpdateArgs(fake, 'j1', { status: 'closed' }, undefined);
+  assert.equal(calls[1]?.options, undefined);
+})

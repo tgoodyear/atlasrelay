@@ -232,7 +232,7 @@ app.http('pledges-create', {
         saved = true;
       } catch (err) {
         console.error('Transfer completed but the pledge could not be updated:', err instanceof Error ? err.message : err);
-        recordWarning = 'Your transfer completed, but recording it here did not. The project owner can confirm the pledge once the credits arrive.';
+        recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive.';
       }
       try {
         updatedProject = await recomputeProjectTotals(id);

@@ -9,9 +9,10 @@ import { HttpError } from './http';
 const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Thrown when a call never reached RIPE, or RIPE never answered. The distinction matters for
- * transfers: every other error means RIPE replied with a refusal and no credits moved, whereas
- * this one means the outcome is unknown and the caller must not retry blindly.
+ * Thrown when a call never reached RIPE, or RIPE gave no usable answer: a timeout, a dropped
+ * connection, a body that never finished, or a 5xx. The distinction matters for transfers. An
+ * AtlasRefused means RIPE read the request and declined, so no credits moved and a retry is safe.
+ * This one means the outcome is unknown and the caller must not retry blindly.
  */
 export class AtlasUnreachable extends HttpError {
   constructor(message: string) {
