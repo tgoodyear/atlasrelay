@@ -98,6 +98,16 @@ export class ApiError extends Error {
    * ordinary one: a row exists. Getting this the wrong way round inverts that advice, so it is
    * worth being exact -- the previous wording here described the opposite of what the getter does.
    */
+  /**
+   * True when the server says it does not know where this pledge stands, because somebody else
+   * acted on it while the request was running. Distinct from a refusal: a refusal means the donor
+   * may correct and retry, this means they must look at the pledge before doing anything, since
+   * the other actor may have marked it sent or confirmed.
+   */
+  get transferOutcomeUnknown(): boolean {
+    return (this.details as { transfer?: string } | undefined)?.transfer === 'unknown';
+  }
+
   get transferNotRecorded(): boolean {
     return (this.details as { transferRecorded?: boolean } | undefined)?.transferRecorded === false;
   }

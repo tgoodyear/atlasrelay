@@ -7,7 +7,7 @@ interface Props {
   onDone: (project: Project) => void;
 }
 
-type Step = 'form' | 'manual-instructions' | 'api-done' | 'api-unknown';
+type Step = 'form' | 'manual-instructions' | 'api-done' | 'api-unknown' | 'settled-elsewhere';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
   // Always bounded by the server-computed per-pledge limit, so the dialog never opens on a
@@ -94,7 +94,16 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       // cases it is certain about, and everything else, including a lost connection, is unknown.
       const serverAnswered = err instanceof ApiError;
       const refusedBeforeSending = serverAnswered && (err as ApiError).transferDefinitelyNotSent;
-      if (method === 'api' && !refusedBeforeSending) {
+      // Somebody else acted on this pledge while the request was running, so where it stands is not
+      // something this dialog can state. It must not leave the form live either: on a manual pledge
+      // the other actor may have marked it sent or confirmed, and a confirmed pledge no longer
+      // counts as live, so resubmitting would be allowed and would ask the donor to transfer by
+      // hand a second time. Terminal for both methods.
+      if (serverAnswered && (err as ApiError).transferOutcomeUnknown) {
+        setApiKey('');
+        setError(message);
+        setStep('settled-elsewhere');
+      } else if (method === 'api' && !refusedBeforeSending) {
         setApiKey('');
         setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');
         // A lost connection tells us nothing about whether a row was written, so assume one was:
@@ -133,6 +142,8 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 ? (recorded ? 'Credits transferred' : 'Credits transferred, recording incomplete')
                 : step === 'api-unknown'
                   ? 'Check before you send again'
+                  : step === 'settled-elsewhere'
+                    ? 'This pledge changed while you were sending'
                   : 'Finish the transfer on atlas.ripe.net'}
           </h2>
           <button className="close" aria-label="Close" onClick={onClose} disabled={submitting}>×</button>
@@ -302,6 +313,21 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 Do not send the credits a second time on the strength of an empty log you have only just
                 looked at. Remember to delete the API key
                 you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.
+              </p>
+              <div className="form-actions">
+                <button className="btn" type="button" onClick={onClose}>Done</button>
+              </div>
+            </>
+          )}
+
+          {step === 'settled-elsewhere' && (
+            <>
+              <div className="alert alert-warn">{error}</div>
+              <p>
+                Somebody acted on this pledge while you were sending it, so we cannot say where it
+                stands. Open it on your dashboard and look before you send anything: if it is already
+                marked sent or confirmed, the credits are accounted for and sending again would
+                transfer them twice.
               </p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={onClose}>Done</button>
