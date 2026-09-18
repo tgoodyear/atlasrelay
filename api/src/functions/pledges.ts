@@ -329,7 +329,13 @@ app.http('pledges-create', {
           // period. Clearing the marker is a smaller write than the confirmation and may well land
           // when that did not; if it does not either, the window expires on its own.
           try {
-            await savePledge({ ...pledge, status: 'pledged', inFlight: false });
+            // The pre-transfer row exactly, plus the cleared marker -- which is also what the
+            // response reports. Spreading `pledge` alone would carry transferredAt, set a few lines
+            // up when RIPE accepted, onto a row stored as `pledged`; publicPledge derives
+            // apiTransfer from that field, so the pending row would advertise a transfer this
+            // server watched happen while the response for the same pledge said it had not been
+            // recorded. Storage and the response have to describe the same pledge.
+            await savePledge({ ...pledge, status: 'pledged', inFlight: false, transferredAt: '', transactionId: '', transactionUrl: '' });
           } catch (clearErr) {
             console.error('Could not clear the in-flight marker after a completed transfer:', clearErr instanceof Error ? clearErr.message : clearErr);
           }
