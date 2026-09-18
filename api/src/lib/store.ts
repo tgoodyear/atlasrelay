@@ -38,6 +38,8 @@ export interface Project {
   deadline: string;
   createdAt: string;
   updatedAt: string;
+  /** Table Storage row version, for conditional writes. Never published. */
+  etag?: string;
 }
 
 export interface Pledge {
@@ -56,6 +58,8 @@ export interface Pledge {
   message: string;
   createdAt: string;
   updatedAt: string;
+  /** Table Storage row version, for conditional writes. Never published. */
+  etag?: string;
 }
 
 const USERS_PK = 'user';
@@ -188,6 +192,7 @@ function toProject(e: Entity): Project {
     repoUrl: String(e.repoUrl ?? ''),
     paperUrl: String(e.paperUrl ?? ''),
     deadline: String(e.deadline ?? ''),
+    etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -230,7 +235,7 @@ export async function saveProject(p: Project): Promise<Project> {
  * tags is stored comma-joined, exactly as fromProject writes it, because a raw array would either
  * be rejected by Table Storage or persisted in a shape nothing can read back.
  */
-export async function patchProject(id: string, patch: Partial<Project>): Promise<Project> {
+export async function patchProject(id: string, patch: Partial<Project>, ifMatch?: string): Promise<Project> {
   const { tags, ...rest } = patch;
   const entity: Record<string, unknown> = { partitionKey: PROJECTS_PK, rowKey: id, ...rest, updatedAt: now() };
   if (tags !== undefined) entity.tags = tags.join(',');
@@ -263,6 +268,7 @@ function toPledge(e: Entity): Pledge {
     transactionId: String(e.transactionId ?? ''),
     transferredAt: String(e.transferredAt ?? ''),
     message: String(e.message ?? ''),
+    etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -386,9 +392,14 @@ export async function createPledge(p: Pledge): Promise<Pledge> {
   return p;
 }
 
-export async function savePledge(p: Pledge): Promise<Pledge> {
+export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   const updated = { ...p, updatedAt: now() };
-  await (await table('pledges')).upsertEntity({ partitionKey: p.projectId, rowKey: p.id, ...updated }, 'Replace');
+  const entity = { partitionKey: p.projectId, rowKey: p.id, ...updated };
+  const t = await table('pledges');
+  // With ifMatch this is a conditional replace: it fails with 412 if the row changed since the
+  // caller read it, which is how two people acting on the same pledge stop overwriting each other.
+  if (ifMatch) await t.updateEntity(entity as TableEntity, 'Replace', { etag: ifMatch });
+  else await t.upsertEntity(entity, 'Replace');
   return updated;
 }
 
@@ -440,11 +451,31 @@ export function activePledgesBy(pledges: Pledge[], donorId: string, asOf: number
 }
 
 /** Recompute cached totals on the project from its pledges. */
-export async function recomputeProjectTotals(projectId: string): Promise<Project> {
-  const project = await getProject(projectId);
-  if (!project) notFound();
-  const t = totals(await listPledges(projectId));
-  return patchProject(projectId, { creditsConfirmed: t.confirmed, creditsPending: t.pending });
+/**
+ * Rewrite a project's cached credit totals from its pledges.
+ *
+ * Two pledge writes finishing at once would otherwise each compute totals from their own snapshot
+ * and write unconditionally, so whichever landed last would win with a figure that omitted the
+ * other's pledge. Nothing later repairs that: the cached total is only rebuilt by another pledge
+ * write, so a project could sit permanently under-counted. The write is therefore conditional on
+ * the row not having changed since it was read, and a conflict means recompute and try again,
+ * which converges because the totals are derived from the pledges rather than from the old value.
+ */
+export async function recomputeProjectTotals(projectId: string, attempts = 5): Promise<Project> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    const project = await getProject(projectId);
+    if (!project) notFound();
+    const t = totals(await listPledges(projectId));
+    if (project.creditsConfirmed === t.confirmed && project.creditsPending === t.pending) return project;
+    try {
+      return await patchProject(projectId, { creditsConfirmed: t.confirmed, creditsPending: t.pending }, project.etag);
+    } catch (err) {
+      if (!(err instanceof RestError && err.statusCode === 412)) throw err;
+      last = err;
+    }
+  }
+  throw last instanceof Error ? last : new HttpError(409, 'Could not update project totals');
 }
 
 export { now };

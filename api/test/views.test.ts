@@ -39,3 +39,13 @@ test('a project read with live totals releases an expired reservation', () => {
   // Expiry-aware totals from the read path release it.
   assert.equal(publicProject(p, { confirmed: 0, pending: 0 }).maxPledge, 1000);
 });
+
+test('a project never publishes its storage row version', () => {
+  const p = publicProject({
+    id: 'j1', ownerId: 'o1', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
+    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
+    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
+    etag: 'W/"datetime\'2026-09-18T04%3A00%3A00.0000000Z\'"', createdAt: '', updatedAt: '',
+  });
+  assert.equal('etag' in p, false);
+});
