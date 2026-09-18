@@ -168,12 +168,9 @@ app.http('projects-create', {
     const user = await ensureUser(p.userId, p.identityProvider, p.userDetails);
     if (!user.atlasEmail) throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before posting a project');
 
-    // Posting is free, and every project hands its owner's contact address to anyone who starts
-    // a pledge, so one account cannot keep an unbounded number of them open at once.
-    const open = (await listProjectsByOwner(user.id)).filter((x) => x.status === 'open').length;
-    if (open >= MAX_OPEN_PROJECTS_PER_USER) {
-      throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
-    }
+    // No preflight count here. The settlement after the write is what enforces the cap, because a
+    // count read before writing cannot, and running both doubled an owner scan on every post for
+    // an answer the settlement reaches anyway.
 
     const body = await readJson(req);
     const fields = readProjectFields(body, true);
@@ -254,11 +251,8 @@ app.http('projects-update', {
       if (!owner?.atlasEmail) {
         throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before reopening a project; donors cannot send credits without it');
       }
-      // And reopening is another way past the cap: close one, post a replacement, reopen the first.
-      const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open').length;
-      if (open >= MAX_OPEN_PROJECTS_PER_USER) {
-        throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before reopening this.`);
-      }
+      // Reopening is another way past the cap, and it is enforced by the same post-write
+      // settlement rather than a count here, for the same reason.
     }
 
     // Merge rather than replace, and never send moderationClosed. An owner edit built on a row
