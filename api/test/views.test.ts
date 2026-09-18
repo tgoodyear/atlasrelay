@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
+import { privatePledge, publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
 import type { Pledge } from '../src/lib/store';
 import { projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
 import type { Tag } from '../src/lib/validate';
@@ -44,7 +44,7 @@ test('a project read with live totals releases an expired reservation', () => {
 });
 
 const pledge = (over: Partial<Pledge>): Pledge => ({
-  id: 'p1', projectId: 'j1', donorId: 'd1', donorName: 'Alice', amount: 100, method: 'api',
+  id: 'p1', projectId: 'j1', donorId: 'd1', donorName: 'Alice', anonymous: false, amount: 100, method: 'api',
   status: 'confirmed', transactionUrl: '', transactionId: '', transferredAt: '2026-09-17T00:00:00.000Z',
   transferUncertain: false, inFlight: false, inFlightSince: '', message: '', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z',
   ...over,
@@ -136,4 +136,53 @@ test('an anonymous user view carries no account identifier', () => {
   assert.equal('id' in u, false);
   assert.equal(JSON.stringify(u).includes('github|12345'), false);
   assert.equal(JSON.stringify(u).includes('@'), false);
+});
+
+test('an anonymous pledge is not named on the public listing', () => {
+  const p = publicPledge(pledge({ donorName: 'Alice R.', anonymous: true }));
+  assert.equal(p.donorName, 'Anonymous');
+  assert.equal(p.anonymous, true);
+  // The name must not survive anywhere else in the payload.
+  assert.equal(JSON.stringify(p).includes('Alice'), false);
+  // What the pledge was for is still public. Only the name is withheld.
+  assert.equal(p.amount, 100);
+});
+
+test('an anonymous donor is not given a stable pseudonym', () => {
+  // publicName falls back to user-<id prefix> when there is no display name, which is derived from
+  // the account id and therefore identical on every pledge the same person makes. Using it here
+  // would let anyone link an anonymous donor's pledges across projects, which is pseudonymity, not
+  // anonymity. Two pledges from the same donor on different projects must look the same as two
+  // pledges from different donors.
+  const one = publicPledge(pledge({ id: 'a', projectId: 'j1', donorId: 'github|12345', donorName: '', anonymous: true }));
+  const two = publicPledge(pledge({ id: 'b', projectId: 'j2', donorId: 'github|12345', donorName: '', anonymous: true }));
+  const other = publicPledge(pledge({ id: 'c', projectId: 'j1', donorId: 'github|99999', donorName: '', anonymous: true }));
+  assert.equal(one.donorName, 'Anonymous');
+  assert.equal(one.donorName, two.donorName);
+  assert.equal(one.donorName, other.donorName);
+  assert.equal(JSON.stringify(one).includes('12345'), false);
+});
+
+test('the project owner still sees who pledged anonymously', () => {
+  // They confirm the credits arrived and may need to match the pledge against their own RIPE
+  // transaction log, so the name is restored on the private view. The flag travels with it so the
+  // dashboard can say the name is not public.
+  const p = privatePledge(pledge({ donorName: 'Alice R.', anonymous: true }));
+  assert.equal(p.donorName, 'Alice R.');
+  assert.equal(p.anonymous, true);
+});
+
+test('a pledge that is not anonymous is unchanged by any of this', () => {
+  assert.equal(publicPledge(pledge({ donorName: 'Alice R.' })).donorName, 'Alice R.');
+  assert.equal(publicPledge(pledge({ donorName: 'Alice R.' })).anonymous, false);
+  assert.equal(privatePledge(pledge({ donorName: 'Alice R.' })).donorName, 'Alice R.');
+});
+
+test('an anonymous pledge still hides a sign-in address behind the name', () => {
+  // publicName exists because userDetails is an email address for some providers. Anonymity must
+  // not become the only thing standing between that address and a public endpoint.
+  const p = publicPledge(pledge({ donorName: 'alice@example.org', anonymous: true }));
+  assert.equal(p.donorName, 'Anonymous');
+  const named = publicPledge(pledge({ donorName: 'alice@example.org', anonymous: false }));
+  assert.equal(named.donorName, 'alice');
 });

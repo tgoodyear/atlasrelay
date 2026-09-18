@@ -16,6 +16,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [method, setMethod] = useState<'api' | 'manual'>('api');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
+  const [anonymous, setAnonymous] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
   const [checking, setChecking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +56,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
     setSubmitting(true);
     setError('');
     try {
-      const res = await api.createPledge(project.id, { amount: n, method, message, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
+      const res = await api.createPledge(project.id, { amount: n, method, message, anonymous, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
       if (method === 'manual') {
@@ -180,6 +181,19 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
               <div className="field">
                 <label htmlFor="message">Message (optional, public)</label>
                 <input id="message" type="text" maxLength={500} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Good luck with the study!" />
+              </div>
+
+              <div className="field">
+                <label className="check">
+                  <input type="checkbox" checked={anonymous} onChange={(e) => setAnonymous(e.target.checked)} />
+                  <span>Do not show my name on this project</span>
+                </label>
+                <p className="small muted">
+                  The pledge is listed as Anonymous, with the amount and any message still shown.
+                  The researcher receiving the credits still sees your name, because they are the
+                  one who confirms the transfer arrived. Your message is public either way, so
+                  leave anything identifying out of it.
+                </p>
               </div>
 
               <p className="small muted" style={{ marginTop: '1rem' }}>

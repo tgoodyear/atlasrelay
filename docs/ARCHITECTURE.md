@@ -63,6 +63,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | Field | Notes |
 | --- | --- |
 | `donorId`, `donorName` | |
+| `anonymous` | The donor asked not to be named publicly. `publicPledge` replaces the name with the constant `Anonymous`; `privatePledge`, which only the project owner and the donor themselves receive, restores it and keeps this flag set so the UI can say the name is not public. Absent on rows written before this existed, which reads as false. |
 | `amount` | Integer ≥ 1. Capped two ways: by the project's remaining *capacity* (100× the request, minus confirmed, minus live reservations) and by `maxSinglePledge`, which is what is left to the goal, or one goal's worth once the goal is met. The second cap stops any one pledge reserving the whole ceiling. |
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |

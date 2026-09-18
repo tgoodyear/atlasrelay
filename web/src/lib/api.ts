@@ -35,6 +35,10 @@ export interface Pledge {
   method: 'api' | 'manual';
   status: 'pledged' | 'sent' | 'confirmed' | 'cancelled';
   message: string;
+  /** The donor asked not to be named publicly. True on both views: the public one replaces the
+   *  name with "Anonymous", the private one keeps the real name and uses this to say it is not
+   *  public. A row carrying donorId came from the private view, so its name is the real one. */
+  anonymous: boolean;
   apiTransfer: boolean;
   hasReference: boolean;
   transferUncertain?: boolean;

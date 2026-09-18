@@ -106,7 +106,13 @@ export default function ProjectDetail() {
                       <div className="body">
                         <div className="top">
                           <span>
-                            <strong>{p.donorName || 'Anonymous donor'}</strong> · {fmt(p.amount)} credits
+                            <strong>{p.donorName || 'Anonymous donor'}</strong>
+                            {/* A row carrying donorId came from the private view, so the name above
+                                is the real one and this viewer is the owner or the donor. Say that
+                                it is not public, or an owner could thank them by name in a place
+                                the donor asked not to be named. */}
+                            {p.anonymous && p.donorId && <span className="pill pill-quiet"> not shown publicly</span>}
+                            {' '}· {fmt(p.amount)} credits
                           </span>
                           <PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} transferUncertain={p.transferUncertain} />
                         </div>

@@ -72,6 +72,18 @@ export function isoDate(input: Record<string, unknown>, key: string): string | u
   return value;
 }
 
+/**
+ * Read a boolean field. Absent means false, but a present value has to be an actual boolean.
+ * Coercing here would be the wrong kind of lenient: this reads a donor's privacy choice, and
+ * "false" as a string, or 0, or null, would all quietly come out as "name me publicly".
+ */
+export function bool(input: Record<string, unknown>, key: string): boolean {
+  const value = input[key];
+  if (value === undefined || value === null) return false;
+  if (typeof value !== 'boolean') throw new HttpError(400, `${key} must be true or false`);
+  return value;
+}
+
 export function oneOf<T extends string>(input: Record<string, unknown>, key: string, allowed: readonly T[], required = false): T | undefined {
   const value = str(input, key, { max: 32, required });
   if (value === undefined || value === '') return undefined;

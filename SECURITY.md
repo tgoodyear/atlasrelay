@@ -72,6 +72,18 @@ researcher sees that donor by name. A donor may hold one live pledge per project
 at a time. Researchers can delete their profile, and the stored address with it,
 from the profile page.
 
+**Donors may pledge without being named publicly.** Choosing this on the pledge
+form lists the pledge as "Anonymous" everywhere the public can see it, with the
+amount and any message still shown. It is not a pseudonym: every anonymous
+pledge reads identically, so two from the same person cannot be linked to each
+other. The researcher receiving the credits still sees who pledged, because they
+are the one who confirms the transfer arrived and may need to match it against
+their own RIPE transaction log; their view says the name is not public. The row
+records the donor either way, which is what enforces one live pledge per project
+and lets a donor see their own pledges. So this withholds a name from public
+view; it does not make a pledge untraceable to the operator or to the
+researcher.
+
 **The platform never holds credits.** Every transfer happens in RIPE Atlas
 between the two accounts. The site records the ask, the pledge, and the proof.
 
