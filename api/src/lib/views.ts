@@ -30,9 +30,11 @@ export function publicName(displayName: string, handle: string, id: string): str
 export function publicProject(p: Project, live?: { confirmed: number; pending: number }) {
   const confirmed = live ? live.confirmed : p.creditsConfirmed;
   const pending = live ? live.pending : p.creditsPending;
-  // moderationClosed is an operator's note about this row, not something the project says about
-  // itself, so it is dropped rather than published alongside the rest.
-  const { moderationClosed: _moderationClosed, ...rest } = p;
+  // This function spreads the row, so anything internal has to be removed by name rather than
+  // merely left unmentioned: moderationClosed is an operator's note about the row, and etag is the
+  // storage version used for conditional writes. A field added to Project is published by default
+  // here, which is why both the omission and its test exist.
+  const { moderationClosed: _moderationClosed, etag: _etag, ...rest } = p;
   return {
     ...rest,
     creditsConfirmed: confirmed,

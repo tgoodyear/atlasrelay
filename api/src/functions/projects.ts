@@ -36,15 +36,24 @@ app.http('projects-list', {
     // correction is written back, so each stale project is re-read once and then drops out of the
     // fan-out for good, instead of being rescanned on every listing until somebody pledges to it.
     const rows = await listProjects();
-    const stale = rows.filter((p) => p.creditsPending > 0).slice(0, STALE_REFRESH_LIMIT);
+    // Least recently touched first. Taking the newest N would starve the rest: a project with a
+    // genuinely live reservation never leaves that prefix, so it would be rescanned on every
+    // listing while an expired reservation on an older project was never looked at again. Any
+    // write to a project refreshes updatedAt, including the correction below, so ordering by it
+    // rotates through the candidates and the backlog actually drains.
+    const stale = rows
+      .filter((p) => p.creditsPending > 0)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0))
+      .slice(0, STALE_REFRESH_LIMIT);
     const live = new Map<string, { confirmed: number; pending: number }>();
     await Promise.all(stale.map(async (p) => {
       const t = totals(await listPledges(p.id));
       live.set(p.id, t);
-      if (t.pending !== p.creditsPending || t.confirmed !== p.creditsConfirmed) {
-        // Best effort. A listing must not fail because a correction could not be persisted.
-        await patchProject(p.id, { creditsConfirmed: t.confirmed, creditsPending: t.pending }).catch(() => undefined);
-      }
+      // Write back either way. When the totals differ this corrects them; when they match it still
+      // moves updatedAt, which is what lets the next listing look at a different set of projects
+      // instead of the same prefix for ever. Best effort: a listing must not fail because a
+      // correction could not be persisted.
+      await patchProject(p.id, { creditsConfirmed: t.confirmed, creditsPending: t.pending }).catch(() => undefined);
     }));
     let projects = rows.map((p) => publicProject(p, live.get(p.id)));
     if (status === 'open') projects = projects.filter((p) => p.open);

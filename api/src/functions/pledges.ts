@@ -1,4 +1,5 @@
 import { app, HttpRequest } from '@azure/functions';
+import { RestError } from '@azure/data-tables';
 import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
@@ -335,7 +336,20 @@ app.http('pledges-update', {
     // one would be the worse failure. The overshoot is visible on the project and the owner can
     // cancel a pledge back out of it.
 
-    const updated = await savePledge({ ...pledge, status });
+    // Conditional on the row not having changed since it was read at the top of this handler. The
+    // owner and the donor can both be looking at the same `pledged` pledge; without this, each
+    // authorises against that snapshot and whichever writes last wins, so a donor's "sent" landing
+    // after an owner's "confirmed" would make a settled pledge live again, after its slot had
+    // already been released and its credits counted as confirmed.
+    let updated: Pledge;
+    try {
+      updated = await savePledge({ ...pledge, status }, pledge.etag);
+    } catch (err) {
+      if (err instanceof RestError && err.statusCode === 412) {
+        throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.');
+      }
+      throw err;
+    }
     const updatedProject = await recomputeProjectTotals(projectId);
     // Confirmed and cancelled are both terminal, so the donor's slot on this project is free again.
     if (status === 'confirmed' || status === 'cancelled') {
