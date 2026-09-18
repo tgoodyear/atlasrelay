@@ -27,10 +27,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // Not while a transfer is running: closing reloads the project, and the donor would be shown
+    // their pledge sitting at "Pledged" while the credits were actually moving.
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !submitting && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, submitting]);
 
   const n = Number(amount);
   const amountOk = Number.isInteger(n) && n >= 1 && n <= project.maxPledge;
@@ -107,7 +109,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pledge-title">
         <div className="modal-head">
           <h2 id="pledge-title">
@@ -119,7 +121,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   ? 'Check before you send again'
                   : 'Finish the transfer on atlas.ripe.net'}
           </h2>
-          <button className="close" aria-label="Close" onClick={onClose}>×</button>
+          <button className="close" aria-label="Close" onClick={onClose} disabled={submitting}>×</button>
         </div>
         <div className="modal-body">
           {step === 'form' && (
@@ -200,7 +202,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 <button className="btn" type="submit" disabled={submitting || !amountOk || (method === 'api' && apiKey.trim().length < 36)}>
                   {submitting ? (method === 'api' ? 'Transferring…' : 'Saving…') : method === 'api' ? `Transfer ${amountOk ? fmt(n) : ''} credits` : 'Create pledge'}
                 </button>
-                <button className="btn btn-ghost" type="button" onClick={onClose}>Cancel</button>
+                <button className="btn btn-ghost" type="button" onClick={onClose} disabled={submitting}>Cancel</button>
               </div>
             </form>
           )}
