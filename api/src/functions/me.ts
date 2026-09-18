@@ -1,7 +1,7 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
 import { handle, json, readJson } from '../lib/http';
-import { deleteUser, ensureUser, listProjectsByOwner, saveProject, updateUser } from '../lib/store';
+import { deleteUser, ensureUser, listProjectsByOwner, patchProject, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { privateUser } from '../lib/views';
 
@@ -49,7 +49,7 @@ app.http('me-delete', {
     // advertise projects that fail at the moment a donor tries to give to them.
     const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open');
     for (const project of open) {
-      await saveProject({ ...project, status: 'closed' });
+      await patchProject(project.id, { status: 'closed' });
     }
     // Then the profile itself, including the RIPE NCC Access email. Projects and pledges stay,
     // because donors and owners rely on that record.

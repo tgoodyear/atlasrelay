@@ -2,7 +2,7 @@ import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { createProject, ensureUser, getProject, getUser, listPledges, listProjects, listProjectsByOwner, now, Project, saveProject, totals } from '../lib/store';
+import { Project, createProject, ensureUser, getProject, getUser, listPledges, listProjects, listProjectsByOwner, now, patchProject, totals } from '../lib/store';
 import { MAX_OPEN_PROJECTS_PER_USER } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
@@ -142,7 +142,9 @@ app.http('projects-create', {
       // the same surplus set, and closing twice is harmless.
       const surplus = mine.sort((a, b) => (a.id < b.id ? -1 : 1)).slice(MAX_OPEN_PROJECTS_PER_USER);
       for (const extra of surplus) {
-        await saveProject({ ...extra, status: 'closed' });
+        // Only the status. These rows were read a moment ago and a pledge recompute or an owner
+        // edit may have landed since; writing the whole snapshot back would revert it.
+        await patchProject(extra.id, { status: 'closed' });
       }
       if (surplus.some((x) => x.id === project.id)) {
         throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
@@ -182,7 +184,18 @@ app.http('projects-update', {
       }
     }
 
-    const updated = await saveProject({ ...project, ...fields, ...(status ? { status } : {}) });
+    // Merge rather than replace, and never send moderationClosed. An owner edit built on a row
+    // read before an operator set the flag would otherwise write the takedown away, along with any
+    // credit totals a pledge recompute changed in between. The check above stops a deliberate
+    // reopen; this stops an accidental one.
+    const updated = await patchProject(id, { ...fields, ...(status ? { status } : {}) });
+
+    // The flag can be set between the read above and this write, so re-check what actually landed
+    // and put the project back if a takedown arrived while the edit was in flight.
+    if (updated.moderationClosed && updated.status === 'open') {
+      const restored = await patchProject(id, { status: 'closed' });
+      return json({ project: publicProject(restored) });
+    }
     return json({ project: publicProject(updated) });
   }),
 });

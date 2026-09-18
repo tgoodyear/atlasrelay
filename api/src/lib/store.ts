@@ -233,6 +233,24 @@ export async function saveProject(p: Project): Promise<Project> {
   return updated;
 }
 
+/**
+ * Change named fields on a project without writing back the rest of the row.
+ *
+ * saveProject replaces the whole entity from whatever snapshot the caller happens to hold, so any
+ * write built on a stale read silently reverts everything that changed in between: a pledge
+ * recompute's credit totals, an owner's edit, or an operator's takedown. Where a handler only
+ * means to change one or two fields, this merges those and leaves every other column alone.
+ */
+export async function patchProject(id: string, patch: Partial<Project>): Promise<Project> {
+  await (await table('projects')).updateEntity(
+    { partitionKey: PROJECTS_PK, rowKey: id, ...patch, updatedAt: now() } as TableEntity,
+    'Merge',
+  );
+  const after = await getProject(id);
+  if (!after) notFound();
+  return after;
+}
+
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
   const out: Project[] = [];
   for await (const e of (await table('projects')).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId}` } })) {
@@ -439,7 +457,7 @@ export async function recomputeProjectTotals(projectId: string): Promise<Project
   const project = await getProject(projectId);
   if (!project) notFound();
   const t = totals(await listPledges(projectId));
-  return saveProject({ ...project, creditsConfirmed: t.confirmed, creditsPending: t.pending });
+  return patchProject(projectId, { creditsConfirmed: t.confirmed, creditsPending: t.pending });
 }
 
 export { now };
