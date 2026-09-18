@@ -389,6 +389,13 @@ app.http('pledges-create', {
               saved = true;
             } else {
               console.error('Could not record a completed transfer on retry either:', describeErrorForLog(clearErr));
+              // A non-412 failure is as ambiguous as the first one: Table Storage can apply the
+              // replacement and lose the answer. Ask the row rather than the exception, as the
+              // uncertain-transfer path does. Getting this wrong understates what happened -- it
+              // reports a pending pledge over storage that says confirmed, and skips releasing a
+              // slot that was safe to release.
+              const stored = await getPledge(id, pledge.id).catch(() => null);
+              if (stored?.status === 'confirmed') saved = true;
             }
           }
         }
