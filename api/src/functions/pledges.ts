@@ -489,10 +489,17 @@ app.http('pledges-update', {
     // A donor cannot cancel away an API transfer that our server sent. If the row is still
     // 'pledged' on an api pledge, the most likely reason is that the transfer completed and only
     // the follow-up write failed, so cancelling would discard credits that really moved and leave
-    // the owner unable to record them. The exception is a transfer we already know is uncertain:
-    // there the donor is the one who can read their own transaction log, so they are exactly the
-    // right person to settle it. Everything else goes to the owner, who can see what arrived.
-    if (role === 'donor' && status === 'cancelled' && pledge.method === 'api' && !pledge.transferUncertain) {
+    // the owner unable to record them.
+    //
+    // This once carried an exception for a transfer already known to be uncertain, on the reasoning
+    // that the donor can read their own transaction log. It never took effect and the reasoning was
+    // wrong on both counts. transferUncertain is only ever set together with status 'sent', and the
+    // guard above rejects a donor cancelling a sent API pledge before this line is reached, so the
+    // exception was dead. It also contradicted that guard in writing, which is the more expensive
+    // half: the next person to read this file found two comments stating opposite policies. Reading
+    // the log is not the problem; acting on it here frees the slot, and if RIPE did complete the
+    // transfer the next pledge sends the credits a second time. The owner settles these.
+    if (role === 'donor' && status === 'cancelled' && pledge.method === 'api') {
       throw new HttpError(409, 'This transfer was sent through the API, so only the project owner can close it. If the credits never arrived, ask them to cancel it.');
     }
 
