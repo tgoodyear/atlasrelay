@@ -191,8 +191,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 <p className="small muted">
                   The pledge is listed as Anonymous, with the amount and any message still shown.
                   The researcher receiving the credits still sees your name, because they are the
-                  one who confirms the transfer arrived. Your message is public either way, so
-                  leave anything identifying out of it.
+                  one who confirms the transfer arrived. The amount, the message and the date stay
+                  public and can be compared with other pledges, so leave anything identifying out
+                  of the message.
                 </p>
               </div>
 

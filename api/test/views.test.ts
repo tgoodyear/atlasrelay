@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { privatePledge, publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
 import type { Pledge } from '../src/lib/store';
 import { projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
+import { bool } from '../src/lib/validate';
 import type { Tag } from '../src/lib/validate';
 
 test('publicName never returns an email address', () => {
@@ -146,6 +147,21 @@ test('an anonymous pledge is not named on the public listing', () => {
   assert.equal(JSON.stringify(p).includes('Alice'), false);
   // What the pledge was for is still public. Only the name is withheld.
   assert.equal(p.amount, 100);
+});
+
+test('a null privacy choice is rejected rather than read as a no', () => {
+  // null is a value the caller sent, not a field they left out. Treating it as absent is the same
+  // silent coercion the strict reader exists to prevent, spelled differently, and it defaults to
+  // publishing the name.
+  assert.throws(() => bool({ anonymous: null }, 'anonymous'), /anonymous must be true or false/);
+  assert.throws(() => bool({ anonymous: 'false' }, 'anonymous'), /anonymous must be true or false/);
+  assert.throws(() => bool({ anonymous: 0 }, 'anonymous'), /anonymous must be true or false/);
+  assert.throws(() => bool({ anonymous: 1 }, 'anonymous'), /anonymous must be true or false/);
+  // Only genuinely absent, and genuine booleans, get through.
+  assert.equal(bool({}, 'anonymous'), false);
+  assert.equal(bool({ anonymous: undefined }, 'anonymous'), false);
+  assert.equal(bool({ anonymous: true }, 'anonymous'), true);
+  assert.equal(bool({ anonymous: false }, 'anonymous'), false);
 });
 
 test('an anonymous donor is not given a stable pseudonym', () => {
