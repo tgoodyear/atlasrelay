@@ -1,6 +1,6 @@
 import { TableClient, TableEntity, odata, RestError } from '@azure/data-tables';
 import { HttpError } from './http';
-import { PENDING_RESERVATION_DAYS } from './pledging';
+import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
 
 export type ProjectStatus = 'open' | 'closed';
@@ -335,6 +335,92 @@ export async function patchProject(id: string, patch: Partial<Project>, ifMatch?
   const after = await getProject(id);
   if (!after) notFound();
   return after;
+}
+
+/**
+ * The owner's open projects, for the cap.
+ *
+ * Still a scan. ownerId is not a key and the projects table has a single constant partition, so
+ * the service reads every row to answer this, and that is issue #19's real subject. What the
+ * status filter changes is only what comes back: closed projects are never pruned, so the previous
+ * client-side filter carried an owner's entire history -- every closed row, each with a description
+ * of up to 8000 characters -- across the wire on every create and every reopen, and that part grew
+ * without bound. Filtering server-side leaves a result bounded by the cap itself. Stated plainly
+ * rather than left to read as a fix for the scan: making the scan keyed needs a key structure
+ * beside this table, which this is not.
+ *
+ * Safe against a row with no status column, which would read as open through toProject's default
+ * and be hidden by this filter: createProject writes status on every row and patchProject only
+ * ever merges, so no such row can exist.
+ */
+export async function listOpenProjectsByOwner(ownerId: string): Promise<Project[]> {
+  const open: ProjectStatus = 'open';
+  const out: Project[] = [];
+  for await (const e of (await table('projects')).listEntities<Entity>({
+    queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId} and status eq ${open}` },
+  })) {
+    out.push(toProject(e));
+  }
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/**
+ * The per-account window on posting projects, held as a row.
+ *
+ * Returns false when this account posted less than minIntervalMs ago, and takes the window when it
+ * did not. Reading a stamp and then writing one cannot enforce an interval, for the same reason
+ * the pledge claim above spells out and the open-project cap had to learn twice: a burst of
+ * concurrent posts all read before any of them writes, all see an old stamp, and all proceed.
+ * Creating a row is atomic and a conditional replace is atomic, so exactly one request in a burst
+ * takes the window and the rest are refused.
+ *
+ * The row lives in the users table under its own partition, not on the user row. A second writer
+ * on the user row would collide with updateUser's conditional replace, and updateUser answers a
+ * 412 with 404 Not found -- so posting a project would make a profile save being written at the
+ * same moment report that the profile was gone. It is kept out of the claims table for the reverse
+ * reason: that table is the one guard against a double transfer, and nothing that is not a pledge
+ * claim belongs in it.
+ */
+const PROJECT_POST_PK = 'project-post';
+
+export async function acquireProjectPostWindow(userId: string, minIntervalMs: number): Promise<boolean> {
+  const t = await table('users');
+  const entity = { partitionKey: PROJECT_POST_PK, rowKey: userId, lastProjectAt: now() };
+  try {
+    await t.createEntity(entity);
+    return true;
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+  }
+
+  const held = await getEntity('users', PROJECT_POST_PK, userId);
+  // Gone between the create and this read: profile deletion drops this row. Start again rather
+  // than refuse, because there is now no stamp to refuse on.
+  if (!held) return acquireProjectPostWindow(userId, minIntervalMs);
+
+  if (!projectPostAllowed(String(held.lastProjectAt ?? ''), minIntervalMs)) return false;
+
+  try {
+    await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+    return true;
+  } catch (err) {
+    // 412 means another post by this account took the window between our read and our write. Two
+    // posts inside the interval is exactly what this refuses, so the rival winning is the answer.
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Drop the posting window. Called when a profile is deleted, because the row is keyed by account
+ * id and so is an identifier of an account that asked to be removed.
+ */
+export async function deleteProjectPostWindow(userId: string): Promise<void> {
+  try {
+    await (await table('users')).deleteEntity(PROJECT_POST_PK, userId);
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 404)) throw err;
+  }
 }
 
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {

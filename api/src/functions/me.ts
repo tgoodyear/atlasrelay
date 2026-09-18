@@ -1,7 +1,7 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
-import { handle, json, readJson } from '../lib/http';
-import { deleteUser, ensureUser, listProjectsByOwner, patchProject, updateUser } from '../lib/store';
+import { describeErrorForLog, handle, json, readJson } from '../lib/http';
+import { deleteProjectPostWindow, deleteUser, ensureUser, listProjectsByOwner, patchProject, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { privateUser } from '../lib/views';
 
@@ -70,6 +70,16 @@ app.http('me-delete', {
     // request time out with their RIPE address still stored, against a page that promises deletion
     // outright. Removing the row first makes the promise unconditional; the sweep is cleanup.
     await deleteUser(p.userId);
+
+    // The posting window goes with it. That row is keyed by account id, so keeping it would mean
+    // retaining an identifier of an account that asked to be removed, against a page that promises
+    // removal outright. The cost is stated rather than hidden: deleting and signing in again
+    // resets the posting interval, so the limit is a tax on an abuser rather than a wall -- and
+    // somebody who will delete their profile to post faster can register another account anyway.
+    // Best effort, like everything after the delete: the profile is gone, and that is the promise.
+    await deleteProjectPostWindow(p.userId).catch((err) => {
+      console.error('Profile deleted but its posting window could not be removed:', describeErrorForLog(err));
+    });
 
     // Then close what they own. A project left briefly open cannot be pledged to, because the
     // handler needs the owner's address to name a recipient, so the window is a clean failure
