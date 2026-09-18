@@ -93,12 +93,15 @@ export default function Profile() {
           <h2>Delete your profile</h2>
           <p className="muted">
             This removes your profile, including your RIPE NCC Access email. Projects you posted and
-            pledges you made stay on the site, because donors and researchers rely on that record.
-            Publicly they show only the display name you chose. They do still carry the internal
-            account identifier they were created under, so signing in again with the same GitHub or
-            Microsoft account reconnects you to that history rather than starting you fresh. Any
-            project of yours still open is closed, because nobody can pledge to a project whose
-            owner has no address to receive the credits.
+            pledges you made stay on the site, because donors and researchers rely on that record, but
+            your display name is taken off them and they read as Anonymous from then on, to everyone
+            including the researchers you gave to. They do still carry the internal account identifier
+            they were created under, so signing in again with the same GitHub or Microsoft account
+            reconnects you to that history rather than starting you fresh, and anything you post after
+            that carries whatever name you choose then. Any project of yours still open is closed,
+            because nobody can pledge to a project whose owner has no address to receive the credits.
+            Credits already transferred stay transferred, and RIPE Atlas keeps its own record of them,
+            which nothing here can remove.
           </p>
           <button
             className="btn btn-danger"
@@ -115,12 +118,28 @@ export default function Profile() {
                 // is still listed under their name.
                 if (!res.sweepComplete) {
                   const n = res.projectsNotClosed;
-                  setError(
-                    `Your profile and RIPE NCC Access email have been deleted. ${
+                  const named = res.namesNotAnonymized;
+                  // Two different things can be left undone and they need different words: a project
+                  // still open is a project that cannot take credits, and a row that kept its name is
+                  // the part of the promise about the name. Saying only the first would leave someone
+                  // believing their name was gone everywhere when it is not.
+                  const parts: string[] = [];
+                  if (n === null || (n && n > 0)) {
+                    parts.push(
                       n && n > 0
-                        ? `${n} of your projects could not be closed and may still be listed.`
-                        : 'Your projects could not all be closed and some may still be listed.'
-                    } Nobody can pledge to them, because there is no longer an address to send credits to. Please report this so they can be closed by hand.`,
+                        ? `${n} of your projects could not be closed and may still be listed. Nobody can pledge to them, because there is no longer an address to send credits to.`
+                        : 'Your projects could not all be closed and some may still be listed. Nobody can pledge to them, because there is no longer an address to send credits to.',
+                    );
+                  }
+                  if (named === null || (named && named > 0)) {
+                    parts.push(
+                      named && named > 0
+                        ? `${named} of your projects or pledges still show your display name.`
+                        : 'Some of your projects or pledges may still show your display name.',
+                    );
+                  }
+                  setError(
+                    `Your profile and RIPE NCC Access email have been deleted. ${parts.join(' ')} Please report this so it can be finished by hand.`,
                   );
                   setDeleting(false);
                   return;
