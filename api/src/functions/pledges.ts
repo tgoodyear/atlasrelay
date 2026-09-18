@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -138,26 +138,43 @@ app.http('pledges-create', {
         }
         pledge.status = 'sent';
         pledge.transferredAt = '';
+        let recorded = false;
         try {
           await createPledge(pledge);
+          recorded = true;
           await recomputeProjectTotals(id);
         } catch (saveErr) {
           console.error('Could not record a transfer of unknown outcome:', saveErr instanceof Error ? saveErr.message : saveErr);
         }
+        // Say which of the two situations this is. Claiming a pledge is recorded when the write
+        // failed sends the donor looking for something that is not there, and leaves them with no
+        // idea that nobody else knows about the transfer either.
         throw new HttpError(
           502,
-          `${err instanceof Error ? err.message : 'RIPE Atlas did not answer'}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. The pledge is recorded and waiting for the project owner to confirm it.`,
+          `${err instanceof Error ? err.message : 'RIPE Atlas did not answer'}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. ${
+            recorded
+              ? 'The pledge is recorded and waiting for the project owner to confirm it.'
+              : 'We could not record the pledge either, so nothing here knows about it: if the credits did move, tell the project owner with your RIPE transaction.'
+          }`,
         );
       }
       pledge.status = 'confirmed';
-      pledge.transferredAt = new Date(startedAt).toISOString();
+      // The moment RIPE accepted, not the moment we asked. startedAt is kept for matching the
+      // transaction, where an earlier bound is what we want, but recording it here would date the
+      // acceptance up to the full twenty-second timeout early.
+      pledge.transferredAt = new Date().toISOString();
       // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
-      // the transaction up to record a real id. Best-effort: a key without the credits-read
-      // permission still completes the transfer, it just carries no id.
-      const txn = await findTransferTransaction(key, amount, startedAt);
-      if (txn) {
-        pledge.transactionId = String(txn.id);
-        pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
+      // the transaction up to record a real id. Every failure here is "no reference": the credits
+      // have already moved, and letting this throw would skip the pledge write entirely, leaving
+      // the claim to expire and a retry free to send them again.
+      try {
+        const txn = await findTransferTransaction(key, amount, startedAt);
+        if (txn) {
+          pledge.transactionId = String(txn.id);
+          pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
+        }
+      } catch (lookupErr) {
+        console.error('Transaction lookup failed after a completed transfer:', lookupErr instanceof Error ? lookupErr.message : lookupErr);
       }
     }
 
@@ -174,7 +191,31 @@ app.http('pledges-create', {
       console.error('Transfer completed but the pledge could not be recorded:', err instanceof Error ? err.message : err);
       recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. Tell the project owner, with your RIPE transaction, so they can confirm it by hand.';
     }
-    let updatedProject = await recomputeProjectTotals(id).catch(() => project);
+    // Swallowing a failed recompute and carrying on with the snapshot read at the top of this
+    // handler was wrong in a way worth naming: the ceiling check below is computed from these
+    // totals, and a stale snapshot makes it fail OPEN. For a manual pledge that check is what
+    // stands between a donor and the owner's address, so failing open would disclose it on a
+    // project that had already been filled by others.
+    let updatedProject: Project | undefined;
+    try {
+      updatedProject = await recomputeProjectTotals(id);
+    } catch (err) {
+      console.error('Could not recompute project totals after a pledge:', err instanceof Error ? err.message : err);
+    }
+
+    if (!updatedProject) {
+      if (method === 'manual') {
+        // No credits have moved, so the safe answer is to withdraw and let them try again. Better
+        // a retry than an address handed out against totals we could not verify.
+        await savePledge({ ...pledge, status: 'cancelled' }).catch(() => undefined);
+        await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
+        throw new HttpError(503, 'We could not check this project\u2019s current total just now, so the pledge was not created. Please try again in a moment.');
+      }
+      // An API transfer has already happened and cannot be withdrawn, so this one proceeds, but on
+      // figures known to be stale. Say so rather than presenting them as current.
+      updatedProject = project;
+      recordWarning = [recordWarning, 'The project totals shown may be out of date; they will catch up on the next pledge.'].filter(Boolean).join(' ');
+    }
 
     // Reserved capacity still needs a post-write settlement, because it spans different donors and
     // no single row can arbitrate between them. Only a manual pledge can be withdrawn.
