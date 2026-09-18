@@ -47,13 +47,24 @@ app.http('me-delete', {
     // Close any open project first. Pledging to a project whose owner is gone cannot work: the
     // handler needs the owner's RIPE address to name a recipient. Leaving them open would
     // advertise projects that fail at the moment a donor tries to give to them.
-    const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open');
-    for (const project of open) {
-      await patchProject(project.id, { status: 'closed' });
-    }
-    // Then the profile itself, including the RIPE NCC Access email. Projects and pledges stay,
-    // because donors and owners rely on that record.
+    const closeOpen = async (): Promise<number> => {
+      const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open');
+      for (const project of open) {
+        await patchProject(project.id, { status: 'closed' });
+      }
+      return open.length;
+    };
+
+    // Close, delete, then close again. Listing and closing is not atomic with project creation, so
+    // a request that validated the profile a moment earlier can create or reopen a project between
+    // the two, which would leave exactly what this is meant to prevent: an open project whose owner
+    // has no address to receive credits. The second pass catches anything that landed in that
+    // window, and creating one after the user row is gone is already refused, because both posting
+    // and reopening require a profile with a RIPE address.
+    const closed = await closeOpen();
     await deleteUser(p.userId);
-    return json({ deleted: true, projectsClosed: open.length });
+    const late = await closeOpen();
+    return json({ deleted: true, projectsClosed: closed + late });
+
   }),
 });

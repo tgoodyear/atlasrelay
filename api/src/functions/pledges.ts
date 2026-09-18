@@ -161,8 +161,20 @@ app.http('pledges-create', {
       }
     }
 
-    await createPledge(pledge);
-    let updatedProject = await recomputeProjectTotals(id);
+    // For an API pledge the credits have already moved by the time we get here, so failing the
+    // request would tell the donor to retry a transfer that already happened. The write is
+    // attempted, and if it cannot be made the response still succeeds and says so plainly. The
+    // next change in this stack writes the row before the transfer instead, which removes this
+    // window rather than softening it; this is the best available while it is written afterwards.
+    let recordWarning: string | undefined;
+    try {
+      await createPledge(pledge);
+    } catch (err) {
+      if (method === 'manual') throw err;
+      console.error('Transfer completed but the pledge could not be recorded:', err instanceof Error ? err.message : err);
+      recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. Tell the project owner, with your RIPE transaction, so they can confirm it by hand.';
+    }
+    let updatedProject = await recomputeProjectTotals(id).catch(() => project);
 
     // Reserved capacity still needs a post-write settlement, because it spans different donors and
     // no single row can arbitrate between them. Only a manual pledge can be withdrawn.
@@ -187,7 +199,7 @@ app.http('pledges-create', {
         // exactly who that is on their dashboard, because the pledge carries the donor's name.
         recipientEmail: method === 'manual' ? owner.atlasEmail : undefined,
         transferUrl: 'https://atlas.ripe.net/credits/transfer/',
-        warning: [balanceWarning, overshootWarning].filter(Boolean).join(' ') || undefined,
+        warning: [balanceWarning, overshootWarning, recordWarning].filter(Boolean).join(' ') || undefined,
       },
       201,
     );

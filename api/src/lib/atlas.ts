@@ -14,6 +14,17 @@ const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * to tell "this key lacks a permission" from "RIPE is having a bad day", and those two need
  * different words in front of a donor.
  */
+/**
+ * Thrown when a call never reached RIPE, or RIPE never gave a usable answer. The distinction
+ * matters for transfers: an AtlasRefused means RIPE read the request and declined, so no credits
+ * moved, whereas this one means the outcome is unknown and the caller must not retry blindly.
+ */
+export class AtlasUnreachable extends HttpError {
+  constructor(message: string) {
+    super(502, message);
+  }
+}
+
 export class AtlasRefused extends HttpError {
   constructor(public upstreamStatus: number, status: number, message: string) {
     super(status, message);
@@ -78,7 +89,7 @@ async function atlasFetch(path: string, key: string, init: RequestInit = {}): Pr
     });
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
-    throw new HttpError(502, aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
+    throw new AtlasUnreachable(aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
   } finally {
     clearTimeout(timer);
   }
@@ -170,6 +181,14 @@ export async function transferCredits(key: string, recipient: string, amount: nu
   // keeps a key's use to the three requests SECURITY.md discloses.
   const res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
   const body = await parseBody(res);
+  // A 4xx is RIPE declining: it read the request and said no, so no credits moved and the donor can
+  // safely correct the problem and try again. A 5xx is not that. It says something broke inside
+  // RIPE, which is no evidence about whether the transfer had already been processed, so it is
+  // reported as unknown. Calling it a refusal would free the donor's slot and invite a retry that
+  // sends the credits a second time.
+  if (res.status >= 500) {
+    throw new AtlasUnreachable(`RIPE Atlas returned HTTP ${res.status} without saying whether the transfer completed`);
+  }
   if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   const transaction = (body as TransferResult | null)?.transaction;
   // RIPE returns a list URL rather than a reference, so its absence is not worth failing on:
