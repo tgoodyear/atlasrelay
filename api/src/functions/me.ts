@@ -47,12 +47,22 @@ app.http('me-delete', {
     // Pledging to a project whose owner is gone cannot work: the handler needs the owner's RIPE
     // address to name a recipient. Leaving them open would advertise projects that fail at the
     // moment a donor tries to give to them.
-    const closeOpen = async (): Promise<number> => {
+    // One project that will not close must not stop the rest. Aborting the sweep left every later
+    // project open and still returned success, against a page that promises they are all closed.
+    const closeOpen = async (): Promise<{ closed: number; failed: number }> => {
       const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open');
+      let closed = 0;
+      let failed = 0;
       for (const project of open) {
-        await patchProject(project.id, { status: 'closed' });
+        try {
+          await patchProject(project.id, { status: 'closed' });
+          closed += 1;
+        } catch (err) {
+          failed += 1;
+          console.error(`Could not close project ${project.id} while deleting its owner:`, err instanceof Error ? err.message : err);
+        }
       }
-      return open.length;
+      return { closed, failed };
     };
 
     // The profile goes first. Sweeping projects is unbounded serial work over a shared partition,
@@ -66,12 +76,24 @@ app.http('me-delete', {
     // rather than a disclosure. Projects written after this sweep close themselves: creation and
     // reopening both re-check for the owner after writing.
     let closed = 0;
+    let failed = 0;
     try {
-      closed = await closeOpen();
+      ({ closed, failed } = await closeOpen());
     } catch (err) {
-      console.error('Profile deleted but its projects could not all be closed:', err instanceof Error ? err.message : err);
+      console.error('Profile deleted but its projects could not be swept:', err instanceof Error ? err.message : err);
+      failed = -1;
     }
-    return json({ deleted: true, projectsClosed: closed });
+    // The profile is gone either way, which is the promise that matters and the one the page
+    // makes. Say so separately from whether every project got closed, rather than reporting a
+    // clean result over a sweep that did not finish. A project left open cannot be pledged to,
+    // and creation and reopening both re-check for the owner, so it fails cleanly rather than
+    // taking credits nobody can receive.
+    return json({
+      deleted: true,
+      projectsClosed: closed,
+      projectsNotClosed: failed === -1 ? null : failed,
+      sweepComplete: failed === 0,
+    });
 
   }),
 });
