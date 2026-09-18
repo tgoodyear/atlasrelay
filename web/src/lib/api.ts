@@ -92,6 +92,29 @@ export class ApiError extends Error {
   get transferDefinitelyNotSent(): boolean {
     return (this.details as { transfer?: string } | undefined)?.transfer === 'not-sent';
   }
+
+  /**
+   * True when the server says it does not know where this pledge stands, because somebody else
+   * acted on it while the request was running. Distinct from a refusal: a refusal means the donor
+   * may correct and retry, this means they must look at the pledge before doing anything, since
+   * the other actor may have marked it sent or confirmed.
+   */
+  get transferOutcomeUnknown(): boolean {
+    return (this.details as { transfer?: string } | undefined)?.transfer === 'unknown';
+  }
+
+  /**
+   * True only when the server said outright that it could not record the pledge either. On the
+   * outcome-unknown path that changes the advice completely: with a row, the researcher settles it;
+   * without one there is nothing for them to settle, and the donor has to tell them out of band.
+   *
+   * False in every other case, including a response that says nothing about it, which is the
+   * ordinary one: a row exists. Getting this the wrong way round inverts that advice, so it is
+   * worth being exact -- the previous wording here described the opposite of what the getter does.
+   */
+  get transferNotRecorded(): boolean {
+    return (this.details as { transferRecorded?: boolean } | undefined)?.transferRecorded === false;
+  }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

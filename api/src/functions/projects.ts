@@ -44,9 +44,27 @@ app.http('projects-list', {
       .filter((p) => p.creditsPending > 0 || p.totalsDirty)
       .sort((a, b) => (checked(a) < checked(b) ? -1 : checked(a) > checked(b) ? 1 : 0))
       .slice(0, STALE_REFRESH_LIMIT);
+    // Every one of these is optional maintenance, and the listing is the most public thing the
+    // site serves. Only the corrective write was best effort: a transient failure from any of the
+    // pledge scans rejected the Promise.all and turned the whole anonymous listing into a 500, so
+    // a home-page refresh added up to twenty ways for the front page to go down. Each project now
+    // settles independently and falls back to its cached totals.
     const live = new Map<string, { confirmed: number; pending: number }>();
     await Promise.all(stale.map(async (p) => {
-      const t = totals(await listPledges(p.id));
+      let t: { confirmed: number; pending: number };
+      try {
+        t = totals(await listPledges(p.id));
+      } catch (err) {
+        console.error(`Could not refresh totals for project ${p.id}:`, err instanceof Error ? err.message : err);
+        // Rotate it even though the scan failed. Candidates are ordered least-recently-checked
+        // first, so a project whose scan keeps failing stays at the head of that order and is
+        // picked again on every single request, spending one of the refresh slots for ever and
+        // starving the projects behind it. Advancing the timestamp alone moves it to the back of
+        // the queue; totalsDirty is left set, so it stays a candidate and is retried in turn
+        // rather than abandoned. Best effort: this is maintenance about maintenance.
+        await patchProject(p.id, { totalsCheckedAt: now(), updatedAt: p.updatedAt }, p.etag).catch(() => undefined);
+        return;
+      }
       live.set(p.id, t);
       // Write back either way. When the totals differ this corrects them; when they match it still
       // moves updatedAt, which is what lets the next listing look at a different set of projects

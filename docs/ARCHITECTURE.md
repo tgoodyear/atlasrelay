@@ -68,7 +68,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |
 | `transactionId` | Empty on new pledges. RIPE does not index a transaction until well after it accepts the transfer (measured live: absent immediately, present 40 to 70 seconds later), so it cannot be looked up inside the request, and this platform has no background worker to do it later. The transfer endpoint's own response carries only a generic list URL, identical for every transfer, so it is not a reference either. Older rows may hold a value. |
-| `transactionUrl` | A link we build from `transactionId` when the lookup finds one unambiguous match, so it is present only when `transactionId` is. Rows created before that change may instead hold the generic list URL the transfer endpoint returned. |
+| `transactionUrl` | Empty on new pledges, for the same reason as `transactionId`: there is no lookup left to build a link from. Rows created before that change may hold a link to a matched transaction, or the generic list URL the transfer endpoint returned. |
 | `message` | Optional public note from the donor. |
 | `createdAt`, `updatedAt` | |
 
@@ -91,16 +91,23 @@ the partition after each change, so the project row never drifts.
    - **Transfer now with an API key**: the donor pastes a key created at
      https://atlas.ripe.net/keys/ with two permissions, "Transfer credits to another
      user" and "Get information about your credits", the latter so the balance can be
-     checked before sending. A transfer-only key works, with the check skipped. The
-     function optionally reads the balance (`GET /credits/`) to warn on insufficient
-     funds. The pledge row is written **before** the transfer, then the function calls
-     `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
-     and `transferredAt` records when we saw RIPE accept it. No transaction reference
-     is attached: RIPE indexes the transaction well after accepting the transfer, so
-     it cannot be read back inside the request, and the donor's own credit log shows
-     it a minute or so later. If RIPE never answers, the pledge is left at
-     `sent` and flagged uncertain, keeps the donor's slot, and waits for a person to
-     settle it. The key lives only in the request scope, and the UI tells donors to
+     checked before sending. A transfer-only key works too: the balance read is still
+     attempted for every key, RIPE refuses it, and the transfer proceeds with a warning
+     that the balance could not be checked. So a pasted key makes at most two RIPE
+     requests, and sometimes one: a balance that comes back below the amount stops the
+     request there, with nothing sent. The pledge row is written **before** the transfer, then the function
+     calls `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
+     and `transferredAt` records when we saw RIPE accept it. If that write fails the
+     handler retries it and, failing that, re-reads the row, so a write whose response
+     was merely lost still ends up reported as confirmed. Only a failure that genuinely
+     left the row unchanged leaves it `pledged`; the response then says so rather than
+     claiming otherwise, and the requester confirms it once the credits arrive.
+     No transaction reference is attached: RIPE indexes the transaction well after
+     accepting the transfer, so it cannot be read back inside the request, and the
+     donor's own credit log shows it a minute or so later. If RIPE never answers, the pledge is left at
+     `sent` and flagged uncertain, keeps the donor's slot, and waits for the requester
+     to settle it -- though only for the 14-day reservation window, after which the
+     slot is reclaimed with nobody having settled anything, which is [#22](https://github.com/tgoodyear/internetresearch/issues/22). The key lives only in the request scope, and the UI tells donors to
      delete or disable it afterwards.
    - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
@@ -132,15 +139,21 @@ What happens next depends on a single question: did RIPE answer?
 | 4xx or 429 from RIPE | RIPE refused, nothing moved | Pledge is cancelled, the donor sees why and can try again |
 | Timeout, network failure, or a 5xx | Unknown | Pledge is parked at `sent` and flagged uncertain |
 
-An uncertain pledge takes the same path a manual one does: it sits on both dashboards until the
-requester confirms the credits arrived or the donor cancels it. Both parties see "Sent, outcome
-unknown" rather than a badge claiming a transfer we never saw succeed. The donor is sent to
-https://atlas.ripe.net/credits/transactions/ to check before sending anything again, and the
-dialog gives them no way to resubmit.
+An uncertain pledge sits at `sent` on both dashboards, showing "Sent, outcome unknown" rather than
+a badge claiming a transfer we never saw succeed. The donor is sent to
+https://atlas.ripe.net/credits/transactions/ to check before sending anything again, and the dialog
+gives them no way to resubmit.
 
-Once the credits have moved, nothing in the handler is allowed to fail the request: the
-transaction lookup and the row update are both best-effort, because a retry at that point would
-send the credits twice.
+Only the requester settles it, by confirming or cancelling. This is the one place an API pledge
+differs from a manual one, and the asymmetry is deliberate: cancelling frees the donor's slot, so
+if the transfer did complete, the donor's next pledge would send the same credits a second time.
+The donor can read their own transaction log, but acting on it here has a side effect they cannot
+see, whereas either answer the requester gives is safe. The donor's part is to check the log and
+tell them what they find.
+
+Once the credits have moved, nothing in the handler is allowed to fail the request. The row
+update is best-effort, because a retry at that point would send the credits twice; a confirmation
+that did not persist is reported as a warning on a pledge the owner can still confirm.
 
 ### Abuse limits
 

@@ -172,11 +172,14 @@ query charges.
   answer it could act on, so the platform cannot say whether the credits moved. Three things reach
   this state and they are worth telling apart: the request timed out, the connection failed, or
   RIPE answered with a 5xx. Only the last means RIPE replied at all, and none of them says whether
-  the transfer was processed first. Only the two people involved
-  can settle it, and both can: the requester confirms the pledge if the credits arrived, the
-  donor cancels it if their transaction log at https://atlas.ripe.net/credits/transactions/
-  shows nothing. Neither party needs an operator. If one is abandoned, the 14-day reservation
-  expiry releases the capacity on its own. To find them:
+  the transfer was processed first. Only the requester can settle it, by confirming the pledge if
+  the credits arrived or cancelling it if they never did. The donor cannot: cancelling frees their
+  slot, and if the transfer did complete their next pledge would send the same credits again. Their
+  part is to check https://atlas.ripe.net/credits/transactions/ and tell the requester what they
+  find. Neither party needs an operator. If one is abandoned, the 14-day reservation expiry
+  releases the capacity on its own, which is intended. What is not is that the same expiry also
+  releases the donor's slot on a row still flagged uncertain, so the protection against sending
+  those credits twice lapses with nobody having settled anything: issue #22. To find them:
 
   ```bash
   az storage entity query --table-name pledges --filter "transferUncertain eq true" \

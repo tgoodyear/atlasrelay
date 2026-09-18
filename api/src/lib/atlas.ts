@@ -100,12 +100,13 @@ interface AtlasReply {
  * can tell "RIPE said no" from "we do not know".
  */
 /**
- * Per-call deadlines. One pledge can make three RIPE calls, and at twenty seconds each the worst
- * case ran past the Static Web Apps edge timeout, so the edge could give up on a request whose
- * transfer then succeeded: the donor saw a gateway error over credits that had actually moved.
- * The transfer keeps the full budget because it is the one that matters; the two best-effort
- * calls around it are given far less, since neither is worth waiting on and both already treat
- * failure as "carry on without it".
+ * Per-call deadlines. A pledge makes at most two RIPE calls, the balance check and then the
+ * transfer, which is not sent when the balance comes back below the amount. At
+ * twenty seconds each the worst case ran past the Static Web Apps edge timeout, so the edge could
+ * give up on a request whose transfer then succeeded: the donor saw a gateway error over credits
+ * that had actually moved. The transfer keeps the full budget because it is the one that matters;
+ * the balance check is given far less, since it is not worth waiting on and already treats failure
+ * as "carry on without it".
  */
 const TRANSFER_TIMEOUT_MS = 20_000;
 const BEST_EFFORT_TIMEOUT_MS = 5_000;
@@ -267,7 +268,7 @@ export async function transferCredits(key: string, recipient: string, amount: nu
   const payload = JSON.stringify({ recipient, amount });
   // One POST only. The manual documents a singular path too, but the plural one is what the live
   // API serves, and re-posting a transfer to guess at a path could send the credits twice. It also
-  // keeps a key's use to the three requests SECURITY.md discloses.
+  // keeps a key's use to the two requests SECURITY.md discloses.
   const { ok, status, body } = await atlasCall('/credits/transfers/', key, { method: 'POST', body: payload });
   // A 4xx is RIPE declining: it read the request and said no, so no credits moved and the donor
   // can safely correct the problem and try again. A 5xx is not that. It says something broke

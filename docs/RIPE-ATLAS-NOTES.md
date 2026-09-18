@@ -36,7 +36,7 @@ Content-Type: application/json
 - Response `201 Created`. The docstring promises `{ "transaction": "<URL>" }`, but the schema in
   the OpenAPI document is `{amount, recipient}`, and a real transfer returned a generic list URL
   (`.../credits/transactions/?sort=-date&type=admin`) identical for every transfer. So the 201
-  itself is the only signal that credits moved; the platform looks the transaction up separately
+  itself is the only signal that credits moved; the platform does not look the transaction up
   to record a reference.
 - `amount` is an integer; `recipient` must be a RIPE NCC Access account. The docs say a
   recipient who has never used Atlas can still receive and will see the credits after

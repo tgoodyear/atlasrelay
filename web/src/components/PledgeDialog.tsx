@@ -7,7 +7,7 @@ interface Props {
   onDone: (project: Project) => void;
 }
 
-type Step = 'form' | 'manual-instructions' | 'api-done' | 'api-unknown';
+type Step = 'form' | 'manual-instructions' | 'api-done' | 'api-unknown' | 'settled-elsewhere';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
   // Always bounded by the server-computed per-pledge limit, so the dialog never opens on a
@@ -24,6 +24,15 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [step, setStep] = useState<Step>('form');
   const [recipient, setRecipient] = useState('');
   const [warning, setWarning] = useState('');
+  // Whether the server got the confirmation into storage. It reports the row that exists rather
+  // than the one it meant to write, so a post-transfer write that failed comes back as 'pledged'
+  // with a warning. Treating every 201 as confirmed made this screen contradict both that warning
+  // and the dashboard, over the one case where the donor most needs to be told what to do next.
+  const [recorded, setRecorded] = useState(true);
+  // Whether a pledge row exists at all after an unknown outcome. When the server could not write
+  // one either, there is nothing for the researcher to settle and saying otherwise sends the donor
+  // to somebody with no record to act on.
+  const [rowExists, setRowExists] = useState(true);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -53,16 +62,23 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!amountOk) return;
+    // Pin the method for the rest of this request. The radios are disabled while it runs, but the
+    // state is still what every branch below reads, and reading it after the await would let a
+    // stray change decide which recovery path an in-flight API transfer takes: an unknown outcome
+    // arriving as `manual` skips the terminal screen and leaves the form live with a transfer
+    // possibly already sent.
+    const sending = method;
     setSubmitting(true);
     setError('');
     try {
-      const res = await api.createPledge(project.id, { amount: n, method, message, anonymous, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
+      const res = await api.createPledge(project.id, { amount: n, method: sending, message, anonymous, ...(sending === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
-      if (method === 'manual') {
+      if (sending === 'manual') {
         setRecipient(res.recipientEmail ?? '');
         setStep('manual-instructions');
       } else {
+        setRecorded(res.pledge.status === 'confirmed');
         setStep('api-done');
       }
       onDone(res.project);
@@ -85,14 +101,26 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       // cases it is certain about, and everything else, including a lost connection, is unknown.
       const serverAnswered = err instanceof ApiError;
       const refusedBeforeSending = serverAnswered && (err as ApiError).transferDefinitelyNotSent;
-      if (method === 'api' && !refusedBeforeSending) {
+      // Somebody else acted on this pledge while the request was running, so where it stands is not
+      // something this dialog can state. It must not leave the form live either: on a manual pledge
+      // the other actor may have marked it sent or confirmed, and a confirmed pledge no longer
+      // counts as live, so resubmitting would be allowed and would ask the donor to transfer by
+      // hand a second time. Terminal for both methods.
+      if (serverAnswered && (err as ApiError).transferOutcomeUnknown) {
+        setApiKey('');
+        setError(message);
+        setStep('settled-elsewhere');
+      } else if (sending === 'api' && !refusedBeforeSending) {
         setApiKey('');
         setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');
+        // A lost connection tells us nothing about whether a row was written, so assume one was:
+        // the alternative sends every dropped connection to the "tell them out of band" advice.
+        setRowExists(!serverAnswered || !(err as ApiError).transferNotRecorded);
         setStep('api-unknown');
       } else {
         // A refusal means nothing moved and the donor can correct and retry, but the key is
         // dropped even so: a populated field beside a live button is how a second transfer starts.
-        if (method === 'api') setApiKey('');
+        if (sending === 'api') setApiKey('');
         setError(message);
       }
     } finally {
@@ -118,9 +146,11 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             {step === 'form'
               ? 'Send credits'
               : step === 'api-done'
-                ? 'Credits transferred'
+                ? (recorded ? 'Credits transferred' : 'Credits transferred, recording incomplete')
                 : step === 'api-unknown'
                   ? 'Check before you send again'
+                  : step === 'settled-elsewhere'
+                    ? 'This pledge changed while you were sending'
                   : 'Finish the transfer on atlas.ripe.net'}
           </h2>
           <button className="close" aria-label="Close" onClick={onClose} disabled={submitting}>×</button>
@@ -141,14 +171,14 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
 
               <div className="method-choice" role="radiogroup" aria-label="Transfer method">
                 <label>
-                  <input type="radio" name="method" checked={method === 'api'} onChange={() => setMethod('api')} />
+                  <input type="radio" name="method" checked={method === 'api'} disabled={submitting} onChange={() => setMethod('api')} />
                   <div>
                     <strong>Transfer now with an API key</strong>
-                    <span>We call the RIPE Atlas API once with a key you paste and record the transaction as proof. The key is never stored.</span>
+                    <span>We check your balance and send the transfer with a key you paste. RIPE accepting the transfer is the record; the transaction appears in your own RIPE log a minute or so later. The key is never stored.</span>
                   </div>
                 </label>
                 <label>
-                  <input type="radio" name="method" checked={method === 'manual'} onChange={() => setMethod('manual')} />
+                  <input type="radio" name="method" checked={method === 'manual'} disabled={submitting} onChange={() => setMethod('manual')} />
                   <div>
                     <strong>I'll transfer on atlas.ripe.net myself</strong>
                     <span>We show you the researcher's RIPE NCC Access email so you can send the credits. They will see your name against this pledge.</span>
@@ -277,14 +307,60 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 </li>
                 <li>Look for an outgoing transfer of <strong className="mono">{fmt(n)}</strong> credits in the last few minutes.</li>
                 <li>
-                  If it is there, the transfer worked. The pledge is already recorded, and the researcher
-                  confirms it once the credits show up on their side.
+                  {rowExists ? (
+                    <>
+                      If it is there, the transfer worked. The pledge is already recorded, and the
+                      researcher confirms it once the credits show up on their side.
+                    </>
+                  ) : (
+                    <>
+                      If it is there, the transfer worked -- but it was never recorded here, so no
+                      pledge exists on this site for the researcher to confirm.
+                    </>
+                  )}
                 </li>
-                <li>If it is not there, cancel the pledge on your dashboard and start again.</li>
+                <li>
+                  If it is not there, wait a couple of minutes and look again. RIPE does not publish a
+                  transfer to your log at the moment it accepts it; we have measured the entry appearing
+                  40 to 70 seconds later. An empty log straight away is not evidence that the credits
+                  stayed put.
+                </li>
+                <li>
+                  {rowExists ? (
+                    <>
+                      If it is still not there after that, tell the researcher what you found and let them
+                      settle the pledge. Only they can close a transfer we sent: cancelling frees your slot,
+                      and if the credits did move after all, your next pledge would send them a second time.
+                    </>
+                  ) : (
+                    <>
+                      Whatever you find, tell the researcher directly, quoting the transaction if there is
+                      one. This pledge was never recorded here, so there is nothing on either dashboard for
+                      them to confirm or cancel, and nobody but you knows the transfer was attempted.
+                    </>
+                  )}
+                </li>
               </ol>
               <p className="small muted">
-                Do not send the credits a second time until you have checked. Remember to delete the API key
+                Do not send the credits a second time on the strength of an empty log you have only just
+                looked at. Remember to delete the API key
                 you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.
+              </p>
+              <div className="form-actions">
+                <button className="btn" type="button" onClick={onClose}>Done</button>
+              </div>
+            </>
+          )}
+
+          {step === 'settled-elsewhere' && (
+            <>
+              <div className="alert alert-warn">{error}</div>
+              <p>
+                Somebody acted on this pledge while you were sending it, so we cannot say where it
+                stands. Open it on your dashboard and look before you send anything. A pledge marked
+                confirmed means the researcher has the credits. One marked sent means a transfer was
+                reported but nobody has confirmed it arrived, which still has to be settled with them
+                rather than sent again.
               </p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={onClose}>Done</button>
@@ -294,8 +370,11 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
 
           {step === 'api-done' && (
             <>
-              <div className="alert alert-success">
-                RIPE Atlas accepted the transfer of {fmt(n)} credits, and the pledge is confirmed.
+              <div className={recorded ? 'alert alert-success' : 'alert alert-warn'}>
+                RIPE Atlas accepted the transfer of {fmt(n)} credits.
+                {recorded
+                  ? ' The pledge is confirmed.'
+                  : ' Recording it here did not complete, so the pledge is still showing as pending. Do not send the credits again: the researcher can confirm it once they arrive.'}
                 {' '}RIPE accepting the transfer is the record; it publishes the transaction to
                 your account’s log a minute or so later, where you can see it yourself.
               </div>

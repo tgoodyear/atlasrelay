@@ -32,7 +32,20 @@ app.http('my', {
     const live = new Map<string, { confirmed: number; pending: number }>();
     await Promise.all(
       stale.map(async (x) => {
-        const t = totals(await listPledges(x.id));
+        // Independent, for the same reason as the public listing: this refresh is optional
+        // maintenance, and one failing scan must not take the owner's whole dashboard down.
+        let t: { confirmed: number; pending: number };
+        try {
+          t = totals(await listPledges(x.id));
+        } catch (err) {
+          console.error(`Could not refresh totals for project ${x.id}:`, err instanceof Error ? err.message : err);
+          // Same rotation as the public listing: a project whose scan keeps failing would otherwise
+          // stay least-recently-checked and be picked on every dashboard load, spending a refresh
+          // slot for ever. Advancing the timestamp moves it to the back; totalsDirty stays set, so
+          // it is retried in turn rather than dropped.
+          await patchProject(x.id, { totalsCheckedAt: now(), updatedAt: x.updatedAt }, x.etag).catch(() => undefined);
+          return;
+        }
         live.set(x.id, t);
         await patchProject(
           x.id,
