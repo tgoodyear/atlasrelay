@@ -126,8 +126,27 @@ app.http('pledges-create', {
       try {
         await transferCredits(key, owner.atlasEmail, amount);
       } catch (err) {
-        await releasePledgeClaim(id, donor.id, pledge.id);
-        throw err;
+        // Only a refusal frees the slot. AtlasRefused means RIPE read the request and declined, so
+        // nothing moved and the donor should be able to correct the problem and try again at once.
+        // Anything else is a timeout, a dropped connection or a 5xx, none of which say whether the
+        // credits moved. Releasing the slot there would invite a retry that sends them twice, so
+        // the pledge is recorded as sent, keeps the slot, and waits for a person to settle it.
+        if (err instanceof AtlasRefused) {
+          await releasePledgeClaim(id, donor.id, pledge.id);
+          throw err;
+        }
+        pledge.status = 'sent';
+        pledge.transferredAt = '';
+        try {
+          await createPledge(pledge);
+          await recomputeProjectTotals(id);
+        } catch (saveErr) {
+          console.error('Could not record a transfer of unknown outcome:', saveErr instanceof Error ? saveErr.message : saveErr);
+        }
+        throw new HttpError(
+          502,
+          `${err instanceof Error ? err.message : 'RIPE Atlas did not answer'}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. The pledge is recorded and waiting for the project owner to confirm it.`,
+        );
       }
       pledge.status = 'confirmed';
       pledge.transferredAt = new Date(startedAt).toISOString();

@@ -92,9 +92,14 @@ the partition after each change, so the project row never drifts.
      user" and "Get information about your credits", the latter so the balance can be
      checked before sending. A transfer-only key works, with the check skipped. The
      function optionally reads the balance (`GET /credits/`) to warn on insufficient
-     funds, then calls `POST /credits/transfers/`. On 201 the pledge is stored as
-     `confirmed` with the transaction URL. The key lives only in the request scope.
-     The UI tells donors to delete or disable the key afterwards.
+     funds, then calls `POST /credits/transfers/` exactly once. On 201 the pledge is
+     stored as `confirmed`, and a transaction lookup runs to attach a reference. That
+     reference is best effort: it needs the credits-read permission, and it is stored
+     only when exactly one transaction matches, so a pledge may carry none. RIPE
+     accepting the call is what records that the credits moved. If RIPE never answers,
+     the pledge is stored as `sent`, keeps the donor's slot, and waits for a person to
+     settle it. The key lives only in the request scope, and the UI tells donors to
+     delete or disable it afterwards.
    - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
      donor marks it `sent`; the requester marks it `confirmed`.
