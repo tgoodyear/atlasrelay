@@ -290,7 +290,18 @@ app.http('pledges-create', {
             recorded = true;
             await recomputeProjectTotals(id);
           } catch (saveErr) {
-            console.error('Could not park an uncertain transfer:', saveErr instanceof Error ? saveErr.message : saveErr);
+            console.error('Could not park an uncertain transfer:', describeErrorForLog(saveErr));
+            // A failed write does not prove nothing was written: Table Storage can apply an update
+            // and lose the response, exactly as the confirmation path above allows for. What the
+            // donor is told next turns on this -- with a row, the researcher settles it; without
+            // one, there is nothing to settle and they have to be told out of band. So ask the row
+            // rather than the exception. A read that fails too leaves recorded false, which is the
+            // safe direction: it sends the donor to tell the researcher, which is harmless if a row
+            // did exist and necessary if it did not.
+            if (!recorded) {
+              const stored = await getPledge(id, pledge.id).catch(() => null);
+              if (stored && stored.status === 'sent') recorded = true;
+            }
             // If the row was updated but the totals were not, nothing revisits a project whose
             // cached pending is zero, so mark it for the refreshers to pick up.
             if (recorded) await patchProject(id, { totalsDirty: true }).catch(() => undefined);
@@ -334,29 +345,28 @@ app.http('pledges-create', {
           await savePledge(pledge);
           saved = true;
         } catch (confirmErr) {
-          console.error('Transfer completed but the confirmation could not be written:', confirmErr instanceof Error ? confirmErr.message : confirmErr);
-          // One more attempt, for the in-flight marker alone. When the write above fails the last
-          // durable version of this row is the marker written before the transfer, which still says
-          // inFlight, and nobody may act on an in-flight pledge. So the warning would tell the owner
-          // to confirm the pledge while the update handler answered 409 for the rest of the grace
-          // period. Clearing the marker is a smaller write than the confirmation and may well land
-          // when that did not; if it does not either, the window expires on its own.
+          console.error('Transfer completed but the confirmation could not be written:', describeErrorForLog(confirmErr));
+          // One more attempt at the same confirmed row, not a reduced one.
+          //
+          // This used to write back `pledged` with the transfer fields cleared, to get the in-flight
+          // marker off the row so the owner could act on it. That produced the worst state on this
+          // path: an ordinary-looking pending pledge for a transfer RIPE had already accepted. The
+          // owner could cancel it from the project page, which drops the received credits from the
+          // totals and releases the donor's slot, and the donor's next pledge would then send the
+          // same credits a second time -- the exact failure everything else here exists to prevent.
+          //
+          // Retrying the confirmation has none of that. It is the same size of write, since
+          // savePledge replaces the whole row either way, so it is no less likely to land; if it
+          // does, the row says what actually happened and the marker is cleared as a side effect.
+          // If it does not, the stored row stays the pre-transfer marker, which carries no transfer
+          // fields and no false confirmation, and the in-flight window releases it on its own.
+          //
+          // Conditional on the marker version. If the write above was in fact applied and only its
+          // response was lost, the row has already moved past that version, and the 412 below is
+          // how we find out.
           try {
-            // The pre-transfer row exactly, plus the cleared marker -- which is also what the
-            // response reports. Spreading `pledge` alone would carry transferredAt, set a few lines
-            // up when RIPE accepted, onto a row stored as `pledged`; publicPledge derives
-            // apiTransfer from that field, so the pending row would advertise a transfer this
-            // server watched happen while the response for the same pledge said it had not been
-            // recorded. Storage and the response have to describe the same pledge.
-            // Conditional on the marker version, which is what the row still holds if the write
-            // above genuinely failed. If instead that write was applied and only its response was
-            // lost, the row is already `confirmed` and its version has moved, so this comes back
-            // 412 and leaves it alone. Unconditionally, it would downgrade a confirmed transfer
-            // back to pending and hand the owner the option of cancelling credits that did move.
-            await savePledge(
-              { ...pledge, status: 'pledged', inFlight: false, transferredAt: '', transactionId: '', transactionUrl: '' },
-              pledge.etag,
-            );
+            await savePledge(pledge, pledge.etag);
+            saved = true;
           } catch (clearErr) {
             // A 412 is not a failure here, it is the answer. This write is conditional on the marker
             // version, and on this path the only thing that can have moved the row past it is the
@@ -366,7 +376,7 @@ app.http('pledges-create', {
             if (clearErr instanceof RestError && clearErr.statusCode === 412) {
               saved = true;
             } else {
-              console.error('Could not clear the in-flight marker after a completed transfer:', clearErr instanceof Error ? describeErrorForLog(clearErr) : clearErr);
+              console.error('Could not record a completed transfer on retry either:', describeErrorForLog(clearErr));
             }
           }
         }

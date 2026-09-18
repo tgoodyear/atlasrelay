@@ -264,8 +264,17 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 </li>
                 <li>Look for an outgoing transfer of <strong className="mono">{fmt(n)}</strong> credits in the last few minutes.</li>
                 <li>
-                  If it is there, the transfer worked. The pledge is already recorded, and the researcher
-                  confirms it once the credits show up on their side.
+                  {rowExists ? (
+                    <>
+                      If it is there, the transfer worked. The pledge is already recorded, and the
+                      researcher confirms it once the credits show up on their side.
+                    </>
+                  ) : (
+                    <>
+                      If it is there, the transfer worked -- but it was never recorded here, so no
+                      pledge exists on this site for the researcher to confirm.
+                    </>
+                  )}
                 </li>
                 <li>
                   If it is not there, wait a couple of minutes and look again. RIPE does not publish a
