@@ -207,9 +207,23 @@ app.http('pledges-create', {
       if (method === 'manual') {
         // No credits have moved, so the safe answer is to withdraw and let them try again. Better
         // a retry than an address handed out against totals we could not verify.
-        await savePledge({ ...pledge, status: 'cancelled' }).catch(() => undefined);
-        await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
-        throw new HttpError(503, 'We could not check this project\u2019s current total just now, so the pledge was not created. Please try again in a moment.');
+        //
+        // The slot is released only if the withdrawal actually succeeded. Releasing it after a
+        // failed cancel would leave a live pledge still reserving capacity with no slot behind it,
+        // which is the one state the slot exists to make impossible: the same donor could then
+        // open a second live pledge on the project.
+        let withdrawn = false;
+        try {
+          await savePledge({ ...pledge, status: 'cancelled' });
+          withdrawn = true;
+        } catch (cancelErr) {
+          console.error('Could not withdraw a pledge after an unreadable project total:', cancelErr instanceof Error ? cancelErr.message : cancelErr);
+        }
+        if (withdrawn) {
+          await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
+          throw new HttpError(503, 'We could not check this project\u2019s current total just now, so the pledge was not created. Please try again in a moment.');
+        }
+        throw new HttpError(503, 'We could not check this project\u2019s current total just now, and could not tidy up the pledge either. It may still be showing as pending; cancel it from your dashboard before trying again.');
       }
       // An API transfer has already happened and cannot be withdrawn, so this one proceeds, but on
       // figures known to be stale. Say so rather than presenting them as current.

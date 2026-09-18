@@ -40,6 +40,12 @@ export interface Project {
   updatedAt: string;
   /** Table Storage row version, for conditional writes. Never published. */
   etag?: string;
+  /**
+   * When the listing last recomputed this project's totals. Maintenance bookkeeping, kept apart
+   * from updatedAt so that rotating through refresh candidates does not make a project look
+   * freshly edited to the people reading it.
+   */
+  totalsCheckedAt?: string;
 }
 
 export interface Pledge {
@@ -193,6 +199,7 @@ function toProject(e: Entity): Project {
     paperUrl: String(e.paperUrl ?? ''),
     deadline: String(e.deadline ?? ''),
     etag: typeof e.etag === 'string' ? e.etag : undefined,
+    totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -243,7 +250,10 @@ export async function saveProject(p: Project): Promise<Project> {
  */
 export function projectPatchEntity(id: string, patch: Partial<Project>): Record<string, unknown> {
   const { tags, ...rest } = patch;
-  const entity: Record<string, unknown> = { partitionKey: PROJECTS_PK, rowKey: id, ...rest, updatedAt: now() };
+  // updatedAt first so an explicit one in the patch wins. A maintenance write that only refreshes
+  // cached totals passes the existing value through, because bumping it would tell every reader
+  // the project had just been edited when nothing about it changed.
+  const entity: Record<string, unknown> = { partitionKey: PROJECTS_PK, rowKey: id, updatedAt: now(), ...rest };
   if (tags !== undefined) entity.tags = tags.join(',');
   return entity;
 }
