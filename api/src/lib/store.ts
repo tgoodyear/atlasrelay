@@ -68,6 +68,15 @@ export interface Pledge {
   projectId: string;
   donorId: string;
   donorName: string;
+  /**
+   * The donor asked not to be named on the public listing. The row still records who pledged --
+   * the platform has to know, to enforce one live pledge per donor and to show them their own
+   * pledges -- so this withholds the name from public views rather than discarding it. The project
+   * owner still sees it: they confirm manual transfers themselves, and for any pledge they may
+   * need to reconcile it against their own RIPE transaction log, which names the sending account.
+   * (An API transfer is confirmed by this server once it watches RIPE accept it, not by them.)
+   */
+  anonymous: boolean;
   amount: number;
   method: PledgeMethod;
   status: PledgeStatus;
@@ -344,6 +353,8 @@ function toPledge(e: Entity): Pledge {
     projectId: e.partitionKey,
     donorId: String(e.donorId ?? ''),
     donorName: String(e.donorName ?? ''),
+    // Rows written before this field existed are not anonymous, which is what they were posted as.
+    anonymous: e.anonymous === true,
     amount: Number(e.amount ?? 0),
     method: (e.method as PledgeMethod) ?? 'manual',
     status: (e.status as PledgeStatus) ?? 'pledged',

@@ -5,7 +5,7 @@ import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCr
 import { describeErrorForLog, handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
-import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
+import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
 
@@ -58,6 +58,7 @@ app.http('pledges-create', {
       const method = oneOf(body, 'method', ['api', 'manual'] as const, true)!;
       const amount = int(body, 'amount', { min: 1, max: MAX_CREDITS, required: true })!;
       const message = str(body, 'message', { max: 500 }) ?? '';
+      const anonymous = bool(body, 'anonymous');
 
       // Projects accept credits beyond their goal, up to OVERFUND_MULTIPLIER times the request.
       // Pending pledges reserve capacity, so the check uses live totals rather than the cached row.
@@ -87,6 +88,7 @@ app.http('pledges-create', {
         projectId: id,
         donorId: donor.id,
         donorName: donor.displayName || donor.handle,
+        anonymous,
         amount,
         method,
         status: 'pledged',
