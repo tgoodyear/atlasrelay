@@ -75,6 +75,13 @@ export interface Pledge {
    * in flight.
    */
   inFlight: boolean;
+  /**
+   * When the transfer attempt began. The in-flight window is measured from here rather than from
+   * createdAt, because the row is written first and the claim, the balance check and validation
+   * all happen in between: anchoring to creation could let the window lapse before the transfer
+   * was even issued, and an owner could then free the slot while the credits were moving.
+   */
+  inFlightSince: string;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -330,6 +337,7 @@ function toPledge(e: Entity): Pledge {
     transferredAt: String(e.transferredAt ?? ''),
     transferUncertain: e.transferUncertain === true,
     inFlight: e.inFlight === true,
+    inFlightSince: String(e.inFlightSince ?? ''),
     message: String(e.message ?? ''),
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
@@ -403,9 +411,12 @@ const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
  */
 export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
   if (!p.inFlight) return false;
-  const created = Date.parse(p.createdAt);
-  if (!Number.isFinite(created)) return false;
-  return asOf - created <= CLAIM_ORPHAN_GRACE_MS;
+  // Measured from the moment the transfer was issued. Falling back to createdAt keeps rows written
+  // before this field existed readable, and an unparseable value counts as in flight rather than
+  // settled, because the failure that matters here is declaring a live transfer finished.
+  const since = Date.parse(p.inFlightSince || p.createdAt);
+  if (!Number.isFinite(since)) return true;
+  return asOf - since <= CLAIM_ORPHAN_GRACE_MS;
 }
 
 export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {

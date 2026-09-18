@@ -72,13 +72,23 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       // unknown). Anything that is not an ApiError is the browser losing the connection, and by
       // then the server may already have sent the transfer, so it is unknown in exactly the same
       // way. Both must end the dialog rather than leave a populated form and a live button.
+      // Classify by what the status can only mean, not by listing the failures we thought of.
+      // Singling out 502 as the unknown case was backwards: a completed transfer can end in a 500
+      // from a failed cleanup write, or a 504 from the edge giving up while RIPE was still
+      // working, and each of those left the form live with the key in it. Only statuses the server
+      // cannot reach after sending a transfer keep the form open; everything else, including
+      // anything that is not an ApiError at all, ends the dialog.
+      const REFUSED_BEFORE_SENDING = [400, 401, 403, 404, 409, 429];
       const serverAnswered = err instanceof ApiError;
-      const outcomeUnknown = !serverAnswered || (err as ApiError).status === 502;
-      if (method === 'api' && outcomeUnknown) {
+      const refusedBeforeSending = serverAnswered && REFUSED_BEFORE_SENDING.includes((err as ApiError).status);
+      if (method === 'api' && !refusedBeforeSending) {
         setApiKey('');
         setError(serverAnswered ? message : 'The connection was lost before we got an answer.');
         setStep('api-unknown');
       } else {
+        // A refusal means nothing moved and the donor can correct and retry, but the key is
+        // dropped even so: a populated field beside a live button is how a second transfer starts.
+        if (method === 'api') setApiKey('');
         setError(message);
       }
     } finally {
@@ -116,7 +126,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <form onSubmit={submit}>
               <div className="field">
                 <label htmlFor="amount">Amount</label>
-                <input id="amount" type="number" min={1} max={project.maxPledge} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                <input id="amount" type="number" min={1} max={project.maxPledge} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} disabled={submitting} required />
                 <span className="hint">
                   {project.remaining > 0
                     ? `This project still needs ${fmt(project.remaining)} credits to reach its goal. `
