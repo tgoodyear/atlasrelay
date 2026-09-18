@@ -126,6 +126,10 @@ app.http('pledges-create', {
        * `throw await rollback(...)` so that the exit is visible at the call site. Only safe while
        * no credits have moved.
        */
+      // Set by rollback when it could not withdraw the row because somebody else had already acted
+      // on it. Only the manual path can reach that: an API row is not actionable by anyone until
+      // this request finishes with it.
+      let rollbackFoundConflict = false;
       const rollback = async (err: HttpError): Promise<HttpError> => {
         // Best effort, every step. Every path that reaches here is one where nothing moved: RIPE
         // declined, or the request gave up before sending. The donor's useful answer is that original
@@ -144,6 +148,7 @@ app.http('pledges-create', {
           withdrawn = true;
         } catch (cleanupErr) {
           const changed = cleanupErr instanceof RestError && cleanupErr.statusCode === 412;
+          if (changed) rollbackFoundConflict = true;
           console.error(
             changed
               ? 'Did not withdraw a pledge: somebody had already acted on it'
@@ -275,9 +280,11 @@ app.http('pledges-create', {
             // RIPE read the request and declined, so this is a definite no-send.
             throw await rollback(new HttpError(err.status, err.message, NOT_SENT));
           }
-          // Park the pledge exactly where a manual one waits after the donor says they have sent it:
-          // the owner confirms it if the credits arrive, the donor cancels it if they never do. It
-          // keeps the slot and stays on both dashboards until somebody settles it.
+          // Park the pledge at `sent`, where a manual one waits after the donor says they have sent
+          // it. It keeps the slot and stays on both dashboards until the owner settles it: they
+          // confirm if the credits arrived and cancel if they never did. Only they, for an API
+          // pledge -- cancelling frees the donor's slot, and if the transfer did go through the
+          // donor's next pledge would send the same credits again.
           pledge.status = 'sent';
           pledge.inFlight = false;
           pledge.transferUncertain = true;
@@ -299,8 +306,13 @@ app.http('pledges-create', {
             // safe direction: it sends the donor to tell the researcher, which is harmless if a row
             // did exist and necessary if it did not.
             if (!recorded) {
+              // Any surviving row counts, not only one that reached `sent`. createPledge succeeded
+              // long before this, so a failed transition leaves the earlier row rather than no row,
+              // and the question this answers is whether the researcher has something on their
+              // dashboard to settle -- which they do. Requiring `sent` reported "no pledge exists"
+              // over a pledge the owner could see.
               const stored = await getPledge(id, pledge.id).catch(() => null);
-              if (stored && stored.status === 'sent') recorded = true;
+              if (stored) recorded = true;
             }
             // If the row was updated but the totals were not, nothing revisits a project whose
             // cached pending is zero, so mark it for the refreshers to pick up.
@@ -435,7 +447,16 @@ app.http('pledges-create', {
           // and the right answer is to leave their row alone. The slot goes back only if the
           // withdrawal actually landed: releasing it after a failed cancel leaves a live pledge
           // reserving capacity with no slot behind it, and the same donor could then open a second.
-          throw await rollback(new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.'));
+          const failure = await rollback(new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.'));
+          // A 412 means somebody moved this row while the recipient was being looked up, and on a
+          // manual pledge the only people who can are the donor and the owner, marking it sent or
+          // confirmed. The row therefore survives saying a transfer happened, and telling the donor
+          // nothing was sent would invite them to make that transfer a second time by hand. Say
+          // what is true instead, and let the outer marker stay off it.
+          if (rollbackFoundConflict) {
+            throw new HttpError(409, 'This pledge was changed while we were looking up where to send the credits, so it was left as it is. Open it on your dashboard to see its current state before sending anything.', { transfer: 'unknown' });
+          }
+          throw failure;
         }
       }
 

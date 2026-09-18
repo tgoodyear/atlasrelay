@@ -26,8 +26,9 @@ export const NOT_SENT = { transfer: 'not-sent' as const };
  * exists: with no marker the browser shows the outcome-unknown screen, so a storage rejection on
  * the way to a transfer told the donor to go and check their RIPE account before sending again,
  * over a request that never reached RIPE. It becomes a 500 that says so instead. The original is
- * returned for the caller to log, because its message is not safe to publish: unknown errors can
- * carry request bodies, and a request body here contains an API key.
+ * not returned and not quoted: its message is unsafe to publish, because an unknown error can carry
+ * the request body and a request body here contains an API key. Callers that want it in the log
+ * must do that themselves, before calling this, and through describeErrorForLog.
  */
 export function markNotSent(err: unknown): unknown {
   if (!(err instanceof HttpError)) return new HttpError(500, 'Something went wrong before anything was sent, so no credits moved. Please try again.', NOT_SENT);
