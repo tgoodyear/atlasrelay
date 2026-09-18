@@ -270,7 +270,7 @@ app.http('pledges-create', {
         const txn = await findTransferTransaction(key, amount, startedAt);
         if (txn) {
           pledge.transactionId = String(txn.id);
-          pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/${txn.id}/`;
+          pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
         }
       } catch (lookupErr) {
         // No reference beats failing a transfer that already happened, but it is worth a line in
