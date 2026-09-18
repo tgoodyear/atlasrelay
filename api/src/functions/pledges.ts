@@ -263,7 +263,11 @@ app.http('pledges-create', {
           // nothing here to roll back and nothing to send. Rolling back would overwrite the thing
           // the guard just protected.
           if (markErr instanceof RestError && markErr.statusCode === 412) {
-            throw new HttpError(409, 'This pledge was settled while the transfer was being set up, so nothing was sent. Reload to see where it stands.', NOT_SENT);
+            // Nothing was sent, but do not say not-sent: that is the marker the form reads as
+            // "correct it and try again", and it would let the donor start a second API transfer
+            // against a pledge somebody has just marked sent or confirmed. What they need is to
+            // look at the row first, which is what the unknown outcome asks for.
+            throw new HttpError(409, 'This pledge was settled while the transfer was being set up, so nothing was sent. Open it on your dashboard before sending anything.', { transfer: 'unknown' });
           }
           console.error('Could not record the transfer start marker:', describeErrorForLog(markErr));
           // Any other failure is ambiguous: the write may have been applied and only its answer
@@ -474,7 +478,15 @@ app.http('pledges-create', {
           // nothing was sent would invite them to make that transfer a second time by hand. Say
           // what is true instead, and let the outer marker stay off it.
           if (rollbackFoundConflict) {
-            throw new HttpError(409, 'This pledge was changed while we were looking up where to send the credits, so it was left as it is. Open it on your dashboard to see its current state before sending anything.', { transfer: 'unknown' });
+            // Not every concurrent change is ambiguous. If the other actor cancelled the row, no
+            // transfer happened, the claim went back with it, and a retry is exactly what the donor
+            // should be offered -- sending them to a terminal screen would block a safe one. Only a
+            // row now marked sent or confirmed means somebody believes credits have moved, and that
+            // is the case worth stopping. A read that fails keeps the stricter answer.
+            const settled = await getPledge(id, pledge.id).catch(() => null);
+            if (!settled || settled.status === 'sent' || settled.status === 'confirmed') {
+              throw new HttpError(409, 'This pledge was changed while we were looking up where to send the credits, so it was left as it is. Open it on your dashboard to see its current state before sending anything.', { transfer: 'unknown' });
+            }
           }
           throw failure;
         }
