@@ -508,6 +508,13 @@ export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   // once must carry it forward. Not doing so was worse than having no guard at all: a later
   // conditional write still held the version from the create, so it failed with 412 every single
   // time, and the cancellation it was guarding simply never happened.
+  //
+  // Both calls resolve to a response carrying the new etag. Worth stating, because review has
+  // twice read this as returning void: that is TableTransaction.updateEntity, the batch builder,
+  // which queues an operation and has nothing to return. TableClient.updateEntity resolves to
+  // TableUpdateEntityHeaders. Verified against the service rather than the types, since the field
+  // is declared optional: the etag comes back populated, differs on every write, and the previous
+  // one is rejected with 412 afterwards.
   const res = ifMatch
     ? await t.updateEntity(entity as TableEntity, 'Replace', { etag: ifMatch })
     : await t.upsertEntity(entity, 'Replace');
