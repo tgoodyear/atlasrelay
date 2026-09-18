@@ -26,7 +26,7 @@ app.http('my', {
     // keeps its cached totals for this request and is picked up on the next one.
     const checked = (x: Project): string => x.totalsCheckedAt ?? '';
     const stale = projects
-      .filter((x) => x.creditsPending > 0)
+      .filter((x) => x.creditsPending > 0 || x.totalsDirty)
       .sort((a, b) => (checked(a) < checked(b) ? -1 : checked(a) > checked(b) ? 1 : 0))
       .slice(0, DASHBOARD_REFRESH_LIMIT);
     const live = new Map<string, { confirmed: number; pending: number }>();
@@ -36,7 +36,7 @@ app.http('my', {
         live.set(x.id, t);
         await patchProject(
           x.id,
-          { creditsConfirmed: t.confirmed, creditsPending: t.pending, totalsCheckedAt: now(), updatedAt: x.updatedAt },
+          { creditsConfirmed: t.confirmed, creditsPending: t.pending, totalsCheckedAt: now(), totalsDirty: false, updatedAt: x.updatedAt },
           x.etag,
         ).catch(() => undefined);
       }),

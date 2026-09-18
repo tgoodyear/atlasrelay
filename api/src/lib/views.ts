@@ -40,11 +40,13 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
   //   moderationClosed an operator's note about the row, not something the project says of itself.
   //   etag             the storage row version, used for conditional writes.
   //   totalsCheckedAt  maintenance bookkeeping for the listing's refresh rotation.
+  //   totalsDirty      maintenance bookkeeping: totals that could not be written and need redoing.
   const {
     ownerId: _ownerId,
     moderationClosed: _moderationClosed,
     etag: _etag,
     totalsCheckedAt: _totalsCheckedAt,
+    totalsDirty: _totalsDirty,
     ...rest
   } = p;
   return {
