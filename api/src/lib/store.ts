@@ -286,6 +286,15 @@ export async function getPledge(projectId: string, id: string): Promise<Pledge |
 const CLAIMS_TABLE = 'claims' as const;
 
 /**
+ * How long a slot with no pledge row behind it is still presumed to be a request in flight rather
+ * than an orphan. The gap it covers is one table write plus, at worst, one RIPE call bounded by a
+ * 20-second timeout. Two minutes is far wider than that, and the cost of being wrong in this
+ * direction is only that a donor whose request died at exactly the wrong moment waits a little
+ * before retrying, against a double transfer in the other.
+ */
+const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
+
+/**
  * Take the slot. Returns false when another live pledge already holds it.
  *
  * A slot is reclaimable when the pledge behind it is no longer live, or when it has outlived the
@@ -302,8 +311,16 @@ const CLAIMS_TABLE = 'claims' as const;
 export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
   const heldSince = Date.parse(heldCreatedAt);
   if (!Number.isFinite(heldSince)) return true;
-  if (heldSince < asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000) return true;
-  if (!pledge) return true;
+  const age = asOf - heldSince;
+  if (age > PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000) return true;
+  if (!pledge) {
+    // A slot with no pledge behind it is almost always a request still in flight: the slot is
+    // taken first, and only then is the row written. Calling that free would hand a rival the
+    // slot inside that gap, and both would go on to transfer, which is the exact failure the
+    // slot exists to prevent. So a pledgeless slot counts as held until enough time has passed
+    // that no request could still be inside the window.
+    return age > CLAIM_ORPHAN_GRACE_MS;
+  }
   return pledge.status !== 'pledged' && pledge.status !== 'sent';
 }
 

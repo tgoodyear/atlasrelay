@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { assertKeyFormat, AtlasRefused, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
+const KEY = '12345678-1234-1234-1234-123456789abc';
+
+async function withFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Promise<T> {
+  const real = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
 test('assertKeyFormat only accepts UUIDs', () => {
   assert.equal(assertKeyFormat(' 12345678-1234-1234-1234-123456789abc '), '12345678-1234-1234-1234-123456789abc');
   assert.throws(() => assertKeyFormat('not-a-key'), HttpError);
@@ -72,4 +84,23 @@ test('a transfer posts exactly once, whatever the response', async () => {
   }
   assert.equal(paths.length, 1);
   assert.match(paths[0], /\/credits\/transfers\/$/);
+});
+
+test('a transaction from before the transfer is never taken as its reference', async () => {
+  // A same-sized transfer the donor made moments earlier is exactly the row a backwards-looking
+  // window would latch onto, and recording it would attach the wrong proof to this pledge.
+  const since = Date.parse('2026-09-18T12:00:00Z');
+  const earlier = { id: 9, type: 'admin', amount: -500, date: '2026-09-18T11:57:00Z' };
+  const res = await withFetch(
+    async () => new Response(JSON.stringify({ results: [earlier] }), { status: 200 }),
+    () => findTransferTransaction(KEY, 500, since),
+  );
+  assert.equal(res, null);
+
+  // An unreadable timestamp is no evidence either, so it is rejected rather than accepted.
+  const undated = await withFetch(
+    async () => new Response(JSON.stringify({ results: [{ ...earlier, date: 'not a date' }] }), { status: 200 }),
+    () => findTransferTransaction(KEY, 500, since),
+  );
+  assert.equal(undated, null);
 });

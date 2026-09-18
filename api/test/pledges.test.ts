@@ -130,3 +130,11 @@ test('a pledge slot is reclaimable once its pledge settles, or once it goes stal
   // Nor is one with an unreadable timestamp.
   assert.equal(claimIsReclaimable('', pledge('pledged'), asOf), true);
 });
+
+test('a slot whose pledge row is not written yet stays held', () => {
+  // The slot is taken before the pledge row is written. If that gap read as "free", a rival could
+  // take the slot mid-flight and both requests would transfer, which is what the slot prevents.
+  const asOf = Date.parse('2026-09-18T12:00:00.000Z');
+  assert.equal(claimIsReclaimable(new Date(asOf - 1_000).toISOString(), null, asOf), false);
+  assert.equal(claimIsReclaimable(new Date(asOf - 5 * 60 * 1000).toISOString(), null, asOf), true);
+});
