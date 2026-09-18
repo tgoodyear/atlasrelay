@@ -121,10 +121,14 @@ async function parseBody(res: Response): Promise<unknown> {
   try {
     text = await res.text();
   } catch {
-    // The status line arrived but the connection died before the body did. For a transfer that is
-    // the same situation as a timeout: RIPE may already have moved the credits. Raising the same
-    // error the timeout raises keeps the caller's one question ("did RIPE answer?") answerable,
-    // instead of letting a raw TypeError escape and be mistaken for a refusal.
+    // A non-2xx status is already a complete answer: RIPE refused, and nothing moved. Losing the
+    // body of a refusal costs us only the explanatory detail, so report no body and let the
+    // !res.ok branch raise the refusal it was always going to raise.
+    if (!res.ok) return null;
+    // On a 2xx it is the opposite. The status said yes but the body never arrived, so we cannot
+    // know what completed. That is the same situation as a timeout, and raising the same error
+    // keeps the caller's one question ("did RIPE answer?") answerable, instead of letting a raw
+    // TypeError escape and be mistaken for a refusal.
     throw new AtlasUnreachable('RIPE Atlas closed the connection before its reply was complete');
   }
   if (!text) return null;

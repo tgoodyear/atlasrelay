@@ -171,3 +171,23 @@ test('a transfer posts exactly once, whatever the response', async () => {
   assert.equal(paths.length, 1);
   assert.match(paths[0], /\/credits\/transfers\/$/);
 });
+
+test('a truncated refusal is still a refusal, not an unknown outcome', async () => {
+  // RIPE answered with a 4xx and the body was lost. The status is a complete answer on its own:
+  // nothing moved. Parking this as uncertain would strand a pledge that should simply be cancelled.
+  const err = await withFetch(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'));
+          },
+        }),
+        { status: 400 },
+      ),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.equal(err instanceof AtlasUnreachable, false, 'a refusal must not read as unknown');
+  assert.ok(err instanceof HttpError);
+  assert.equal(err.status, 400);
+});
