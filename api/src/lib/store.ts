@@ -221,6 +221,25 @@ export async function saveProject(p: Project): Promise<Project> {
   return updated;
 }
 
+/**
+ * Change named fields on a project, leaving every other column as it is.
+ *
+ * saveProject replaces the whole entity from whatever snapshot the caller holds, so a write built
+ * on a stale read silently reverts anything that changed in between: a pledge recompute's credit
+ * totals, or an owner's edit. Where a handler only means to change a field or two, this merges.
+ * tags is stored comma-joined, exactly as fromProject writes it, because a raw array would either
+ * be rejected by Table Storage or persisted in a shape nothing can read back.
+ */
+export async function patchProject(id: string, patch: Partial<Project>): Promise<Project> {
+  const { tags, ...rest } = patch;
+  const entity: Record<string, unknown> = { partitionKey: PROJECTS_PK, rowKey: id, ...rest, updatedAt: now() };
+  if (tags !== undefined) entity.tags = tags.join(',');
+  await (await table('projects')).updateEntity(entity as TableEntity, 'Merge');
+  const after = await getProject(id);
+  if (!after) notFound();
+  return after;
+}
+
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
   const out: Project[] = [];
   for await (const e of (await table('projects')).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId}` } })) {
@@ -425,7 +444,7 @@ export async function recomputeProjectTotals(projectId: string): Promise<Project
   const project = await getProject(projectId);
   if (!project) notFound();
   const t = totals(await listPledges(projectId));
-  return saveProject({ ...project, creditsConfirmed: t.confirmed, creditsPending: t.pending });
+  return patchProject(projectId, { creditsConfirmed: t.confirmed, creditsPending: t.pending });
 }
 
 export { now };
