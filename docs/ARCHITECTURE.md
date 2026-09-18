@@ -129,7 +129,7 @@ What happens next depends on a single question: did RIPE answer?
 | --- | --- | --- |
 | 201 | The credits moved | Pledge becomes `confirmed`; the transaction id is looked up and stored |
 | 4xx or 429 from RIPE | RIPE refused, nothing moved | Pledge is cancelled, the donor sees why and can try again |
-| Timeout or network failure | Unknown | Pledge is parked at `sent` and flagged uncertain |
+| Timeout, network failure, or a 5xx | Unknown | Pledge is parked at `sent` and flagged uncertain |
 
 An uncertain pledge takes the same path a manual one does: it sits on both dashboards until the
 requester confirms the credits arrived or the donor cancels it. Both parties see "Sent, outcome

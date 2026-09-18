@@ -85,7 +85,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       const refusedBeforeSending = serverAnswered && REFUSED_BEFORE_SENDING.includes((err as ApiError).status);
       if (method === 'api' && !refusedBeforeSending) {
         setApiKey('');
-        setError(serverAnswered ? message : 'The connection was lost before we got an answer.');
+        setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');
         setStep('api-unknown');
       } else {
         // A refusal means nothing moved and the donor can correct and retry, but the key is
@@ -223,9 +223,10 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <>
               <div className="alert alert-warn">{error}</div>
               <p>
-                We cannot tell you whether the {fmt(n)} credits left your account, because we never got
-                an answer back. The transfer may have gone through. Check your transaction log before
-                doing anything else.
+                We cannot tell you whether the {fmt(n)} credits left your account. RIPE Atlas either
+                never answered, or answered in a way that does not say whether it completed the
+                transfer. It may have gone through. Check your transaction log before doing anything
+                else.
               </p>
               <ol className="steps">
                 <li>

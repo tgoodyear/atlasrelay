@@ -107,7 +107,7 @@ app.http('pledges-create', {
     // The row is written before any credits move. Table Storage has no transaction that can span
     // a local write and a call to RIPE, so the order decides which way a failure hurts. An orphan
     // row is a pledge someone cancels; an untracked transfer is credits nobody can account for.
-    await createPledge(pledge);
+    pledge.etag = (await createPledge(pledge)).etag;
 
     /**
      * Release the reservation and hand back the error to throw. Callers write
@@ -123,10 +123,21 @@ app.http('pledges-create', {
       // error message is not.
       let withdrawn = false;
       try {
-        await savePledge({ ...pledge, status: 'cancelled', inFlight: false });
+        // Conditional on the row still being the one we created. A manual pledge is actionable the
+        // instant it is written, so the owner or the donor may have moved it to sent or confirmed
+        // while the capacity check above was running, and an unconditional replace would overwrite
+        // that with cancelled and then release its slot, losing a transfer somebody had already
+        // made. A 412 means exactly that happened, and the right answer is to leave their row be.
+        await savePledge({ ...pledge, status: 'cancelled', inFlight: false }, pledge.etag);
         withdrawn = true;
       } catch (cleanupErr) {
-        console.error('Could not withdraw a pledge after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+        const changed = cleanupErr instanceof RestError && cleanupErr.statusCode === 412;
+        console.error(
+          changed
+            ? 'Did not withdraw a pledge after a refused transfer: somebody had already acted on it'
+            : 'Could not withdraw a pledge after a refused transfer:',
+          cleanupErr instanceof Error ? cleanupErr.message : cleanupErr,
+        );
       }
       try {
         await recomputeProjectTotals(id);
@@ -169,6 +180,9 @@ app.http('pledges-create', {
 
     let balanceWarning: string | undefined;
     let recordWarning: string | undefined;
+    // Set when the post-transfer write did not commit, so the response can describe the row that
+    // actually exists rather than the one we intended to write.
+    let apiSaveFailed = false;
     if (method === 'api') {
       const key = apiKey;
       // Best-effort balance check. A transfer-only key may lack the read permission; that is fine.
@@ -288,6 +302,7 @@ app.http('pledges-create', {
         saved = true;
       } catch (err) {
         console.error('Transfer completed but the pledge could not be updated:', err instanceof Error ? err.message : err);
+        apiSaveFailed = true;
         recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive.';
       }
       try {
@@ -314,9 +329,15 @@ app.http('pledges-create', {
       }
     }
 
+    // If the confirmation write failed, the stored row is still the pre-transfer one, and the
+    // response must not claim otherwise. The credits did move, which the warning says, but
+    // reporting `confirmed` here would have the dialog and the dashboard disagree about the same
+    // pledge, and would tell the donor a record exists that nobody can find.
+    const reported = apiSaveFailed ? { ...pledge, status: 'pledged' as const, inFlight: false } : pledge;
+
     return json(
       {
-        pledge: privatePledge(pledge),
+        pledge: privatePledge(reported),
         project: publicProject(updatedProject),
         // Only a donor with a live manual pledge sees where to send credits. The owner can see
         // exactly who that is on their dashboard, because the pledge carries the donor's name.
