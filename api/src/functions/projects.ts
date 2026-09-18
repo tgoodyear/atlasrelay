@@ -190,14 +190,21 @@ app.http('projects-update', {
     const fields = readProjectFields(body, false);
     const status = oneOf(body, 'status', ['open', 'closed'] as const);
 
-    // Reopening is another way to end up with more open projects than the cap allows: close one,
-    // post a replacement, then reopen the first. The limit has to hold on this path too.
+    // Reopening has to clear every bar that posting clears, and one more besides.
     if (status === 'open' && project.status !== 'open') {
       // A takedown has to survive the owner. Without this, closing a reported project is undone by
       // its owner from any stale edit form, and the remedy in SECURITY.md is not a remedy at all.
       if (project.moderationClosed) {
         throw new HttpError(403, 'This project was closed by the site and cannot be reopened. Contact the maintainer if you think that was a mistake.');
       }
+      // Deleting a profile closes its projects but leaves them on the site, and signing in again
+      // recreates the profile with no RIPE address. Without this an owner could reopen a project
+      // that lists publicly and fails every pledge, because there would be no recipient to name.
+      const owner = await getUser(p.userId);
+      if (!owner?.atlasEmail) {
+        throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before reopening a project; donors cannot send credits without it');
+      }
+      // And reopening is another way past the cap: close one, post a replacement, reopen the first.
       const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open').length;
       if (open >= MAX_OPEN_PROJECTS_PER_USER) {
         throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before reopening this.`);

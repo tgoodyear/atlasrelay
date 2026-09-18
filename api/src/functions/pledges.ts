@@ -172,32 +172,35 @@ app.http('pledges-create', {
       try {
         await transferCredits(key, owner.atlasEmail, amount);
       } catch (err) {
-        if (err instanceof AtlasUnreachable) {
-          // RIPE may or may not have taken the credits, and there is no way to ask without the
-          // donor's key. Park the pledge exactly where a manual one waits after the donor says
-          // they have sent it: the owner confirms it if the credits arrive, the donor cancels it
-          // if they never do. It stays on both dashboards until somebody settles it.
-          pledge.status = 'sent';
-          pledge.inFlight = false;
-          pledge.transferUncertain = true;
-          // transferredAt records the moment our server watched RIPE accept the transfer, and
-          // here nothing was watched. Leaving it empty keeps that field honest; the status and
-          // the uncertain flag are what describe this pledge.
-
-          try {
-            await savePledge(pledge);
-            await recomputeProjectTotals(id);
-          } catch (saveErr) {
-            // The warning below matters more than the row's exact status, so say it either way.
-            console.error('Could not park an uncertain transfer:', saveErr instanceof Error ? saveErr.message : saveErr);
-          }
-          throw new HttpError(
-            502,
-            `${err.message}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. The pledge is recorded and waiting for the project owner to confirm it.`,
-          );
+        // Only a refusal frees the slot. AtlasRefused means RIPE read the request and declined,
+        // so nothing moved and the donor should be free to correct it and retry at once.
+        // Everything else, a timeout, a dropped connection, a 5xx, or anything unexpected escaping
+        // from below, says nothing about whether the credits moved. The default has to be "we do
+        // not know": treating an unrecognised error as a refusal would free the slot and invite a
+        // retry that sends the credits twice.
+        if (err instanceof AtlasRefused) {
+          throw await rollback(err);
         }
-        // Everything else is RIPE answering with a refusal, which means no credits moved.
-        throw await rollback(err instanceof HttpError ? err : new HttpError(400, 'RIPE Atlas rejected the transfer'));
+        // Park the pledge exactly where a manual one waits after the donor says they have sent it:
+        // the owner confirms it if the credits arrive, the donor cancels it if they never do. It
+        // keeps the slot and stays on both dashboards until somebody settles it.
+        pledge.status = 'sent';
+        pledge.inFlight = false;
+        pledge.transferUncertain = true;
+        // transferredAt records the moment our server watched RIPE accept the transfer, and here
+        // nothing was watched. Leaving it empty keeps that field honest; the status and the
+        // uncertain flag are what describe this pledge.
+        try {
+          await savePledge(pledge);
+          await recomputeProjectTotals(id);
+        } catch (saveErr) {
+          // The warning below matters more than the row's exact status, so say it either way.
+          console.error('Could not park an uncertain transfer:', saveErr instanceof Error ? saveErr.message : saveErr);
+        }
+        throw new HttpError(
+          502,
+          `${err instanceof Error ? err.message : 'RIPE Atlas did not answer'}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. The pledge is recorded and waiting for the project owner to confirm it.`,
+        )
       }
 
       // Past this point the credits have moved. Nothing below may throw, because there is no
