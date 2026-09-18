@@ -156,6 +156,9 @@ app.http('pledges-create', {
           await recomputeProjectTotals(id);
         } catch (saveErr) {
           console.error('Could not record a transfer of unknown outcome:', saveErr instanceof Error ? saveErr.message : saveErr);
+          // The row exists but the totals do not know about it, and nothing revisits a project
+          // whose cached pending is zero. Mark it so the refreshers pick it up.
+          if (recorded) await patchProject(id, { totalsDirty: true }).catch(() => undefined);
         }
         // Say which of the two situations this is. Claiming a pledge is recorded when the write
         // failed sends the donor looking for something that is not there, and leaves them with no
@@ -260,6 +263,21 @@ app.http('pledges-create', {
       overshootWarning = `This transfer completed, but concurrent pledges have taken the project ${(reserved - ceiling).toLocaleString('en-US')} credits beyond its ceiling.`;
     }
 
+    // A manual pledge is only useful if it can name a recipient, so resolve that before answering.
+    // The owner's profile can be deleted while this request is running, and returning a 201 with
+    // no address would leave the donor holding a slot, a pledge they cannot act on, and
+    // instructions with a blank in them. Withdraw instead and say so.
+    let recipientEmail: string | undefined;
+    if (method === 'manual') {
+      recipientEmail = (await getUser(project.ownerId))?.atlasEmail || undefined;
+      if (!recipientEmail) {
+        await savePledge({ ...pledge, status: 'cancelled' }).catch(() => undefined);
+        await recomputeProjectTotals(id).catch(() => undefined);
+        await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
+        throw new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.');
+      }
+    }
+
     return json(
       {
         pledge: privatePledge(pledge),
@@ -269,7 +287,7 @@ app.http('pledges-create', {
         // Re-read rather than serving the snapshot taken at the top of this handler. A concurrent
         // profile deletion can have completed since, and been told the address was removed; this
         // response is the disclosure, so it has to reflect the state at the moment it is sent.
-        recipientEmail: method === 'manual' ? (await getUser(project.ownerId))?.atlasEmail || undefined : undefined,
+        recipientEmail,
         transferUrl: 'https://atlas.ripe.net/credits/transfer/',
         warning: [balanceWarning, overshootWarning, recordWarning].filter(Boolean).join(' ') || undefined,
       },
@@ -310,6 +328,20 @@ app.http('pledges-update', {
     };
     const role = isOwner ? 'owner' : 'donor';
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
+
+    // An API pledge only reaches 'sent' by one route: the transfer was issued and RIPE gave no
+    // usable answer. It is parked there, holding the donor's slot, precisely so a blind retry
+    // cannot happen. Letting the donor cancel it undoes that, because cancelling frees the slot,
+    // and if RIPE did complete the transfer the next pledge sends the credits a second time. The
+    // donor can read their own transaction log, but acting on it here has a side effect they
+    // cannot see. Only the owner settles these: they are the one who can say whether the credits
+    // arrived, and either answer they give is safe.
+    if (!isOwner && pledge.method === 'api' && pledge.status === 'sent' && status === 'cancelled') {
+      throw new HttpError(
+        409,
+        'This transfer was sent to RIPE Atlas and we never got a usable answer, so only the project owner can close it. Check your transaction log, then tell them what you find.',
+      );
+    }
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
 
     // An expired reservation no longer holds capacity, and that capacity may already have gone to
