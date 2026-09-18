@@ -325,9 +325,10 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
               <div className="alert alert-warn">{error}</div>
               <p>
                 Somebody acted on this pledge while you were sending it, so we cannot say where it
-                stands. Open it on your dashboard and look before you send anything: if it is already
-                marked sent or confirmed, the credits are accounted for and sending again would
-                transfer them twice.
+                stands. Open it on your dashboard and look before you send anything. A pledge marked
+                confirmed means the researcher has the credits. One marked sent means a transfer was
+                reported but nobody has confirmed it arrived, which still has to be settled with them
+                rather than sent again.
               </p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={onClose}>Done</button>

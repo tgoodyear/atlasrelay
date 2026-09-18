@@ -127,8 +127,10 @@ app.http('pledges-create', {
        * no credits have moved.
        */
       // Set by rollback when it could not withdraw the row because somebody else had already acted
-      // on it. Only the manual path can reach that: an API row is not actionable by anyone until
-      // this request finishes with it.
+      // on it. Reachable from every path that rolls back, not only the manual one: until
+      // inFlightSince is stored, pledgeInFlight measures from createdAt, so a setup slow enough to
+      // outlast that window leaves an API row actionable while the capacity settlement, the balance
+      // check and the owner re-read are still running.
       let rollbackFoundConflict = false;
       const rollback = async (err: HttpError): Promise<HttpError> => {
         // Best effort, every step. Every path that reaches here is one where nothing moved: RIPE
@@ -171,6 +173,23 @@ app.http('pledges-create', {
             await releasePledgeClaim(id, donor.id, pledge.id);
           } catch (cleanupErr) {
             console.error('Could not release a pledge slot:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+          }
+        }
+        // Whoever else acted decides what this request may offer, so answer it here rather than at
+        // each call site: every caller wants the same thing, and the one that had this inline was
+        // the only one of five that did. A cancellation is unambiguous -- nothing was sent, the
+        // claim went back with it, and the donor should be free to try again, which is what the
+        // original error already tells them. A row now marked sent or confirmed means somebody
+        // believes credits have moved, and handing back a retryable refusal there is how the same
+        // credits get sent twice. A read that fails keeps the stricter answer.
+        if (rollbackFoundConflict) {
+          const settled = await getPledge(id, pledge.id).catch(() => null);
+          if (!settled || settled.status === 'sent' || settled.status === 'confirmed') {
+            return new HttpError(
+              409,
+              'Somebody acted on this pledge while this request was running, and it may already record a transfer. Open it on your dashboard before sending anything.',
+              { transfer: 'unknown' },
+            );
           }
         }
         return err;
@@ -272,7 +291,7 @@ app.http('pledges-create', {
             if (settled && settled.status === 'cancelled') {
               throw new HttpError(409, 'This pledge was cancelled while the transfer was being set up, so nothing was sent. You can start a new one.', NOT_SENT);
             }
-            throw new HttpError(409, 'This pledge was settled while the transfer was being set up, so nothing was sent. Open it on your dashboard before sending anything.', { transfer: 'unknown' });
+            throw new HttpError(409, 'This request sent nothing, but somebody else acted on this pledge while it was being set up, so it may already record a transfer. Open it on your dashboard before sending anything.', { transfer: 'unknown' });
           }
           console.error('Could not record the transfer start marker:', describeErrorForLog(markErr));
           // Any other failure is ambiguous: the write may have been applied and only its answer
@@ -477,24 +496,8 @@ app.http('pledges-create', {
           // and the right answer is to leave their row alone. The slot goes back only if the
           // withdrawal actually landed: releasing it after a failed cancel leaves a live pledge
           // reserving capacity with no slot behind it, and the same donor could then open a second.
-          const failure = await rollback(new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.'));
-          // A 412 means somebody moved this row while the recipient was being looked up, and on a
-          // manual pledge the only people who can are the donor and the owner, marking it sent or
-          // confirmed. The row therefore survives saying a transfer happened, and telling the donor
-          // nothing was sent would invite them to make that transfer a second time by hand. Say
-          // what is true instead, and let the outer marker stay off it.
-          if (rollbackFoundConflict) {
-            // Not every concurrent change is ambiguous. If the other actor cancelled the row, no
-            // transfer happened, the claim went back with it, and a retry is exactly what the donor
-            // should be offered -- sending them to a terminal screen would block a safe one. Only a
-            // row now marked sent or confirmed means somebody believes credits have moved, and that
-            // is the case worth stopping. A read that fails keeps the stricter answer.
-            const settled = await getPledge(id, pledge.id).catch(() => null);
-            if (!settled || settled.status === 'sent' || settled.status === 'confirmed') {
-              throw new HttpError(409, 'This pledge was changed while we were looking up where to send the credits, so it was left as it is. Open it on your dashboard to see its current state before sending anything.', { transfer: 'unknown' });
-            }
-          }
-          throw failure;
+          // rollback answers the concurrent-change case itself, for every path that uses it.
+          throw await rollback(new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.'));
         }
       }
 

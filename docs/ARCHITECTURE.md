@@ -102,8 +102,9 @@ the partition after each change, so the project row never drifts.
      No transaction reference is attached: RIPE indexes the transaction well after
      accepting the transfer, so it cannot be read back inside the request, and the
      donor's own credit log shows it a minute or so later. If RIPE never answers, the pledge is left at
-     `sent` and flagged uncertain, keeps the donor's slot, and waits for a person to
-     settle it. The key lives only in the request scope, and the UI tells donors to
+     `sent` and flagged uncertain, keeps the donor's slot, and waits for the requester
+     to settle it -- though only for the 14-day reservation window, after which the
+     slot is reclaimed with nobody having settled anything, which is [#22](https://github.com/tgoodyear/internetresearch/issues/22). The key lives only in the request scope, and the UI tells donors to
      delete or disable it afterwards.
    - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
