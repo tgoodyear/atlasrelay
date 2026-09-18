@@ -45,6 +45,10 @@ export interface Pledge {
   createdAt: string;
   updatedAt: string;
   donorId?: string;
+  /** Whether this pledge's own donor may withdraw it. Present only on the private view, derived by the
+   *  server from the same rule the update handler enforces -- the page cannot compute it, because the
+   *  fields it turns on are deliberately not published. */
+  donorMayCancel?: boolean;
   transactionUrl?: string;
   transactionId?: string;
   transferredAt?: string;

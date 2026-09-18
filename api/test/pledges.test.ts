@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeErrorForLog, HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
-import { activePledgesBy, claimIsReclaimable, pledgeExpired, pledgeInFlight, pledgeUnresolved, totals } from '../src/lib/store';
+import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeUnresolved, totals } from '../src/lib/store';
+import { privatePledge, publicPledge } from '../src/lib/views';
 import type { Pledge } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
@@ -380,4 +381,49 @@ test('reordering the claim check left every other answer alone', () => {
   assert.equal(claimIsReclaimable(base.createdAt, null, fresh), false);
   // An unreadable timestamp still means reclaimable, whatever the row says.
   assert.equal(claimIsReclaimable('not a date', { ...base, status: 'pledged' }, fresh), true);
+});
+
+test('a claim whose own timestamp is unreadable still protects an unresolved pledge', () => {
+  // claimIsReclaimable has two clock-based exits, not one: the age check, and the unreadable-timestamp
+  // fallback above it. The first version of this fix guarded only the age check, so a malformed claim
+  // timestamp handed the slot away without ever looking at the pledge -- and a claim whose own createdAt is
+  // corrupt is the row least worth trusting a clock about.
+  assert.equal(claimIsReclaimable('not a date', unresolved(), LATER), false);
+  assert.equal(claimIsReclaimable('', unresolved(), LATER), false);
+  // An unreadable timestamp on anything else still reclaims, which is what it is for.
+  assert.equal(claimIsReclaimable('not a date', unresolved({ transferUncertain: false }), LATER), true);
+  assert.equal(claimIsReclaimable('not a date', null, LATER), true);
+});
+
+test('a row written before the in-flight marker existed is never treated as un-transferred', () => {
+  // An empty inFlightSince is not proof on its own: toPledge defaults every absent field, so a row written
+  // before that field existed also reads empty, and such a row may well have transferred. Admitting it to
+  // donor cancellation would release its claim and allow the credits to be sent a second time.
+  //
+  // Those rows predate inFlight as well, so they read false, while every API pledge written by current code
+  // is created with it true. Requiring true is what makes the empty marker mean what it says.
+  const legacy = unresolved({ status: 'pledged', transferUncertain: false, inFlight: false, inFlightSince: '' });
+  assert.equal(donorMayCancelApiPledge(legacy), false);
+
+  // A row this code wrote, whose transfer was never issued: the create landed and then the balance check or
+  // the recipient read failed. Its donor is otherwise stranded behind a pledge only the owner can clear.
+  const neverSent = unresolved({ status: 'pledged', transferUncertain: false, inFlight: true, inFlightSince: '' });
+  assert.equal(donorMayCancelApiPledge(neverSent), true);
+
+  // A row that did reach the POST keeps the owner-only rule, whatever else is true of it.
+  const reached = unresolved({ status: 'pledged', transferUncertain: false, inFlight: true, inFlightSince: '2026-09-01T00:00:00.000Z' });
+  assert.equal(donorMayCancelApiPledge(reached), false);
+  assert.equal(donorMayCancelApiPledge(unresolved({ status: 'sent' })), false);
+});
+
+test('the page is told who may cancel rather than working it out', () => {
+  // The rule turns on inFlight and inFlightSince, and neither is published. The project page guessed, and
+  // guessed wrong, so a donor's only route to an API pledge was a button that always returned 409.
+  const view = (over: Partial<Pledge>) => privatePledge(unresolved({ transferUncertain: false, ...over })) as { donorMayCancel: boolean };
+  assert.equal(view({ method: 'manual', status: 'sent' }).donorMayCancel, true);
+  assert.equal(view({ status: 'pledged', inFlight: true, inFlightSince: '' }).donorMayCancel, true);
+  assert.equal(view({ status: 'pledged', inFlight: true, inFlightSince: '2026-09-01T00:00:00.000Z' }).donorMayCancel, false);
+  assert.equal(view({ status: 'sent' }).donorMayCancel, false);
+  // Never published to people who are not party to the pledge.
+  assert.equal('donorMayCancel' in publicPledge(unresolved()), false);
 });

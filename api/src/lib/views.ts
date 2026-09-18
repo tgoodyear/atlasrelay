@@ -1,5 +1,5 @@
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal } from './pledging';
-import { Pledge, Project, User } from './store';
+import { Pledge, Project, User, donorMayCancelApiPledge } from './store';
 
 // Any '@' at all, not just a dotted domain: alice@localhost is still an address.
 const EMAIL_SHAPED = /@/;
@@ -114,6 +114,11 @@ export function privatePledge(p: Pledge) {
     transactionUrl: p.transactionUrl,
     transactionId: p.transactionId,
     transferredAt: p.transferredAt,
+    // Whether this pledge's own donor may withdraw it. Derived here from the same predicate the update
+    // handler enforces, because the page cannot work it out for itself: the rule turns on inFlight and
+    // inFlightSince, and neither is published. Without it the project page offered a Cancel button that
+    // always came back 409, which is how the donor learned the rule.
+    donorMayCancel: p.method === 'manual' || donorMayCancelApiPledge(p),
   };
 }
 

@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { describeErrorForLog, handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -157,7 +157,20 @@ app.http('pledges-create', {
             await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
             return err;
           }
-          // It landed and only the answer was lost. Fall through and withdraw it properly.
+          // It landed. But a stored row is not necessarily the row we wrote: between the create and this
+          // read, a manual pledge is actionable, so the donor or the owner may already have moved it on.
+          // Adopting its version and then saving our in-memory copy as cancelled would make the conditional
+          // write succeed and overwrite their settlement -- the guard passing precisely because we had just
+          // handed it the version it was meant to detect. Anything other than the row as created is somebody
+          // else's action, and this request has sent nothing, so leave it alone and say so.
+          if (stored.status !== 'pledged' || stored.transferUncertain || stored.transferredAt) {
+            return new HttpError(
+              409,
+              'Somebody acted on this pledge while it was being created, and it may already record a transfer. Open it on your dashboard before sending anything.',
+              { transfer: 'unknown' },
+            );
+          }
+          // The row as we wrote it, so only the answer was lost. Withdraw it properly.
           pledge.etag = stored.etag;
         }
         // Best effort, every step. Every path that reaches here is one where nothing moved: RIPE
@@ -666,7 +679,7 @@ app.http('pledges-update', {
     // rows exist because creating the pledge or checking the balance failed, and holding their donor to an
     // owner-only rule stranded them behind a pledge they could not clear and the owner had no reason to
     // look at. Rows that did reach the POST keep the rule.
-    if (role === 'donor' && status === 'cancelled' && pledge.method === 'api' && pledge.inFlightSince) {
+    if (role === 'donor' && status === 'cancelled' && pledge.method === 'api' && !donorMayCancelApiPledge(pledge)) {
       throw new HttpError(409, 'This transfer was sent through the API, so only the project owner can close it. If the credits never arrived, ask them to cancel it.');
     }
 

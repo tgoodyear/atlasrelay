@@ -129,17 +129,15 @@ export default function ProjectDetail() {
                             {isOwner && (
                               <button className="btn btn-sm" disabled={busy === p.id} onClick={() => updatePledge(p, 'confirmed')}>Confirm received</button>
                             )}
-                            {/* The owner may always cancel. A donor may not cancel their own API pledge
-                                once it is sitting at 'sent': that is a transfer RIPE never answered
-                                usefully, and cancelling frees the donor's slot when the credits may
-                                actually have moved, so the update handler answers 409. The dashboard
-                                already suppresses the button for that case; this page was still
-                                offering it, which meant the only route a donor had to that pledge was
-                                a button that could not work. */}
-                            {(isOwner || p.status === 'pledged' || p.method === 'manual') && (
+                            {/* The owner may always cancel. Whether the donor may is a server rule that
+                                turns on fields the page cannot see, so it is asked rather than guessed:
+                                donorMayCancel comes from the same predicate the update handler enforces.
+                                This page used to offer the button regardless, so a donor's only route to
+                                an API pledge was a button that always came back 409. */}
+                            {(isOwner || p.donorMayCancel) && (
                               <button className="btn btn-sm btn-danger" disabled={busy === p.id} onClick={() => confirm('Cancel this pledge?') && updatePledge(p, 'cancelled')}>Cancel</button>
                             )}
-                            {!isOwner && p.status === 'sent' && p.method === 'api' && (
+                            {!isOwner && !p.donorMayCancel && (
                               <span className="small muted">Waiting for the project owner to settle this</span>
                             )}
                           </div>

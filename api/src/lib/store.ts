@@ -463,16 +463,38 @@ export function pledgeUnresolved(p: Pledge): boolean {
   return p.transferUncertain && (p.status === 'pledged' || p.status === 'sent');
 }
 
+/**
+ * Whether a donor may withdraw their own API pledge.
+ *
+ * Normally they may not: once a transfer has been issued, cancelling frees the donor's slot, and if RIPE did
+ * complete it the next pledge sends the same credits again. Only the owner can say whether they arrived.
+ *
+ * The exception is a row that provably never reached the POST, which exists when the pledge was written and
+ * then the balance check or the recipient read failed. Holding its donor to the owner-only rule strands them
+ * behind a pledge they cannot clear and the owner has no reason to look at.
+ *
+ * `inFlight` is what makes the proof sound, and an empty `inFlightSince` on its own would not be. toPledge
+ * fills every absent field with a default, so a row written before `inFlightSince` existed also reads empty
+ * -- and such a row may well have transferred. But those rows predate `inFlight` too, so they read false,
+ * while every API pledge written by current code is created with it true. Requiring true therefore admits
+ * only rows this code wrote, which are the only ones whose empty marker means what it says.
+ */
+export function donorMayCancelApiPledge(p: Pledge): boolean {
+  return p.status === 'pledged' && p.inFlight === true && !p.inFlightSince;
+}
+
 export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
+  // The row comes first, before anything derived from the clock. This is the one site of the four that had
+  // to be reordered rather than extended, and it has two clock-based exits, not one: the age check, and the
+  // unreadable-timestamp fallback above it. Either would hand away an unresolved pledge's slot without ever
+  // looking at the pledge -- and a claim whose own createdAt is malformed is exactly the row least worth
+  // trusting a clock about. Asking the row first is behaviour-preserving for every other input: an old
+  // pledged or sent row, an old settled row and an old orphan all still reclaim as before.
+  if (pledge && pledgeUnresolved(pledge)) return false;
+  if (pledge && pledge.status !== 'pledged' && pledge.status !== 'sent') return true;
   const heldSince = Date.parse(heldCreatedAt);
   if (!Number.isFinite(heldSince)) return true;
   const age = asOf - heldSince;
-  // Order matters here, and it is the one site of the four that had to be reordered rather than extended.
-  // The age check used to come first and return before the pledge was looked at, so an unresolved row lost
-  // its slot on the clock alone. Asking about the row first is behaviour-preserving for every other input:
-  // an old pledged or sent row, an old settled row and an old orphan all still reclaim exactly as before.
-  if (pledge && pledgeUnresolved(pledge)) return false;
-  if (pledge && pledge.status !== 'pledged' && pledge.status !== 'sent') return true;
   if (age > PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000) return true;
   if (!pledge) {
     // A slot with no pledge behind it is almost always a request still in flight: the slot is
