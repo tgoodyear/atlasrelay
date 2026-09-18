@@ -58,6 +58,13 @@ export interface Pledge {
    * credits moved. The pledge waits at `sent` for a human to settle it either way.
    */
   transferUncertain: boolean;
+  /**
+   * Set while this request is still attempting the transfer. The row has to exist before the
+   * credits move, but until the attempt resolves nobody may act on it: confirming or cancelling
+   * releases the donor's slot, which would let a second transfer start while the first is still
+   * in flight.
+   */
+  inFlight: boolean;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -268,6 +275,7 @@ function toPledge(e: Entity): Pledge {
     transactionId: String(e.transactionId ?? ''),
     transferredAt: String(e.transferredAt ?? ''),
     transferUncertain: e.transferUncertain === true,
+    inFlight: e.inFlight === true,
     message: String(e.message ?? ''),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
@@ -333,6 +341,18 @@ const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
  * reservation window regardless, which is what stops a release that never ran from locking a donor
  * out of a project permanently.
  */
+/**
+ * Whether a pledge's transfer attempt is still running. Bounded by the same grace a claim uses: a
+ * request that died mid-transfer must not leave its row frozen for ever, and after the grace there
+ * is nothing still in flight to protect.
+ */
+export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
+  if (!p.inFlight) return false;
+  const created = Date.parse(p.createdAt);
+  if (!Number.isFinite(created)) return false;
+  return asOf - created <= CLAIM_ORPHAN_GRACE_MS;
+}
+
 export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
   const heldSince = Date.parse(heldCreatedAt);
   if (!Number.isFinite(heldSince)) return true;

@@ -3,7 +3,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -81,6 +81,8 @@ app.http('pledges-create', {
       transactionId: '',
       transferredAt: '',
       transferUncertain: false,
+      // An API transfer is in flight from the moment the row exists until the attempt resolves.
+      inFlight: method === 'api',
       message,
       createdAt: ts,
       updatedAt: ts,
@@ -111,9 +113,27 @@ app.http('pledges-create', {
      * no credits have moved.
      */
     const rollback = async (err: HttpError): Promise<HttpError> => {
-      await savePledge({ ...pledge, status: 'cancelled' });
-      await recomputeProjectTotals(id);
-      await releasePledgeClaim(id, donor.id, pledge.id);
+      // Best effort, every step. This runs on the paths where RIPE declined and nothing moved, and
+      // the donor's useful answer is that original 4xx: what was wrong and how to fix it. Letting a
+      // Table Storage hiccup here replace it with a 500 would hide that, and for an API pledge it
+      // would also strand a row the donor is not allowed to cancel. A row or slot left behind is
+      // recoverable on its own, through the in-flight window and the reservation expiry; a lost
+      // error message is not.
+      try {
+        await savePledge({ ...pledge, status: 'cancelled', inFlight: false });
+      } catch (cleanupErr) {
+        console.error('Could not withdraw a pledge after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+      }
+      try {
+        await recomputeProjectTotals(id);
+      } catch {
+        // Totals are derived and the next write recomputes them.
+      }
+      try {
+        await releasePledgeClaim(id, donor.id, pledge.id);
+      } catch (cleanupErr) {
+        console.error('Could not release a pledge slot after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+      }
       return err;
     };
 
@@ -158,6 +178,7 @@ app.http('pledges-create', {
           // they have sent it: the owner confirms it if the credits arrive, the donor cancels it
           // if they never do. It stays on both dashboards until somebody settles it.
           pledge.status = 'sent';
+          pledge.inFlight = false;
           pledge.transferUncertain = true;
           // transferredAt records the moment our server watched RIPE accept the transfer, and
           // here nothing was watched. Leaving it empty keeps that field honest; the status and
@@ -182,6 +203,7 @@ app.http('pledges-create', {
       // Past this point the credits have moved. Nothing below may throw, because there is no
       // longer any failure the donor could usefully act on by retrying.
       pledge.status = 'confirmed';
+      pledge.inFlight = false;
       pledge.transferredAt = new Date(startedAt).toISOString();
       try {
         // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
@@ -265,6 +287,15 @@ app.http('pledges-update', {
     const role = isOwner ? 'owner' : 'donor';
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
+
+    // The row exists before the credits move, so for a moment it is visible while its transfer is
+    // still being attempted. Nobody may act on it in that window: confirming or cancelling frees
+    // the donor's slot, and a second pledge could then start while the first transfer is still in
+    // flight and send the credits again. The window is bounded, so a request that died mid-transfer
+    // cannot freeze the row for good.
+    if (pledgeInFlight(pledge)) {
+      throw new HttpError(409, 'This pledge is still being sent to RIPE Atlas. Give it a moment and reload.');
+    }
 
     // A donor cannot cancel away an API transfer that our server sent. If the row is still
     // 'pledged' on an api pledge, the most likely reason is that the transfer completed and only

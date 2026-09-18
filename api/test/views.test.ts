@@ -44,7 +44,7 @@ test('a project read with live totals releases an expired reservation', () => {
 const pledge = (over: Partial<Pledge>): Pledge => ({
   id: 'p1', projectId: 'j1', donorId: 'd1', donorName: 'Alice', amount: 100, method: 'api',
   status: 'confirmed', transactionUrl: '', transactionId: '', transferredAt: '2026-09-17T00:00:00.000Z',
-  transferUncertain: false, message: '', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z',
+  transferUncertain: false, inFlight: false, message: '', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z',
   ...over,
 });
 
