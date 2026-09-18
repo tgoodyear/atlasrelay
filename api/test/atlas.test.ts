@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
+const KEY = '12345678-1234-1234-1234-123456789abc';
+
+async function withFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Promise<T> {
+  const real = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
 test('assertKeyFormat only accepts UUIDs', () => {
   assert.equal(assertKeyFormat(' 12345678-1234-1234-1234-123456789abc '), '12345678-1234-1234-1234-123456789abc');
   assert.throws(() => assertKeyFormat('not-a-key'), HttpError);
@@ -24,18 +36,6 @@ test('describeAtlasError has sane fallbacks', () => {
 
 // The pledge handler decides whether to roll a reservation back or park it for a human by
 // asking one question of a failed transfer: did RIPE answer? These tests pin that answer.
-
-const KEY = '12345678-1234-1234-1234-123456789abc';
-
-async function withFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Promise<T> {
-  const real = globalThis.fetch;
-  globalThis.fetch = impl;
-  try {
-    return await fn();
-  } finally {
-    globalThis.fetch = real;
-  }
-}
 
 test('a refusal from RIPE is not AtlasUnreachable, because no credits moved', async () => {
   const err = await withFetch(
