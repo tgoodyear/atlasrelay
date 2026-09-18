@@ -64,6 +64,13 @@ export interface Pledge {
    * credits moved. The pledge waits at `sent` for a human to settle it either way.
    */
   transferUncertain: boolean;
+  /**
+   * Set while this request is still attempting the transfer. The row has to exist before the
+   * credits move, but until the attempt resolves nobody may act on it: confirming or cancelling
+   * releases the donor's slot, which would let a second transfer start while the first is still
+   * in flight.
+   */
+  inFlight: boolean;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -234,18 +241,23 @@ export async function saveProject(p: Project): Promise<Project> {
 }
 
 /**
- * Change named fields on a project without writing back the rest of the row.
+ * Change named fields on a project, leaving every other column as it is.
  *
- * saveProject replaces the whole entity from whatever snapshot the caller happens to hold, so any
- * write built on a stale read silently reverts everything that changed in between: a pledge
- * recompute's credit totals, an owner's edit, or an operator's takedown. Where a handler only
- * means to change one or two fields, this merges those and leaves every other column alone.
+ * saveProject replaces the whole entity from whatever snapshot the caller holds, so a write built
+ * on a stale read silently reverts anything that changed in between: a pledge recompute's credit
+ * totals, or an owner's edit. Where a handler only means to change a field or two, this merges.
+ * tags is stored comma-joined, exactly as fromProject writes it, because a raw array would either
+ * be rejected by Table Storage or persisted in a shape nothing can read back.
  */
+export function projectPatchEntity(id: string, patch: Partial<Project>): Record<string, unknown> {
+  const { tags, ...rest } = patch;
+  const entity: Record<string, unknown> = { partitionKey: PROJECTS_PK, rowKey: id, ...rest, updatedAt: now() };
+  if (tags !== undefined) entity.tags = tags.join(',');
+  return entity;
+}
+
 export async function patchProject(id: string, patch: Partial<Project>): Promise<Project> {
-  await (await table('projects')).updateEntity(
-    { partitionKey: PROJECTS_PK, rowKey: id, ...patch, updatedAt: now() } as TableEntity,
-    'Merge',
-  );
+  await (await table('projects')).updateEntity(projectPatchEntity(id, patch) as TableEntity, 'Merge');
   const after = await getProject(id);
   if (!after) notFound();
   return after;
@@ -274,6 +286,7 @@ function toPledge(e: Entity): Pledge {
     transactionId: String(e.transactionId ?? ''),
     transferredAt: String(e.transferredAt ?? ''),
     transferUncertain: e.transferUncertain === true,
+    inFlight: e.inFlight === true,
     message: String(e.message ?? ''),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
@@ -339,6 +352,18 @@ const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
  * reservation window regardless, which is what stops a release that never ran from locking a donor
  * out of a project permanently.
  */
+/**
+ * Whether a pledge's transfer attempt is still running. Bounded by the same grace a claim uses: a
+ * request that died mid-transfer must not leave its row frozen for ever, and after the grace there
+ * is nothing still in flight to protect.
+ */
+export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
+  if (!p.inFlight) return false;
+  const created = Date.parse(p.createdAt);
+  if (!Number.isFinite(created)) return false;
+  return asOf - created <= CLAIM_ORPHAN_GRACE_MS;
+}
+
 export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
   const heldSince = Date.parse(heldCreatedAt);
   if (!Number.isFinite(heldSince)) return true;

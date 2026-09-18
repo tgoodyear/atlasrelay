@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
 import type { Pledge } from '../src/lib/store';
+import { projectPatchEntity } from '../src/lib/store';
+import type { Tag } from '../src/lib/validate';
 
 test('publicName never returns an email address', () => {
   // Static Web Apps supplies the email address as userDetails for some providers.
@@ -44,7 +46,7 @@ test('a project read with live totals releases an expired reservation', () => {
 const pledge = (over: Partial<Pledge>): Pledge => ({
   id: 'p1', projectId: 'j1', donorId: 'd1', donorName: 'Alice', amount: 100, method: 'api',
   status: 'confirmed', transactionUrl: '', transactionId: '', transferredAt: '2026-09-17T00:00:00.000Z',
-  transferUncertain: false, message: '', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z',
+  transferUncertain: false, inFlight: false, message: '', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z',
   ...over,
 });
 
@@ -72,4 +74,16 @@ test('an operator takedown flag is never published', () => {
     moderationClosed: true, createdAt: '', updatedAt: '',
   });
   assert.equal('moderationClosed' in p, false);
+});
+
+test('a project patch stores tags the way the row reads them back', () => {
+  // patchProject merges a partial row, and tags are held comma-joined. Passing the array straight
+  // through would either be rejected by Table Storage or stored in a shape toProject cannot parse,
+  // and the edit form submits tags on every project edit.
+  const entity = projectPatchEntity('j1', { title: 'New title', tags: ['routing', 'dns'] as Tag[] });
+  assert.equal(entity.tags, 'routing,dns');
+  assert.equal(entity.title, 'New title');
+  assert.equal(entity.rowKey, 'j1');
+  // A patch that does not mention tags must not touch them.
+  assert.equal('tags' in projectPatchEntity('j1', { status: 'closed' }), false);
 });

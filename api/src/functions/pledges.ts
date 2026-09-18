@@ -3,7 +3,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -81,17 +81,21 @@ app.http('pledges-create', {
       transactionId: '',
       transferredAt: '',
       transferUncertain: false,
+      // An API transfer is in flight from the moment the row exists until the attempt resolves.
+      inFlight: method === 'api',
       message,
       createdAt: ts,
       updatedAt: ts,
     };
 
-    // Take the donor's single live-pledge slot on this project before writing anything. This is
-    // the only mutual exclusion available: creating one Table Storage row is atomic, so exactly
-    // one concurrent request can hold the slot. The list check above is a courtesy that gives a
-    // better message; this is what actually prevents two simultaneous transfers.
-    // Validate the key before taking the slot. assertKeyFormat throws, and a throw before the
-    // rollback helper exists would strand the slot and block the donor's corrected retry.
+    // Take the donor's single live-pledge slot before anything happens. Reading the pledge list
+    // and then writing cannot enforce one live pledge per donor: a request that reads before a
+    // rival writes sees nothing to conflict with, and both proceed. Creating one Table Storage row
+    // is atomic, so exactly one concurrent request can hold the slot and the rest stop here,
+    // before a transfer is sent and before the owner's address is disclosed.
+    // Validate the key first. assertKeyFormat throws, and throwing after the slot is taken but
+    // before a pledge row exists leaves the slot held for the whole orphan grace, so a donor who
+    // simply mistyped their key is locked out of correcting it.
     const apiKey = method === 'api' ? assertKeyFormat(body.apiKey) : '';
 
     if (!(await acquirePledgeClaim(id, donor.id, pledge.id))) {
@@ -109,9 +113,27 @@ app.http('pledges-create', {
      * no credits have moved.
      */
     const rollback = async (err: HttpError): Promise<HttpError> => {
-      await savePledge({ ...pledge, status: 'cancelled' });
-      await recomputeProjectTotals(id);
-      await releasePledgeClaim(id, donor.id, pledge.id);
+      // Best effort, every step. This runs on the paths where RIPE declined and nothing moved, and
+      // the donor's useful answer is that original 4xx: what was wrong and how to fix it. Letting a
+      // Table Storage hiccup here replace it with a 500 would hide that, and for an API pledge it
+      // would also strand a row the donor is not allowed to cancel. A row or slot left behind is
+      // recoverable on its own, through the in-flight window and the reservation expiry; a lost
+      // error message is not.
+      try {
+        await savePledge({ ...pledge, status: 'cancelled', inFlight: false });
+      } catch (cleanupErr) {
+        console.error('Could not withdraw a pledge after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+      }
+      try {
+        await recomputeProjectTotals(id);
+      } catch {
+        // Totals are derived and the next write recomputes them.
+      }
+      try {
+        await releasePledgeClaim(id, donor.id, pledge.id);
+      } catch (cleanupErr) {
+        console.error('Could not release a pledge slot after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+      }
       return err;
     };
 
@@ -156,6 +178,7 @@ app.http('pledges-create', {
           // they have sent it: the owner confirms it if the credits arrive, the donor cancels it
           // if they never do. It stays on both dashboards until somebody settles it.
           pledge.status = 'sent';
+          pledge.inFlight = false;
           pledge.transferUncertain = true;
           // transferredAt records the moment our server watched RIPE accept the transfer, and
           // here nothing was watched. Leaving it empty keeps that field honest; the status and
@@ -180,6 +203,7 @@ app.http('pledges-create', {
       // Past this point the credits have moved. Nothing below may throw, because there is no
       // longer any failure the donor could usefully act on by retrying.
       pledge.status = 'confirmed';
+      pledge.inFlight = false;
       pledge.transferredAt = new Date(startedAt).toISOString();
       try {
         // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
@@ -264,6 +288,15 @@ app.http('pledges-update', {
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
 
+    // The row exists before the credits move, so for a moment it is visible while its transfer is
+    // still being attempted. Nobody may act on it in that window: confirming or cancelling frees
+    // the donor's slot, and a second pledge could then start while the first transfer is still in
+    // flight and send the credits again. The window is bounded, so a request that died mid-transfer
+    // cannot freeze the row for good.
+    if (pledgeInFlight(pledge)) {
+      throw new HttpError(409, 'This pledge is still being sent to RIPE Atlas. Give it a moment and reload.');
+    }
+
     // A donor cannot cancel away an API transfer that our server sent. If the row is still
     // 'pledged' on an api pledge, the most likely reason is that the transfer completed and only
     // the follow-up write failed, so cancelling would discard credits that really moved and leave
@@ -291,6 +324,13 @@ app.http('pledges-update', {
         throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
       }
     }
+    // This check reads before it writes, so two confirmations racing each other can both pass it.
+    // Settling that would need an ETag-guarded aggregate, and it is deliberately not built: only
+    // the project's owner can confirm, so the race needs one person double-clicking rather than an
+    // adversary, and the outcome is a project recorded slightly above its own ceiling. No credits
+    // move here; confirming only records a transfer that already happened, and refusing to record
+    // one would be the worse failure. The overshoot is visible on the project and the owner can
+    // cancel a pledge back out of it.
 
     const updated = await savePledge({ ...pledge, status });
     const updatedProject = await recomputeProjectTotals(projectId);

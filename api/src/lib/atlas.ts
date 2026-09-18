@@ -190,11 +190,12 @@ export async function findTransferTransaction(key: string, amount: number, since
   // an incoming credit of the same size would otherwise be recorded as this transfer. If RIPE
   // ever records outgoing transfers differently we simply find nothing and store no id, which is
   // the right failure: no reference beats a wrong one.
-  // Our transfer cannot have been recorded before we sent it. Allow a minute for clock skew
-  // between this server and RIPE, and no more: a five-minute lookback would happily match a
-  // same-sized transfer the donor made just beforehand. A row whose date cannot be read is
-  // rejected rather than accepted, because an unreadable timestamp is no evidence at all.
-  const earliest = since - 60 * 1000;
+  // Our transfer cannot have been recorded before we sent it, so that is the lower bound, with no
+  // allowance for clock skew. Widening it to absorb skew only buys the chance of matching a
+  // same-sized transfer the donor made moments earlier, and this lookup is allowed to find
+  // nothing: the 201 is what says the credits moved, the reference is a convenience. No reference
+  // beats a wrong one. A row whose date cannot be read is rejected for the same reason.
+  const earliest = since;
   const candidates = rows.filter((row) => {
     if (row.amount !== -amount) return false;
     const when = Date.parse(row.date);
