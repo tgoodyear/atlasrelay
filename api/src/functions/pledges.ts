@@ -322,10 +322,21 @@ app.http('pledges-create', {
           saved = true;
         } catch (confirmErr) {
           console.error('Transfer completed but the confirmation could not be written:', confirmErr instanceof Error ? confirmErr.message : confirmErr);
+          // One more attempt, for the in-flight marker alone. When the write above fails the last
+          // durable version of this row is the marker written before the transfer, which still says
+          // inFlight, and nobody may act on an in-flight pledge. So the warning would tell the owner
+          // to confirm the pledge while the update handler answered 409 for the rest of the grace
+          // period. Clearing the marker is a smaller write than the confirmation and may well land
+          // when that did not; if it does not either, the window expires on its own.
+          try {
+            await savePledge({ ...pledge, status: 'pledged', inFlight: false });
+          } catch (clearErr) {
+            console.error('Could not clear the in-flight marker after a completed transfer:', clearErr instanceof Error ? clearErr.message : clearErr);
+          }
         }
         if (!saved) {
           apiSaveFailed = true;
-          recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive.';
+          recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive; if it does not let them straight away, it will a minute or two later.';
         }
         try {
           updatedProject = await recomputeProjectTotals(id);

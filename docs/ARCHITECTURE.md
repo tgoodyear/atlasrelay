@@ -90,14 +90,17 @@ the partition after each change, so the project row never drifts.
    - **Transfer now with an API key**: the donor pastes a key created at
      https://atlas.ripe.net/keys/ with two permissions, "Transfer credits to another
      user" and "Get information about your credits", the latter so the balance can be
-     checked before sending. A transfer-only key works, with the check skipped. The
-     function optionally reads the balance (`GET /credits/`) to warn on insufficient
-     funds. The pledge row is written **before** the transfer, then the function calls
-     `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
-     and `transferredAt` records when we saw RIPE accept it. No transaction reference
-     is attached: RIPE indexes the transaction well after accepting the transfer, so
-     it cannot be read back inside the request, and the donor's own credit log shows
-     it a minute or so later. If RIPE never answers, the pledge is left at
+     checked before sending. A transfer-only key works too: the balance read is still
+     attempted for every key, RIPE refuses it, and the transfer proceeds with a warning
+     that the balance could not be checked. So a pasted key makes two RIPE requests
+     either way. The pledge row is written **before** the transfer, then the function
+     calls `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
+     and `transferredAt` records when we saw RIPE accept it -- unless that write itself
+     fails, in which case the stored row stays `pledged`, the response says so rather
+     than claiming otherwise, and the requester confirms it once the credits arrive.
+     No transaction reference is attached: RIPE indexes the transaction well after
+     accepting the transfer, so it cannot be read back inside the request, and the
+     donor's own credit log shows it a minute or so later. If RIPE never answers, the pledge is left at
      `sent` and flagged uncertain, keeps the donor's slot, and waits for a person to
      settle it. The key lives only in the request scope, and the UI tells donors to
      delete or disable it afterwards.
