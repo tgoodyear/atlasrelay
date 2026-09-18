@@ -100,7 +100,8 @@ interface AtlasReply {
  * can tell "RIPE said no" from "we do not know".
  */
 /**
- * Per-call deadlines. A pledge makes two RIPE calls, the balance check and the transfer, and at
+ * Per-call deadlines. A pledge makes at most two RIPE calls, the balance check and then the
+ * transfer, which is not sent when the balance comes back below the amount. At
  * twenty seconds each the worst case ran past the Static Web Apps edge timeout, so the edge could
  * give up on a request whose transfer then succeeded: the donor saw a gateway error over credits
  * that had actually moved. The transfer keeps the full budget because it is the one that matters;

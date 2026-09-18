@@ -90,10 +90,13 @@ export class ApiError extends Error {
   }
 
   /**
-   * False only when the server said outright that it could not record the pledge either. On the
+   * True only when the server said outright that it could not record the pledge either. On the
    * outcome-unknown path that changes the advice completely: with a row, the researcher settles it;
    * without one there is nothing for them to settle, and the donor has to tell them out of band.
-   * Undefined means a row exists, which is the ordinary case.
+   *
+   * False in every other case, including a response that says nothing about it, which is the
+   * ordinary one: a row exists. Getting this the wrong way round inverts that advice, so it is
+   * worth being exact -- the previous wording here described the opposite of what the getter does.
    */
   get transferNotRecorded(): boolean {
     return (this.details as { transferRecorded?: boolean } | undefined)?.transferRecorded === false;

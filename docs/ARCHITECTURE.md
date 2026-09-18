@@ -92,8 +92,9 @@ the partition after each change, so the project row never drifts.
      user" and "Get information about your credits", the latter so the balance can be
      checked before sending. A transfer-only key works too: the balance read is still
      attempted for every key, RIPE refuses it, and the transfer proceeds with a warning
-     that the balance could not be checked. So a pasted key makes two RIPE requests
-     either way. The pledge row is written **before** the transfer, then the function
+     that the balance could not be checked. So a pasted key makes at most two RIPE
+     requests, and sometimes one: a balance that comes back below the amount stops the
+     request there, with nothing sent. The pledge row is written **before** the transfer, then the function
      calls `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
      and `transferredAt` records when we saw RIPE accept it -- unless that write itself
      fails, in which case the stored row stays `pledged`, the response says so rather
