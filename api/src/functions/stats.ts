@@ -1,6 +1,6 @@
 import { app } from '@azure/functions';
 import { handle, json } from '../lib/http';
-import { acceptsMorePledges, remainingToGoal } from '../lib/pledging';
+import { siteStats } from '../lib/pledging';
 import { listProjects } from '../lib/store';
 
 app.http('stats', {
@@ -8,17 +8,11 @@ app.http('stats', {
   methods: ['GET'],
   authLevel: 'anonymous',
   handler: handle(async () => {
-    const projects = await listProjects();
-    // "Open" means the same thing as in the project listing, and keys off confirmed credits only,
-    // so a pending pledge cannot remove a project from the counts.
-    const open = projects.filter((p) => p.status === 'open' && acceptsMorePledges(p.creditsRequested, p.creditsConfirmed));
-    const stats = {
-      projects: projects.length,
-      openProjects: open.length,
-      creditsRequested: open.reduce((s, p) => s + remainingToGoal(p.creditsRequested, p.creditsConfirmed), 0),
-      creditsTransferred: projects.reduce((s, p) => s + p.creditsConfirmed, 0),
-      fundedProjects: projects.filter((p) => p.creditsConfirmed >= p.creditsRequested).length,
-    };
-    return json({ stats }, 200, { 'cache-control': 'public, max-age=60' });
+    const stats = siteStats(await listProjects());
+    // These figures move only when someone posts a project or a pledge is confirmed, which is
+    // rare, and they are decorative rather than load-bearing: nothing decides anything on them.
+    // stale-while-revalidate lets a repeat visitor render instantly from cache while the refresh
+    // happens behind them, so only the first view in five minutes waits on the function.
+    return json({ stats }, 200, { 'cache-control': 'public, max-age=300, stale-while-revalidate=3600' });
   }),
 });

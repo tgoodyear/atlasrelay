@@ -50,3 +50,31 @@ export function maxSinglePledge(creditsRequested: number, creditsConfirmed: numb
   const perPledgeLimit = remaining > 0 ? remaining : creditsRequested;
   return Math.min(perPledgeLimit, capacity(creditsRequested, creditsConfirmed, creditsPending));
 }
+
+/** The figures on the home page. Derived only from projects, so it is a pure function of them. */
+export interface SiteStats {
+  projects: number;
+  openProjects: number;
+  creditsRequested: number;
+  creditsTransferred: number;
+  fundedProjects: number;
+}
+
+/**
+ * Compute the home-page figures. Separated from the handler so the definitions can be tested:
+ * "open" has to mean the same thing here as in the project listing, and "credits requested" is
+ * what open projects still need rather than what they originally asked for, which are exactly the
+ * kinds of thing that drift apart silently.
+ */
+export function siteStats(
+  projects: { status: string; creditsRequested: number; creditsConfirmed: number }[],
+): SiteStats {
+  const open = projects.filter((p) => p.status === 'open' && acceptsMorePledges(p.creditsRequested, p.creditsConfirmed));
+  return {
+    projects: projects.length,
+    openProjects: open.length,
+    creditsRequested: open.reduce((s, p) => s + remainingToGoal(p.creditsRequested, p.creditsConfirmed), 0),
+    creditsTransferred: projects.reduce((s, p) => s + p.creditsConfirmed, 0),
+    fundedProjects: projects.filter((p) => p.creditsConfirmed >= p.creditsRequested).length,
+  };
+}

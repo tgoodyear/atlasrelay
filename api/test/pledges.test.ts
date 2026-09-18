@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { activePledgesBy, claimIsReclaimable, pledgeExpired, pledgeInFlight, totals } from '../src/lib/store';
-import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, remainingToGoal } from '../src/lib/pledging';
+import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
   const base = { id: '', projectId: '', donorId: '', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', message: '', createdAt: '', updatedAt: '' };
@@ -196,4 +196,41 @@ test('the in-flight window is measured from the transfer, not from the row', () 
   assert.equal(pledgeInFlight({ ...row, inFlightSince: 'not a date' }, asOf), true);
   // A settled pledge is never in flight, whatever the timestamps say.
   assert.equal(pledgeInFlight({ ...row, inFlight: false, inFlightSince: new Date(asOf).toISOString() }, asOf), false);
+});
+
+test('the home-page figures count what they claim to count', () => {
+  const p = (requested: number, confirmed: number, status = 'open') => ({
+    status, creditsRequested: requested, creditsConfirmed: confirmed,
+  });
+
+  // Empty site.
+  assert.deepEqual(siteStats([]), {
+    projects: 0, openProjects: 0, creditsRequested: 0, creditsTransferred: 0, fundedProjects: 0,
+  });
+
+  const s = siteStats([
+    p(1000, 0),          // open, needs all 1000
+    p(1000, 400),        // open, needs 600 more
+    p(1000, 1000),       // goal met, still open and still accepting
+    p(1000, 500, 'closed'), // closed: not open, but its credits still count as transferred
+  ]);
+  // "credits currently requested" is what open projects still NEED, not what they asked for.
+  assert.equal(s.creditsRequested, 1000 + 600 + 0);
+  // "credits transferred" counts every project, closed ones included.
+  assert.equal(s.creditsTransferred, 0 + 400 + 1000 + 500);
+  // A funded project is still open and still listed, so it counts in both.
+  assert.equal(s.openProjects, 3);
+  // Only the project whose confirmed credits reached its request. The closed one at 500 of 1000
+  // is not funded, and being closed has nothing to do with it.
+  assert.equal(s.fundedProjects, 1);
+  assert.equal(s.projects, 4);
+});
+
+test('a project at its ceiling stops counting as open, the same way the listing treats it', () => {
+  // acceptsMorePledges is what the listing uses, so the home page must not disagree with it.
+  const atCeiling = siteStats([{ status: 'open', creditsRequested: 100, creditsConfirmed: 100 * OVERFUND_MULTIPLIER }]);
+  assert.equal(atCeiling.openProjects, 0, 'a project that can take no more is not an open project');
+  assert.equal(atCeiling.projects, 1);
+  assert.equal(atCeiling.fundedProjects, 1);
+  assert.equal(atCeiling.creditsRequested, 0);
 });
