@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeErrorForLog, HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
-import { activePledgesBy, claimIsReclaimable, pledgeExpired, pledgeInFlight, totals } from '../src/lib/store';
+import { activePledgesBy, claimIsReclaimable, pledgeExpired, pledgeInFlight, pledgeUnresolved, totals } from '../src/lib/store';
+import type { Pledge } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
@@ -310,4 +311,73 @@ test('an unknown error is described for the log without its message', () => {
   // could be the parsed request body itself.
   assert.equal(describeErrorForLog({ apiKey: 'secret' }), 'object');
   assert.equal(describeErrorForLog('84c9393b-a2a2-4be5-8bfe-761f357ff9f0'), 'string');
+});
+
+// ── Unresolved transfers (issue #22) ────────────────────────────────────────────────────────────
+
+const unresolved = (over: Partial<Pledge> = {}): Pledge => ({
+  id: 'u1', projectId: 'j1', donorId: 'd1', donorName: 'Alice', anonymous: false, amount: 100_000,
+  method: 'api', status: 'sent', transactionUrl: '', transactionId: '', transferredAt: '',
+  transferUncertain: true, inFlight: false, inFlightSince: '', message: '',
+  createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+  ...over,
+});
+// Fifteen days after that row was created, so every age-based rule has lapsed.
+const LATER = Date.parse('2026-09-16T00:00:01.000Z');
+
+test('a transfer nobody has resolved keeps its reservation however old it is', () => {
+  // This is the duplicate-transfer defect. The reservation expiry asks "has this donor abandoned their
+  // reservation?", where age is real evidence. An uncertain row asks "did the credits move?", where age is
+  // no evidence at all. One cutoff served both, so on day fifteen the protection simply lapsed: the slot
+  // went back, the donor could pledge again, and if the original transfer had completed the credits went
+  // twice. Nobody had to do anything wrong for it to happen.
+  const p = unresolved();
+  assert.equal(totals([p], LATER).pending, 100_000);
+  assert.equal(activePledgesBy([p], 'd1', LATER).length, 1);
+  assert.equal(claimIsReclaimable(p.createdAt, p, LATER), false);
+  assert.equal(pledgeExpired(p, LATER), false);
+});
+
+test('a settled pledge stops holding anything, even though it still carries the flag', () => {
+  // transferUncertain is never cleared: pledges-update writes `{ ...pledge, status }`, so a confirmed row
+  // keeps it. A guard keyed on the flag alone would hold that row's slot and its capacity for ever, which
+  // is a worse bug than the one being fixed and is invisible until somebody wonders why a project will not
+  // accept pledges.
+  for (const status of ['confirmed', 'cancelled'] as const) {
+    const p = unresolved({ status });
+    assert.equal(pledgeUnresolved(p), false, `${status} must not read as unresolved`);
+    assert.equal(totals([p], LATER).pending, 0, `${status} must not reserve capacity`);
+    assert.equal(activePledgesBy([p], 'd1', LATER).length, 0, `${status} must not hold the slot`);
+    assert.equal(claimIsReclaimable(p.createdAt, p, LATER), true, `${status} must release the claim`);
+  }
+});
+
+test('an ordinary abandoned reservation still expires', () => {
+  // The fix must not turn the expiry off for the rows it was built for. A pledge nobody finished is
+  // abandonment, and age really is the evidence there.
+  const p = unresolved({ transferUncertain: false, status: 'pledged' });
+  assert.equal(totals([p], LATER).pending, 0);
+  assert.equal(activePledgesBy([p], 'd1', LATER).length, 0);
+  assert.equal(claimIsReclaimable(p.createdAt, p, LATER), true);
+  assert.equal(pledgeExpired(p, LATER), true);
+});
+
+test('reordering the claim check left every other answer alone', () => {
+  // claimIsReclaimable had to be reordered rather than extended, because its age check returned before the
+  // pledge was looked at. A reorder is where behaviour changes by accident, so enumerate the inputs it
+  // already had and pin each one.
+  const fresh = Date.parse('2026-09-01T00:00:05.000Z');
+  const base = unresolved({ transferUncertain: false });
+  // Old rows.
+  assert.equal(claimIsReclaimable(base.createdAt, { ...base, status: 'pledged' }, LATER), true);
+  assert.equal(claimIsReclaimable(base.createdAt, { ...base, status: 'sent' }, LATER), true);
+  assert.equal(claimIsReclaimable(base.createdAt, { ...base, status: 'confirmed' }, LATER), true);
+  assert.equal(claimIsReclaimable(base.createdAt, null, LATER), true);
+  // Fresh rows: a live pledge holds its slot, a settled one gives it back at once, and a slot whose row
+  // does not exist yet is the gap between taking the slot and writing the row.
+  assert.equal(claimIsReclaimable(base.createdAt, { ...base, status: 'pledged' }, fresh), false);
+  assert.equal(claimIsReclaimable(base.createdAt, { ...base, status: 'confirmed' }, fresh), true);
+  assert.equal(claimIsReclaimable(base.createdAt, null, fresh), false);
+  // An unreadable timestamp still means reclaimable, whatever the row says.
+  assert.equal(claimIsReclaimable('not a date', { ...base, status: 'pledged' }, fresh), true);
 });
