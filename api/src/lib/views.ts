@@ -63,6 +63,13 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
     maxCredits: maxCredits(p.creditsRequested),
     // Listing and stats key off confirmed credits alone, so a reservation cannot hide a project.
     open: p.status === 'open' && acceptsMorePledges(p.creditsRequested, confirmed),
+    // The owner has posted a write-up. A plain Boolean coercion and nothing else, deliberately:
+    // this function runs on the transfer path, where pledges.ts returns publicProject(updated)
+    // after the credits have already moved, so anything here that can throw turns a completed
+    // transfer into a 500 in the donor's browser. That is the failure the Atlas timeouts were
+    // retuned to prevent, and it would be careless to reintroduce it over a badge. No Date.parse,
+    // no new URL(), no truncation: the row is whatever storage holds and this stays total over it.
+    hasResults: Boolean(p.resultsPostedAt),
   };
 }
 

@@ -39,6 +39,29 @@ export interface Project {
   paperUrl: string;
   deadline: string;
   /**
+   * What came of the work, written by the owner after the credits were spent. Public, plain text.
+   *
+   * Deliberately separate from paperUrl. paperUrl is the proposal that justified the ask;
+   * resultsUrl is what came out of it. Folding one into the other would erase the only distinction
+   * these three fields exist to record, which is whether the researcher ever reported back.
+   */
+  resultsSummary: string;
+  resultsUrl: string;
+  /**
+   * Stamped the first time either of the two above goes non-empty, and never cleared afterwards.
+   *
+   * This is the field the feature is for: "N of M funded projects reported results" is a count
+   * over the projects partition with no join. It is stored rather than derived from the text
+   * because a researcher who posts a write-up and later edits it down to nothing would otherwise
+   * silently go back to never having reported, and because the date they reported is itself the
+   * answer people want.
+   *
+   * It is not a cache, unlike totalsCheckedAt and totalsDirty below: the handler that writes the
+   * two fields it describes writes this in the same patch, and nothing else ever refreshes it, so
+   * there is no path by which it can drift from what it summarises.
+   */
+  resultsPostedAt: string;
+  /**
    * Set by an operator when a project is taken down. Closing alone is not a takedown, because the
    * owner can reopen their own project; this is the flag that says the closure was not theirs to
    * undo. Only an operator, working directly against Table Storage, can clear it.
@@ -255,6 +278,12 @@ function toProject(e: Entity): Project {
     repoUrl: String(e.repoUrl ?? ''),
     paperUrl: String(e.paperUrl ?? ''),
     deadline: String(e.deadline ?? ''),
+    // Defaulted like every other string, which is the whole migration: Table Storage is
+    // schemaless, so a project row written before these columns existed reads back with empty
+    // results and no backfill pass has to run over the partition.
+    resultsSummary: String(e.resultsSummary ?? ''),
+    resultsUrl: String(e.resultsUrl ?? ''),
+    resultsPostedAt: String(e.resultsPostedAt ?? ''),
     moderationClosed: e.moderationClosed === true,
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
@@ -286,18 +315,16 @@ export async function createProject(p: Project): Promise<Project> {
   return p;
 }
 
-export async function saveProject(p: Project): Promise<Project> {
-  const updated = { ...p, updatedAt: now() };
-  await (await table('projects')).upsertEntity(fromProject(updated), 'Replace');
-  return updated;
-}
-
 /**
  * Change named fields on a project, leaving every other column as it is.
  *
- * saveProject replaces the whole entity from whatever snapshot the caller holds, so a write built
- * on a stale read silently reverts anything that changed in between: a pledge recompute's credit
- * totals, or an owner's edit. Where a handler only means to change a field or two, this merges.
+ * Nothing replaces a whole project row any more, and nothing should. A replace writes back
+ * whatever snapshot the caller happens to hold, so it silently reverts anything that changed
+ * between the read and the write: a pledge recompute's credit totals, an operator's takedown
+ * flag, or the owner's own edit from another tab. saveProject did exactly that and was deleted
+ * once its last caller moved to this, so the only way back to that bug is for somebody to write a
+ * new replace by hand.
+ *
  * tags is stored comma-joined, exactly as fromProject writes it, because a raw array would either
  * be rejected by Table Storage or persisted in a shape nothing can read back.
  */
@@ -335,6 +362,31 @@ export async function patchProject(id: string, patch: Partial<Project>, ifMatch?
   const after = await getProject(id);
   if (!after) notFound();
   return after;
+}
+
+/**
+ * What resultsPostedAt should hold after a write that carries results fields.
+ *
+ * Split out of the update handler and kept pure so the rule can be stated once and tested, the
+ * way projectPatchEntity is. The rule has two halves that are easy to get wrong in opposite
+ * directions. Stamping on every save would turn "when the researcher reported" into "when they
+ * last fixed a typo", which is the one number this feature exists to produce. Clearing it when
+ * the text goes empty would let a report be retracted with no trace, and would make a funded
+ * project that did report indistinguishable from one that never did.
+ *
+ * An undefined field in the patch means the caller did not send it, so it cannot trigger a stamp;
+ * an empty string means they sent it empty, which cannot either. Two PATCHes racing here both
+ * compute the same "first time" against their own read and both write a timestamp seconds apart,
+ * which is why this needs no conditional write: either value is a true answer to the question the
+ * field asks, and an ETag retry loop would be ceremony over a difference nobody can observe.
+ */
+export function nextResultsPostedAt(
+  current: string,
+  patch: { resultsSummary?: string; resultsUrl?: string },
+  at: string,
+): string {
+  if (current) return current;
+  return patch.resultsSummary || patch.resultsUrl ? at : '';
 }
 
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {

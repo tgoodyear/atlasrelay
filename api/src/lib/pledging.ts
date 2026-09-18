@@ -58,6 +58,7 @@ export interface SiteStats {
   creditsRequested: number;
   creditsTransferred: number;
   fundedProjects: number;
+  projectsWithResults: number;
 }
 
 /**
@@ -67,7 +68,7 @@ export interface SiteStats {
  * kinds of thing that drift apart silently.
  */
 export function siteStats(
-  projects: { status: string; creditsRequested: number; creditsConfirmed: number }[],
+  projects: { status: string; creditsRequested: number; creditsConfirmed: number; resultsPostedAt: string }[],
 ): SiteStats {
   const open = projects.filter((p) => p.status === 'open' && acceptsMorePledges(p.creditsRequested, p.creditsConfirmed));
   return {
@@ -76,5 +77,12 @@ export function siteStats(
     creditsRequested: open.reduce((s, p) => s + remainingToGoal(p.creditsRequested, p.creditsConfirmed), 0),
     creditsTransferred: projects.reduce((s, p) => s + p.creditsConfirmed, 0),
     fundedProjects: projects.filter((p) => p.creditsConfirmed >= p.creditsRequested).length,
+    // Counted off the stamp rather than off the write-up text, so a researcher who reports and
+    // later trims their summary to nothing still counts as having reported. Counted over every
+    // project rather than only funded ones, because a project can be worth reporting on after
+    // partial funding and the home page is not the place to argue about the threshold. Sitting
+    // next to fundedProjects is what gives the figure its meaning: the gap between the two is the
+    // number this site exists to shrink, and it reads 0 of 0 today, which is honest.
+    projectsWithResults: projects.filter((p) => Boolean(p.resultsPostedAt)).length,
   };
 }

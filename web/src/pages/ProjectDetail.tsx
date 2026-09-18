@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import PledgeDialog from '../components/PledgeDialog';
-import { PledgeStatusPill, StatusPill, TagPills } from '../components/Pills';
+import { PledgeStatusPill, ResultsPill, StatusPill, TagPills } from '../components/Pills';
 import Progress from '../components/Progress';
 import Spinner from '../components/Spinner';
 import { api, ApiError, fmt, fmtDate, pingsFor, type Pledge, type Project, type PublicUser } from '../lib/api';
@@ -66,6 +66,7 @@ export default function ProjectDetail() {
         <article>
           <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
             <StatusPill project={project} />
+            {project.hasResults && <ResultsPill />}
             <TagPills tags={project.tags} />
           </div>
           <h1>{project.title}</h1>
@@ -88,6 +89,48 @@ export default function ProjectDetail() {
             </div>
           )}
           <div className="description">{project.description}</div>
+
+          {/* Above Pledges, because on a funded project this is what a returning donor came for.
+              The section is rendered even when it is empty, which is the point: a funded or closed
+              project with no write-up is the gap this feature exists to make visible, and a
+              heading that only appears on the projects that did report would hide exactly that.
+              An open, unfunded project has nothing to report yet and gets no section. */}
+          {(project.hasResults || project.funded || project.status === 'closed') && (
+            <section style={{ marginTop: '2.5rem' }}>
+              <div className="section-head">
+                <h2>Results</h2>
+                {project.hasResults && <p>Posted {fmtDate(project.resultsPostedAt)}</p>}
+              </div>
+              {/* A JSX text child, so React escapes it. dangerouslySetInnerHTML appears nowhere in
+                  this app and must not start here: this is text the project owner wrote, rendered
+                  on a page anyone can read without signing in. */}
+              {project.resultsSummary && <div className="description">{project.resultsSummary}</div>}
+              {project.resultsUrl && (
+                <div className="links" style={{ marginTop: '1rem' }}>
+                  <a className="btn btn-secondary btn-sm" href={project.resultsUrl} target="_blank" rel="noreferrer">Read the results</a>
+                </div>
+              )}
+              {/* resultsPostedAt is never cleared, so this is the one state it leaves behind: the
+                  owner reported and then emptied both fields. Saying so is more honest than
+                  silently going back to "nothing posted", which is what a derived flag would do. */}
+              {project.hasResults && !project.resultsSummary && !project.resultsUrl && (
+                <p className="muted">The owner posted results here and has since removed them.</p>
+              )}
+              {/* A plain line, not the dashed empty-state box the pledge list uses. The absence is
+                  meant to be visible and factual, and a large placeholder would read as a telling
+                  off aimed at a researcher who may simply not have finished yet. */}
+              {!project.hasResults && (
+                <p className="muted">
+                  No results posted yet.{isOwner && (
+                    <>
+                      {' '}
+                      <Link to={`/projects/${project.id}/edit`}>Add them</Link> when you have something to show.
+                    </>
+                  )}
+                </p>
+              )}
+            </section>
+          )}
 
           <section style={{ marginTop: '2.5rem' }}>
             <div className="section-head">
@@ -146,8 +189,12 @@ export default function ProjectDetail() {
             <div className="card-body">
               <Progress project={project} large />
               <p className="small muted" style={{ margin: '0.75rem 0 1rem' }}>
+                {/* "roughly N ping results" used to be stated flat, which is the same overclaiming
+                    this site has already had to retract once elsewhere: 3 credits is RIPE's
+                    published base rate, and what a measurement is actually billed comes from its
+                    own credits_per_result, observed at both 2 and 6 for one-off pings. */}
                 {project.remaining > 0
-                  ? `${fmt(project.remaining)} credits to go, roughly ${pingsFor(project.remaining)} ping results.`
+                  ? `${fmt(project.remaining)} credits to go, about ${pingsFor(project.remaining)} ping results at RIPE's base rate of 3 credits each. What a measurement really costs depends on how it is set up.`
                   : project.maxPledge > 0
                     ? `The goal is reached, and the project can still accept ${fmt(project.capacity)} more credits, up to 100× its request.`
                     : 'This project has reached its ceiling of 100× its request. Thank you, donors.'}

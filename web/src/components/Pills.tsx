@@ -17,6 +17,15 @@ export function StatusPill({ project }: { project: Pick<Project, 'status' | 'fun
   return <span className="pill pill-teal">Open</span>;
 }
 
+/**
+ * The owner has posted a write-up. That is the whole claim, and the word is chosen to make no
+ * other: nothing RIPE Atlas publishes links a credit transfer to a measurement, so a pill saying
+ * anything about what the donated credits paid for would be a claim nobody here can stand behind.
+ */
+export function ResultsPill() {
+  return <span className="pill pill-navy">Results</span>;
+}
+
 export function PledgeStatusPill({ status, apiTransfer, transferUncertain }: { status: Pledge['status']; apiTransfer?: boolean; transferUncertain?: boolean }) {
   switch (status) {
     case 'confirmed':
