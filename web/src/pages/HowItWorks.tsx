@@ -79,7 +79,7 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>Is my RIPE Atlas API key stored?</summary>
-            <p>No. A key you paste is used for at most two requests inside a single API call: a balance check, then the transfer if every check permits it (a balance too low for the amount stops it there, at one request and nothing sent), and it is never written to storage or logs. Use a key scoped to credit transfers only and delete it afterwards.</p>
+            <p>No. A key you paste is used for at most two requests inside a single API call: a balance check, then the transfer. If RIPE reports a balance below the amount we stop there, so the key is used once and nothing is sent. A balance check that fails rather than answers does not stop it: a transfer-only key has that request refused, and the transfer still goes ahead with a warning, and it is never written to storage or logs. Use a key scoped to credit transfers only and delete it afterwards.</p>
           </details>
           <details>
             <summary>How do I know the researcher is who they say they are?</summary>
