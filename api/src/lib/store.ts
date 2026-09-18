@@ -70,7 +70,7 @@ type Entity = TableEntity<Record<string, unknown>>;
 
 const clients = new Map<string, TableClient>();
 
-function client(table: 'users' | 'projects' | 'pledges'): TableClient {
+function client(table: 'users' | 'projects' | 'pledges' | 'claims'): TableClient {
   let c = clients.get(table);
   if (!c) {
     const conn = process.env.TABLES_CONNECTION_STRING;
@@ -87,7 +87,7 @@ let ensured: Promise<void> | null = null;
 export function ensureTables(): Promise<void> {
   if (!ensured) {
     ensured = (async () => {
-      for (const t of ['users', 'projects', 'pledges'] as const) {
+      for (const t of ['users', 'projects', 'pledges', 'claims'] as const) {
         try {
           await client(t).createTable();
         } catch (err) {
@@ -102,7 +102,7 @@ export function ensureTables(): Promise<void> {
   return ensured;
 }
 
-async function table(name: 'users' | 'projects' | 'pledges'): Promise<TableClient> {
+async function table(name: 'users' | 'projects' | 'pledges' | 'claims'): Promise<TableClient> {
   await ensureTables();
   return client(name);
 }
@@ -115,7 +115,7 @@ function notFound(): never {
   throw new HttpError(404, 'Not found');
 }
 
-async function getEntity(name: 'users' | 'projects' | 'pledges', pk: string, rk: string): Promise<Entity | null> {
+async function getEntity(name: 'users' | 'projects' | 'pledges' | 'claims', pk: string, rk: string): Promise<Entity | null> {
   try {
     return (await (await table(name)).getEntity(pk, rk)) as Entity;
   } catch (err) {
@@ -274,6 +274,81 @@ export async function listPledgesByDonor(donorId: string): Promise<Pledge[]> {
 export async function getPledge(projectId: string, id: string): Promise<Pledge | null> {
   const e = await getEntity('pledges', projectId, id);
   return e ? toPledge(e) : null;
+}
+
+/**
+ * The single live-pledge slot a donor holds on a project.
+ *
+ * Reading the pledge list and then writing a row cannot enforce "one live pledge per donor":
+ * a request that reads before a rival writes sees nothing to conflict with, and both proceed.
+ * Sorting ids does not save it either, because two pledges created in the same millisecond are
+ * ordered by a random suffix, so the rival can win and the first request has already gone ahead.
+ * For a flow that moves credits irreversibly, that is a double transfer.
+ *
+ * Table Storage has no transaction spanning two rows, but creating one row IS atomic: exactly one
+ * caller can create a given partition/row key and the rest get 409. That is the whole mechanism.
+ * The row key is the donor id, so the slot is per (project, donor).
+ */
+const CLAIMS_TABLE = 'claims' as const;
+
+/**
+ * Take the slot. Returns false when another live pledge already holds it.
+ *
+ * A slot is reclaimable when the pledge behind it is no longer live, or when it has outlived the
+ * reservation window. Reclaiming is itself conditional on the row's ETag, so if two requests both
+ * decide a stale slot is free, only one takes it. Without that self-healing a release that failed
+ * to run would lock a donor out of a project for ever.
+ */
+/**
+ * Whether a held slot can be taken from its current owner. Separated from the storage call so the
+ * rule can be tested: a slot is free once the pledge behind it has settled, and after the
+ * reservation window regardless, which is what stops a release that never ran from locking a donor
+ * out of a project permanently.
+ */
+export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
+  const heldSince = Date.parse(heldCreatedAt);
+  if (!Number.isFinite(heldSince)) return true;
+  if (heldSince < asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000) return true;
+  if (!pledge) return true;
+  return pledge.status !== 'pledged' && pledge.status !== 'sent';
+}
+
+export async function acquirePledgeClaim(projectId: string, donorId: string, pledgeId: string): Promise<boolean> {
+  const t = await table(CLAIMS_TABLE);
+  const entity = { partitionKey: projectId, rowKey: donorId, pledgeId, createdAt: now() };
+  try {
+    await t.createEntity(entity);
+    return true;
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+  }
+
+  const held = await getEntity(CLAIMS_TABLE, projectId, donorId);
+  if (!held) return acquirePledgeClaim(projectId, donorId, pledgeId);
+
+  const pledge = await getPledge(projectId, String(held.pledgeId ?? ''));
+  if (!claimIsReclaimable(String(held.createdAt ?? ''), pledge)) return false;
+
+  try {
+    await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+    return true;
+  } catch (err) {
+    // 412 means somebody else reclaimed it between our read and our write. They won.
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    throw err;
+  }
+}
+
+/** Give the slot back. Safe to call when it is not held, and when it is held by someone else. */
+export async function releasePledgeClaim(projectId: string, donorId: string, pledgeId: string): Promise<void> {
+  const held = await getEntity(CLAIMS_TABLE, projectId, donorId);
+  if (!held || String(held.pledgeId ?? '') !== pledgeId) return;
+  try {
+    await (await table(CLAIMS_TABLE)).deleteEntity(projectId, donorId, { etag: String(held.etag ?? '') });
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) return;
+    throw err;
+  }
 }
 
 export async function createPledge(p: Pledge): Promise<Pledge> {

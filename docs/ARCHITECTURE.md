@@ -107,6 +107,17 @@ Table Storage has no transaction that can span a local write and a call to RIPE,
 the two decides which way a failure hurts. The pledge row is written first. An orphan row is a
 pledge somebody cancels; a transfer with no row is credits nobody can account for.
 
+Before either happens, the donor takes a slot in the `claims` table, one row per (project, donor).
+Reading the pledge list and then writing cannot enforce one live pledge per donor, because a
+request that reads before a rival writes sees nothing to conflict with and both proceed. Creating
+a single row, though, is atomic: exactly one caller creates a given key and the rest get a 409.
+A slot is reclaimable once its pledge has settled, and after the reservation window regardless, so
+a release that never ran cannot lock a donor out for good.
+
+Reserved capacity is still settled after the write, because it spans different donors and no one
+row can arbitrate between them. That is safe where a double transfer would not be: over-reserving
+only holds pending credits, it is re-checked at confirm time, and it expires.
+
 What happens next depends on a single question: did RIPE answer?
 
 | Outcome | What we know | What the platform does |

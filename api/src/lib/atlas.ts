@@ -117,7 +117,16 @@ export function describeAtlasError(status: number, body: unknown): string {
 }
 
 async function parseBody(res: Response): Promise<unknown> {
-  const text = await res.text();
+  let text: string;
+  try {
+    text = await res.text();
+  } catch {
+    // The status line arrived but the connection died before the body did. For a transfer that is
+    // the same situation as a timeout: RIPE may already have moved the credits. Raising the same
+    // error the timeout raises keeps the caller's one question ("did RIPE answer?") answerable,
+    // instead of letting a raw TypeError escape and be mistaken for a refusal.
+    throw new AtlasUnreachable('RIPE Atlas closed the connection before its reply was complete');
+  }
   if (!text) return null;
   try {
     return JSON.parse(text);
@@ -149,7 +158,14 @@ export async function findTransferTransaction(key: string, amount: number, since
     return null;
   }
   if (!res.ok) return null;
-  const body = await parseBody(res);
+  let body: unknown;
+  try {
+    body = await parseBody(res);
+  } catch {
+    // This lookup only ever adds a reference, and it runs after the transfer has completed, so it
+    // must never raise anything the caller could mistake for a failed transfer.
+    return null;
+  }
   const rows: CreditTransaction[] = Array.isArray(body)
     ? (body as CreditTransaction[])
     : (((body as { results?: CreditTransaction[] } | null)?.results) ?? []);

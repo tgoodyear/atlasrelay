@@ -134,3 +134,22 @@ test('a refusal carries RIPE own status so a key problem is not confused with an
     globalThis.fetch = real;
   }
 });
+
+test('a connection that dies mid-body is AtlasUnreachable, not a refusal', async () => {
+  // The status line arrived, so the request definitely reached RIPE, but the body never finished.
+  // Treating that as a refusal would roll the pledge back and invite a retry that sends twice.
+  const err = await withFetch(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'));
+          },
+        }),
+        { status: 201 },
+      ),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable, `expected AtlasUnreachable, got ${err?.constructor?.name}`);
+  assert.equal(err.status, 502);
+});
