@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertKeyFormat, AtlasRefused, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
+import { assertKeyFormat, AtlasRefused, transactionTime, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
 const KEY = '12345678-1234-1234-1234-123456789abc';
@@ -103,4 +103,64 @@ test('a transaction from before the transfer is never taken as its reference', a
     () => findTransferTransaction(KEY, 500, since),
   );
   assert.equal(undated, null);
+});
+
+// The fixtures below are real RIPE responses, captured from the live API on 2026-09-18 with a
+// production key. They exist because every one of these shapes had been guessed at, and two of
+// the guesses were wrong in ways no amount of reading the code could reveal.
+
+test('a transaction date is epoch seconds, not an ISO string', () => {
+  // Verified live: {"id":640025586,"type":"admin","amount":-500000,"date":1789680550}.
+  // The code typed this as a string and handed it to Date.parse, which returns NaN for a number,
+  // so the matcher discarded every candidate row and no transfer could ever be matched.
+  assert.equal(transactionTime(1789680550), 1789680550_000);
+  assert.equal(new Date(transactionTime(1789680550)!).toISOString(), '2026-09-17T21:29:10.000Z');
+  assert.equal(Date.parse(1789680550 as unknown as string), Number.NaN);
+  // A string epoch and a real ISO string both still work.
+  assert.equal(transactionTime('1789680550'), 1789680550_000);
+  assert.equal(transactionTime('2026-09-17T21:29:10.000Z'), 1789680550_000);
+  assert.equal(transactionTime('not a date'), null);
+});
+
+test('the matcher finds a real transaction row, in the real response shape', async () => {
+  // The live list is {count, next, previous, results:[...]}, newest first, dates in epoch seconds.
+  const live = {
+    count: 12,
+    next: null,
+    previous: null,
+    results: [
+      { id: 640025586, type: 'admin', amount: -500000, date: 1789680550, balance_after: 42820829 },
+      { id: 634128531, type: 'admin', amount: -20000000, date: 1788535970 },
+      { id: 565136927, type: 'admin', amount: 5764023, date: 1763978404 },
+    ],
+  };
+  const since = 1789680550_000 - 60_000;
+  const found = await withFetch(
+    async () => new Response(JSON.stringify(live), { status: 200 }),
+    () => findTransferTransaction(KEY, 500_000, since),
+  );
+  assert.equal(found?.id, 640025586);
+
+  // An incoming credit of the same size must never be taken for an outgoing transfer.
+  const incoming = await withFetch(
+    async () => new Response(JSON.stringify({ results: [{ id: 1, type: 'admin', amount: 500000, date: 1789680550 }] }), { status: 200 }),
+    () => findTransferTransaction(KEY, 500_000, since),
+  );
+  assert.equal(incoming, null);
+});
+
+test('a real RIPE refusal is described from the fields it actually sends', () => {
+  // Captured live from POST /credits/transfers/ with an unroutable recipient. No credits moved.
+  const body = {
+    error: {
+      detail: 'There was a problem with your request',
+      status: 400,
+      title: 'Bad Request',
+      code: 102,
+      errors: [{ source: { pointer: '/recipient' }, detail: 'That email address is not associated with any RIPE NCC Access user' }],
+    },
+  };
+  const msg = describeAtlasError(400, body);
+  assert.match(msg, /not associated with any RIPE NCC Access user/);
+  assert.match(msg, /recipient/);
 });

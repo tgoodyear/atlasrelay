@@ -68,7 +68,13 @@ export interface CreditTransaction {
   id: number;
   type: string;
   amount: number;
-  date: string;
+  /**
+   * RIPE sends this as a Unix epoch in SECONDS, as an integer, not as an ISO string. Verified
+   * against the live API: `{"id":640025586,"type":"admin","amount":-500000,"date":1789680550}`.
+   * Typing it as a string and handing it to Date.parse produced NaN for every row, which the
+   * matcher then discarded, so no transfer could ever be matched to its transaction.
+   */
+  date: number | string;
   description?: string;
   balance_after?: number;
 }
@@ -139,6 +145,22 @@ export async function getCredits(key: string): Promise<CreditsOverview> {
  * "Get information about your credits" permission; returns null when that is absent or when no
  * matching row is found, in which case the caller records the transfer without an id.
  */
+/**
+ * RIPE's transaction `date`, in milliseconds. It arrives as an integer epoch in seconds; the
+ * string branch is defensive in case that ever changes. Returns null when it cannot be read,
+ * which the caller treats as "no match" rather than guessing.
+ */
+export function transactionTime(date: number | string): number | null {
+  if (typeof date === 'number' && Number.isFinite(date)) return date * 1000;
+  if (typeof date === 'string') {
+    const parsed = Date.parse(date);
+    if (Number.isFinite(parsed)) return parsed;
+    const asEpoch = Number(date);
+    if (Number.isFinite(asEpoch) && asEpoch > 0) return asEpoch * 1000;
+  }
+  return null;
+}
+
 export async function findTransferTransaction(key: string, amount: number, since: number): Promise<CreditTransaction | null> {
   let res: Response;
   try {
@@ -163,8 +185,8 @@ export async function findTransferTransaction(key: string, amount: number, since
   const earliest = since;
   const candidates = rows.filter((row) => {
     if (row.amount !== -amount) return false;
-    const when = Date.parse(row.date);
-    return Number.isFinite(when) && when >= earliest;
+    const when = transactionTime(row.date);
+    return when !== null && when >= earliest;
   });
   // Amount and a time window do not uniquely identify a transfer. If the donor sent the same
   // amount twice in quick succession, or an unrelated transfer of that size landed in the window,
