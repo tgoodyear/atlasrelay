@@ -27,7 +27,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
    │ static assets (global CDN)         │ @azure/data-tables
    │                                    ▼
    │                          Azure Storage account (Standard LRS)
-   │                             tables: users, projects, pledges
+   │                             tables: users, projects, pledges, claims
    │
    └── donor-initiated transfer ──▶ https://atlas.ripe.net/api/v2/credits/transfers/
                                      Authorization: Key <donor key, single use>
@@ -171,7 +171,7 @@ the SPA shows its own sign-in prompt.
 | --- | --- | --- | --- |
 | Resource group `internetresearch` (westus2) | `infra/main.bicep` | | $0 |
 | Static Web App `swa-internetresearch` + `appsettings` | `infra/app.bicep` | Free | $0 (100 GB bandwidth/mo, 2 custom domains; staging environments disabled) |
-| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges` | `infra/app.bicep` | Standard LRS | ≈ $0.05/mo at expected volumes |
+| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS | ≈ $0.05/mo at expected volumes |
 | Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go | $0 inside the 5 GB/month free allowance |
 | Consumption budget `internetresearch-monthly` | `infra/platform.bicep` | $120, alerts at 50% and 80% actual, 100% forecast | $0 |
 | User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | | $0 |

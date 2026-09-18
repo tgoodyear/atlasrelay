@@ -108,7 +108,7 @@ export function describeAtlasError(status: number, body: unknown): string {
   switch (status) {
     case 401:
     case 403:
-      return 'RIPE Atlas rejected the API key. Check that it carries "Transfer credits to another user", is enabled, and is within its validity window. The separate "Get information about your credits" permission is only used for the balance check and is not required.';
+      return 'RIPE Atlas rejected the API key for this request. Check that it is enabled, is within its validity window, and carries the permission the request needs: "Transfer credits to another user" to send credits, or "Get information about your credits" to read a balance.';
     case 429:
       return 'RIPE Atlas is rate-limiting requests. Wait a minute and try again.';
     default:

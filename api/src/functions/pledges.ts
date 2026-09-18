@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -123,9 +123,20 @@ app.http('pledges-create', {
           ? 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.'
           : 'Your balance could not be checked first because RIPE Atlas did not answer the balance request.';
       }
+      // Re-read the owner immediately before sending. The snapshot at the top of this handler is
+      // minutes old by now, and a concurrent DELETE /api/me can have completed in between and been
+      // told the address was removed. Transferring to a cached address after that would move
+      // credits to an account the person has asked us to forget.
+      const ownerNow = await getUser(project.ownerId);
+      if (!ownerNow?.atlasEmail) {
+        // Nothing has been sent, so give the slot back and stop.
+        await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
+        throw new HttpError(409, 'The project owner is no longer available, so nothing was sent.');
+      }
+
       const startedAt = Date.now();
       try {
-        await transferCredits(key, owner.atlasEmail, amount);
+        await transferCredits(key, ownerNow.atlasEmail, amount);
       } catch (err) {
         // Only a refusal frees the slot. AtlasRefused means RIPE read the request and declined, so
         // nothing moved and the donor should be able to correct the problem and try again at once.
@@ -171,7 +182,7 @@ app.http('pledges-create', {
         const txn = await findTransferTransaction(key, amount, startedAt);
         if (txn) {
           pledge.transactionId = String(txn.id);
-          pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
+          pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/${txn.id}/`;
         }
       } catch (lookupErr) {
         console.error('Transaction lookup failed after a completed transfer:', lookupErr instanceof Error ? lookupErr.message : lookupErr);
@@ -226,9 +237,12 @@ app.http('pledges-create', {
         throw new HttpError(503, 'We could not check this project\u2019s current total just now, and could not tidy up the pledge either. It may still be showing as pending; cancel it from your dashboard before trying again.');
       }
       // An API transfer has already happened and cannot be withdrawn, so this one proceeds, but on
-      // figures known to be stale. Say so rather than presenting them as current.
+      // figures known to be stale. There is no "next pledge" to repair them either: a confirmed
+      // pledge leaves pending at zero, and both refreshers only look at projects showing a
+      // reservation, so this row would sit wrong indefinitely. Mark it so they pick it up.
       updatedProject = project;
-      recordWarning = [recordWarning, 'The project totals shown may be out of date; they will catch up on the next pledge.'].filter(Boolean).join(' ');
+      await patchProject(id, { totalsDirty: true }).catch(() => undefined);
+      recordWarning = [recordWarning, 'The project totals shown may be out of date; they are queued to be recalculated.'].filter(Boolean).join(' ');
     }
 
     // Reserved capacity still needs a post-write settlement, because it spans different donors and
@@ -252,7 +266,10 @@ app.http('pledges-create', {
         project: publicProject(updatedProject),
         // Only a donor with a live manual pledge sees where to send credits. The owner can see
         // exactly who that is on their dashboard, because the pledge carries the donor's name.
-        recipientEmail: method === 'manual' ? owner.atlasEmail : undefined,
+        // Re-read rather than serving the snapshot taken at the top of this handler. A concurrent
+        // profile deletion can have completed since, and been told the address was removed; this
+        // response is the disclosure, so it has to reflect the state at the moment it is sent.
+        recipientEmail: method === 'manual' ? (await getUser(project.ownerId))?.atlasEmail || undefined : undefined,
         transferUrl: 'https://atlas.ripe.net/credits/transfer/',
         warning: [balanceWarning, overshootWarning, recordWarning].filter(Boolean).join(' ') || undefined,
       },

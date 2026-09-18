@@ -36,7 +36,7 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
   // records show only their chosen display name and that the account link is internal, so it
   // cannot also appear on an anonymous endpoint. Whether the viewer owns a project is decided
   // server-side and returned as `viewer.isOwner`, so nothing needs it out here.
-  const { etag: _etag, ownerId: _ownerId, totalsCheckedAt: _totalsCheckedAt, ...rest } = p;
+  const { etag: _etag, ownerId: _ownerId, totalsCheckedAt: _totalsCheckedAt, totalsDirty: _totalsDirty, ...rest } = p;
   return {
     ...rest,
     creditsConfirmed: confirmed,
