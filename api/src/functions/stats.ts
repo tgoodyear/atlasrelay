@@ -1,6 +1,6 @@
 import { app } from '@azure/functions';
 import { handle, json } from '../lib/http';
-import { capacity, remainingToGoal } from '../lib/pledging';
+import { acceptsMorePledges, remainingToGoal } from '../lib/pledging';
 import { listProjects } from '../lib/store';
 
 app.http('stats', {
@@ -9,8 +9,9 @@ app.http('stats', {
   authLevel: 'anonymous',
   handler: handle(async () => {
     const projects = await listProjects();
-    // "Open" means the same thing as in the project listing: status open with capacity left.
-    const open = projects.filter((p) => p.status === 'open' && capacity(p.creditsRequested, p.creditsConfirmed, p.creditsPending) > 0);
+    // "Open" means the same thing as in the project listing, and keys off confirmed credits only,
+    // so a pending pledge cannot remove a project from the counts.
+    const open = projects.filter((p) => p.status === 'open' && acceptsMorePledges(p.creditsRequested, p.creditsConfirmed));
     const stats = {
       projects: projects.length,
       openProjects: open.length,

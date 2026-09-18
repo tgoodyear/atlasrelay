@@ -17,10 +17,12 @@ export function StatusPill({ project }: { project: Pick<Project, 'status' | 'fun
   return <span className="pill pill-teal">Open</span>;
 }
 
-export function PledgeStatusPill({ status, hasProof }: { status: Pledge['status']; hasProof?: boolean }) {
+export function PledgeStatusPill({ status, apiTransfer }: { status: Pledge['status']; apiTransfer?: boolean }) {
   switch (status) {
     case 'confirmed':
-      return <span className="pill pill-green">{hasProof ? 'Transferred' : 'Confirmed'}</span>;
+      // "Transferred via API" means our server watched RIPE Atlas accept the transfer.
+      // "Confirmed" means the researcher said the credits arrived.
+      return <span className="pill pill-green">{apiTransfer ? 'Transferred via API' : 'Confirmed'}</span>;
     case 'sent':
       return <span className="pill pill-amber">Sent, awaiting confirmation</span>;
     case 'cancelled':

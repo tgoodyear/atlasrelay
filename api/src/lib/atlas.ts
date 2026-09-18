@@ -8,6 +8,29 @@ import { HttpError } from './http';
 
 const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Thrown when RIPE answered and refused the request. The HTTP status we hand our own caller is
+ * flattened (RIPE's 4xx becomes our 400), so RIPE's own status is kept here: it is the only way
+ * to tell "this key lacks a permission" from "RIPE is having a bad day", and those two need
+ * different words in front of a donor.
+ */
+/**
+ * Thrown when a call never reached RIPE, or RIPE never gave a usable answer. The distinction
+ * matters for transfers: an AtlasRefused means RIPE read the request and declined, so no credits
+ * moved, whereas this one means the outcome is unknown and the caller must not retry blindly.
+ */
+export class AtlasUnreachable extends HttpError {
+  constructor(message: string) {
+    super(502, message);
+  }
+}
+
+export class AtlasRefused extends HttpError {
+  constructor(public upstreamStatus: number, status: number, message: string) {
+    super(status, message);
+  }
+}
+
 export function base(): string {
   return (process.env.ATLAS_API_BASE || 'https://atlas.ripe.net/api/v2').replace(/\/$/, '');
 }
@@ -35,7 +58,25 @@ export interface CreditsOverview {
 }
 
 export interface TransferResult {
+  /** Whatever RIPE returned in the `transaction` field. In practice this is a filtered list URL
+   *  such as .../credits/transactions/?sort=-date&type=admin, identical for every transfer and
+   *  readable only with the donor's own key, so it is not a per-transfer reference. */
   transaction: string;
+}
+
+export interface CreditTransaction {
+  id: number;
+  type: string;
+  amount: number;
+  /**
+   * RIPE sends this as a Unix epoch in SECONDS, as an integer, not as an ISO string. Verified
+   * against the live API: `{"id":640025586,"type":"admin","amount":-500000,"date":1789680550}`.
+   * Typing it as a string and handing it to Date.parse produced NaN for every row, which the
+   * matcher then discarded, so no transfer could ever be matched to its transaction.
+   */
+  date: number | string;
+  description?: string;
+  balance_after?: number;
 }
 
 async function atlasFetch(path: string, key: string, init: RequestInit = {}): Promise<Response> {
@@ -54,7 +95,7 @@ async function atlasFetch(path: string, key: string, init: RequestInit = {}): Pr
     });
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
-    throw new HttpError(502, aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
+    throw new AtlasUnreachable(aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
   } finally {
     clearTimeout(timer);
   }
@@ -73,7 +114,7 @@ export function describeAtlasError(status: number, body: unknown): string {
   switch (status) {
     case 401:
     case 403:
-      return 'RIPE Atlas rejected the API key (missing permission, disabled, expired, or unknown key).';
+      return 'RIPE Atlas rejected the API key for this request. Check that it is enabled, is within its validity window, and carries the permission the request needs: "Transfer credits to another user" to send credits, or "Get information about your credits" to read a balance.';
     case 429:
       return 'RIPE Atlas is rate-limiting requests. Wait a minute and try again.';
     default:
@@ -94,20 +135,85 @@ async function parseBody(res: Response): Promise<unknown> {
 export async function getCredits(key: string): Promise<CreditsOverview> {
   const res = await atlasFetch('/credits/', key);
   const body = await parseBody(res);
-  if (!res.ok) throw new HttpError(res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
+  if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   return body as CreditsOverview;
+}
+
+/**
+ * Find the transaction RIPE recorded for a transfer we just made, so a pledge can carry a real
+ * reference rather than the generic list URL the transfer endpoint returns. Needs the
+ * "Get information about your credits" permission; returns null when that is absent or when no
+ * matching row is found, in which case the caller records the transfer without an id.
+ */
+/**
+ * RIPE's transaction `date`, in milliseconds. It arrives as an integer epoch in seconds; the
+ * string branch is defensive in case that ever changes. Returns null when it cannot be read,
+ * which the caller treats as "no match" rather than guessing.
+ */
+export function transactionTime(date: number | string): number | null {
+  if (typeof date === 'number' && Number.isFinite(date)) return date * 1000;
+  if (typeof date === 'string') {
+    const parsed = Date.parse(date);
+    if (Number.isFinite(parsed)) return parsed;
+    const asEpoch = Number(date);
+    if (Number.isFinite(asEpoch) && asEpoch > 0) return asEpoch * 1000;
+  }
+  return null;
+}
+
+export async function findTransferTransaction(key: string, amount: number, since: number): Promise<CreditTransaction | null> {
+  let res: Response;
+  try {
+    res = await atlasFetch('/credits/transactions/?sort=-date&type=admin&page_size=25', key);
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const body = await parseBody(res);
+  const rows: CreditTransaction[] = Array.isArray(body)
+    ? (body as CreditTransaction[])
+    : (((body as { results?: CreditTransaction[] } | null)?.results) ?? []);
+  // A transfer out is recorded as a negative amount. Match the sign as well as the magnitude:
+  // an incoming credit of the same size would otherwise be recorded as this transfer. If RIPE
+  // ever records outgoing transfers differently we simply find nothing and store no id, which is
+  // the right failure: no reference beats a wrong one.
+  // Our transfer cannot have been recorded before we sent it, so that is the lower bound, with no
+  // allowance for clock skew. Widening it to absorb skew only buys the chance of matching a
+  // same-sized transfer the donor made moments earlier, and this lookup is allowed to find
+  // nothing: the 201 is what says the credits moved, the reference is a convenience. No reference
+  // beats a wrong one. A row whose date cannot be read is rejected for the same reason.
+  const earliest = since;
+  const candidates = rows.filter((row) => {
+    if (row.amount !== -amount) return false;
+    const when = transactionTime(row.date);
+    return when !== null && when >= earliest;
+  });
+  // Amount and a time window do not uniquely identify a transfer. If the donor sent the same
+  // amount twice in quick succession, or an unrelated transfer of that size landed in the window,
+  // more than one row matches and there is no way to tell which is ours. Record nothing then: the
+  // 201 already told us the credits moved, and a reference pointing at the wrong transaction is
+  // worse than no reference at all.
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 export async function transferCredits(key: string, recipient: string, amount: number): Promise<TransferResult> {
   const payload = JSON.stringify({ recipient, amount });
-  let res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
-  if (res.status === 404) {
-    // The manual documents the singular path; the reference documents the plural.
-    res = await atlasFetch('/credits/transfer/', key, { method: 'POST', body: payload });
-  }
+  // One POST only. The manual documents a singular path too, but the plural one is what the live
+  // API serves, and re-posting a transfer to guess at a path could send the credits twice. It also
+  // keeps a key's use to the three requests SECURITY.md discloses.
+  const res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
   const body = await parseBody(res);
-  if (!res.ok) throw new HttpError(res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
+  // A 4xx is RIPE declining: it read the request and said no, so no credits moved and the donor can
+  // safely correct the problem and try again. A 5xx is not that. It says something broke inside
+  // RIPE, which is no evidence about whether the transfer had already been processed, so it is
+  // reported as unknown. Calling it a refusal would free the donor's slot and invite a retry that
+  // sends the credits a second time.
+  if (res.status >= 500) {
+    throw new AtlasUnreachable(`RIPE Atlas returned HTTP ${res.status} without saying whether the transfer completed`);
+  }
+  if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
   const transaction = (body as TransferResult | null)?.transaction;
-  if (typeof transaction !== 'string') throw new HttpError(502, 'RIPE Atlas accepted the transfer but returned no transaction reference');
-  return { transaction };
+  // RIPE returns a list URL rather than a reference, so its absence is not worth failing on:
+  // the 2xx is what tells us the credits moved.
+  return { transaction: typeof transaction === 'string' ? transaction : '' };
 }

@@ -22,5 +22,6 @@ param githubRepo = 'tgoodyear/internetresearch'
 param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX')
 param enablePullRequestFederation = false
 param budgetAmount = 120
-param budgetContactEmail = readEnvironmentVariable('BUDGET_CONTACT_EMAIL', 'trevor.goodyear@gmail.com')
+// Supplied by scripts/bootstrap.sh and the Infrastructure workflow; no address is kept in the repo.
+param budgetContactEmail = readEnvironmentVariable('BUDGET_CONTACT_EMAIL')
 param budgetStartDate = readEnvironmentVariable('BUDGET_START_DATE')

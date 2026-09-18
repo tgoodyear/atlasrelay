@@ -11,11 +11,20 @@
 # Requires: az (logged in as an Owner of the subscription), gh (logged in, repo+workflow scopes), jq.
 set -euo pipefail
 
-SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-25bf257c-c94e-4d61-bba3-edc635f46602}"
+# No subscription is hardcoded. Set SUBSCRIPTION_ID, or the currently selected one is used.
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-$(az account show --query id -o tsv 2>/dev/null || true)}"
+[[ -n "$SUBSCRIPTION_ID" ]] || { echo "set SUBSCRIPTION_ID, or run: az login" >&2; exit 1; }
 RESOURCE_GROUP="${RESOURCE_GROUP:-internetresearch}"
 LOCATION="${LOCATION:-westus2}"
 GITHUB_REPO="${GITHUB_REPO:-tgoodyear/internetresearch}"
-export BUDGET_CONTACT_EMAIL="${BUDGET_CONTACT_EMAIL:-trevor.goodyear@gmail.com}"
+# Where Azure sends budget alerts. Must be given explicitly: deriving it from the Azure login
+# would quietly reintroduce the operator's personal address, which is what this avoids.
+[[ -n "${BUDGET_CONTACT_EMAIL:-}" ]] || {
+  echo "set BUDGET_CONTACT_EMAIL to the address that should receive Azure budget alerts, e.g." >&2
+  echo "  BUDGET_CONTACT_EMAIL=alerts@example.org $0" >&2
+  exit 1
+}
+export BUDGET_CONTACT_EMAIL
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 SUB=(--subscription "$SUBSCRIPTION_ID")
@@ -113,7 +122,8 @@ log "GitHub secrets/variables for OIDC login ($GITHUB_REPO)"
 gh secret set AZURE_CLIENT_ID --repo "$GITHUB_REPO" --body "$CI_CLIENT_ID"
 gh secret set AZURE_TENANT_ID --repo "$GITHUB_REPO" --body "$TENANT_ID"
 gh secret set AZURE_SUBSCRIPTION_ID --repo "$GITHUB_REPO" --body "$SUBSCRIPTION_ID"
-gh variable set BUDGET_CONTACT_EMAIL --repo "$GITHUB_REPO" --body "$BUDGET_CONTACT_EMAIL"
+# A secret, not a variable: repository variables are world-readable on a public repo.
+gh secret set BUDGET_CONTACT_EMAIL --repo "$GITHUB_REPO" --body "$BUDGET_CONTACT_EMAIL"
 # Tells the workflows that Azure exists, so a missing secret becomes a failed run instead of a silent skip.
 gh variable set AZURE_BOOTSTRAPPED --repo "$GITHUB_REPO" --body "true"
 

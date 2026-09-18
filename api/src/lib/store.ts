@@ -1,5 +1,6 @@
 import { TableClient, TableEntity, odata, RestError } from '@azure/data-tables';
 import { HttpError } from './http';
+import { PENDING_RESERVATION_DAYS } from './pledging';
 import { Tag } from './validate';
 
 export type ProjectStatus = 'open' | 'closed';
@@ -16,6 +17,8 @@ export interface User {
   url: string;
   createdAt: string;
   updatedAt: string;
+  /** Table Storage row version, for conditional writes. Never published. */
+  etag?: string;
 }
 
 export interface Project {
@@ -37,6 +40,21 @@ export interface Project {
   deadline: string;
   createdAt: string;
   updatedAt: string;
+  /** Table Storage row version, for conditional writes. Never published. */
+  etag?: string;
+  /**
+   * When the listing last recomputed this project's totals. Maintenance bookkeeping, kept apart
+   * from updatedAt so that rotating through refresh candidates does not make a project look
+   * freshly edited to the people reading it.
+   */
+  totalsCheckedAt?: string;
+  /**
+   * Set when a recompute could not be written. Both maintenance refreshers only look at projects
+   * showing a reservation, and a confirmed API pledge leaves pending at zero, so without this a
+   * failed write would never be repaired: there is no "next pledge" to fix it and nothing else
+   * rebuilds the cache.
+   */
+  totalsDirty?: boolean;
 }
 
 export interface Pledge {
@@ -48,9 +66,15 @@ export interface Pledge {
   method: PledgeMethod;
   status: PledgeStatus;
   transactionUrl: string;
+  /** RIPE's transaction id, when it could be looked up. The only per-transfer reference. */
+  transactionId: string;
+  /** When our server observed RIPE accept the transfer. */
+  transferredAt: string;
   message: string;
   createdAt: string;
   updatedAt: string;
+  /** Table Storage row version, for conditional writes. Never published. */
+  etag?: string;
 }
 
 const USERS_PK = 'user';
@@ -60,7 +84,7 @@ type Entity = TableEntity<Record<string, unknown>>;
 
 const clients = new Map<string, TableClient>();
 
-function client(table: 'users' | 'projects' | 'pledges'): TableClient {
+function client(table: 'users' | 'projects' | 'pledges' | 'claims'): TableClient {
   let c = clients.get(table);
   if (!c) {
     const conn = process.env.TABLES_CONNECTION_STRING;
@@ -77,7 +101,7 @@ let ensured: Promise<void> | null = null;
 export function ensureTables(): Promise<void> {
   if (!ensured) {
     ensured = (async () => {
-      for (const t of ['users', 'projects', 'pledges'] as const) {
+      for (const t of ['users', 'projects', 'pledges', 'claims'] as const) {
         try {
           await client(t).createTable();
         } catch (err) {
@@ -92,7 +116,7 @@ export function ensureTables(): Promise<void> {
   return ensured;
 }
 
-async function table(name: 'users' | 'projects' | 'pledges'): Promise<TableClient> {
+async function table(name: 'users' | 'projects' | 'pledges' | 'claims'): Promise<TableClient> {
   await ensureTables();
   return client(name);
 }
@@ -105,7 +129,7 @@ function notFound(): never {
   throw new HttpError(404, 'Not found');
 }
 
-async function getEntity(name: 'users' | 'projects' | 'pledges', pk: string, rk: string): Promise<Entity | null> {
+async function getEntity(name: 'users' | 'projects' | 'pledges' | 'claims', pk: string, rk: string): Promise<Entity | null> {
   try {
     return (await (await table(name)).getEntity(pk, rk)) as Entity;
   } catch (err) {
@@ -125,6 +149,7 @@ function toUser(e: Entity): User {
     atlasEmail: String(e.atlasEmail ?? ''),
     affiliation: String(e.affiliation ?? ''),
     url: String(e.url ?? ''),
+    etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -139,16 +164,40 @@ export async function ensureUser(id: string, provider: string, handle: string): 
   const existing = await getUser(id);
   if (existing) return existing;
   const ts = now();
-  const user: User = { id, provider, handle, displayName: handle, atlasEmail: '', affiliation: '', url: '', createdAt: ts, updatedAt: ts };
+  // Some identity providers put the email address in the handle, and the display name is shown
+  // to anonymous visitors, so seed it with a non-address form of the handle.
+  const displayName = handle.includes('@') ? handle.split('@')[0] : handle;
+  const user: User = { id, provider, handle, displayName, atlasEmail: '', affiliation: '', url: '', createdAt: ts, updatedAt: ts };
   await (await table('users')).upsertEntity({ partitionKey: USERS_PK, rowKey: id, ...user }, 'Merge');
   return user;
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  try {
+    await (await table('users')).deleteEntity(USERS_PK, id);
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 404)) throw err;
+  }
 }
 
 export async function updateUser(id: string, patch: Partial<Pick<User, 'displayName' | 'atlasEmail' | 'affiliation' | 'url'>>): Promise<User> {
   const existing = await getUser(id);
   if (!existing) notFound();
   const updated: User = { ...existing, ...patch, updatedAt: now() };
-  await (await table('users')).upsertEntity({ partitionKey: USERS_PK, rowKey: id, ...updated }, 'Replace');
+  // updateEntity, not upsertEntity, and conditional on the version we read. An unconditional
+  // upsert here would recreate a profile that was deleted between the read above and this write,
+  // putting the RIPE NCC Access email back after the person had asked for it to be removed and
+  // been told it was. A 404 or 412 means exactly that happened, and the right answer is to fail.
+  try {
+    await (await table('users')).updateEntity(
+      { partitionKey: USERS_PK, rowKey: id, ...updated } as TableEntity,
+      'Replace',
+      existing.etag ? { etag: existing.etag } : undefined,
+    );
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) notFound();
+    throw err;
+  }
   return updated;
 }
 
@@ -172,6 +221,9 @@ function toProject(e: Entity): Project {
     repoUrl: String(e.repoUrl ?? ''),
     paperUrl: String(e.paperUrl ?? ''),
     deadline: String(e.deadline ?? ''),
+    etag: typeof e.etag === 'string' ? e.etag : undefined,
+    totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
+    totalsDirty: e.totalsDirty === true,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -205,6 +257,51 @@ export async function saveProject(p: Project): Promise<Project> {
   return updated;
 }
 
+/**
+ * Change named fields on a project, leaving every other column as it is.
+ *
+ * saveProject replaces the whole entity from whatever snapshot the caller holds, so a write built
+ * on a stale read silently reverts anything that changed in between: a pledge recompute's credit
+ * totals, or an owner's edit. Where a handler only means to change a field or two, this merges.
+ * tags is stored comma-joined, exactly as fromProject writes it, because a raw array would either
+ * be rejected by Table Storage or persisted in a shape nothing can read back.
+ */
+/**
+ * Issue the merge for patchProject. Separated so the conditional-write contract can be tested: an
+ * ifMatch that is accepted and then dropped makes every caller believe it is writing conditionally
+ * while it silently overwrites whatever landed in between, and the 412 its retry waits for never
+ * comes. With an ETag this is a conditional merge; without one it is an unconditional merge.
+ */
+export function projectPatchEntity(id: string, patch: Partial<Project>): Record<string, unknown> {
+  const { tags, ...rest } = patch;
+  // updatedAt first so an explicit one in the patch wins. A maintenance write that only refreshes
+  // cached totals passes the existing value through, because bumping it would tell every reader
+  // the project had just been edited when nothing about it changed.
+  const entity: Record<string, unknown> = { partitionKey: PROJECTS_PK, rowKey: id, updatedAt: now(), ...rest };
+  if (tags !== undefined) entity.tags = tags.join(',');
+  return entity;
+}
+
+export async function projectUpdateArgs(
+  client: { updateEntity(entity: never, mode: never, options?: never): Promise<unknown> },
+  id: string,
+  patch: Partial<Project>,
+  ifMatch?: string,
+): Promise<void> {
+  await client.updateEntity(
+    projectPatchEntity(id, patch) as never,
+    'Merge' as never,
+    (ifMatch ? { etag: ifMatch } : undefined) as never,
+  );
+}
+
+export async function patchProject(id: string, patch: Partial<Project>, ifMatch?: string): Promise<Project> {
+  await projectUpdateArgs(await table('projects'), id, patch, ifMatch);
+  const after = await getProject(id);
+  if (!after) notFound();
+  return after;
+}
+
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
   const out: Project[] = [];
   for await (const e of (await table('projects')).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId}` } })) {
@@ -225,7 +322,10 @@ function toPledge(e: Entity): Pledge {
     method: (e.method as PledgeMethod) ?? 'manual',
     status: (e.status as PledgeStatus) ?? 'pledged',
     transactionUrl: String(e.transactionUrl ?? ''),
+    transactionId: String(e.transactionId ?? ''),
+    transferredAt: String(e.transferredAt ?? ''),
     message: String(e.message ?? ''),
+    etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -252,33 +352,187 @@ export async function getPledge(projectId: string, id: string): Promise<Pledge |
   return e ? toPledge(e) : null;
 }
 
+/**
+ * The single live-pledge slot a donor holds on a project.
+ *
+ * Reading the pledge list and then writing a row cannot enforce "one live pledge per donor":
+ * a request that reads before a rival writes sees nothing to conflict with, and both proceed.
+ * Sorting ids does not save it either, because two pledges created in the same millisecond are
+ * ordered by a random suffix, so the rival can win and the first request has already gone ahead.
+ * For a flow that moves credits irreversibly, that is a double transfer.
+ *
+ * Table Storage has no transaction spanning two rows, but creating one row IS atomic: exactly one
+ * caller can create a given partition/row key and the rest get 409. That is the whole mechanism.
+ * The row key is the donor id, so the slot is per (project, donor).
+ */
+const CLAIMS_TABLE = 'claims' as const;
+
+/**
+ * How long a slot with no pledge row behind it is still presumed to be a request in flight rather
+ * than an orphan. The gap it covers is one table write plus, at worst, one RIPE call bounded by a
+ * 20-second timeout. Two minutes is far wider than that, and the cost of being wrong in this
+ * direction is only that a donor whose request died at exactly the wrong moment waits a little
+ * before retrying, against a double transfer in the other.
+ */
+const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
+
+/**
+ * Take the slot. Returns false when another live pledge already holds it.
+ *
+ * A slot is reclaimable when the pledge behind it is no longer live, or when it has outlived the
+ * reservation window. Reclaiming is itself conditional on the row's ETag, so if two requests both
+ * decide a stale slot is free, only one takes it. Without that self-healing a release that failed
+ * to run would lock a donor out of a project for ever.
+ */
+/**
+ * Whether a held slot can be taken from its current owner. Separated from the storage call so the
+ * rule can be tested: a slot is free once the pledge behind it has settled, and after the
+ * reservation window regardless, which is what stops a release that never ran from locking a donor
+ * out of a project permanently.
+ */
+export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
+  const heldSince = Date.parse(heldCreatedAt);
+  if (!Number.isFinite(heldSince)) return true;
+  const age = asOf - heldSince;
+  if (age > PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000) return true;
+  if (!pledge) {
+    // A slot with no pledge behind it is almost always a request still in flight: the slot is
+    // taken first, and only then is the row written. Calling that free would hand a rival the
+    // slot inside that gap, and both would go on to transfer, which is the exact failure the
+    // slot exists to prevent. So a pledgeless slot counts as held until enough time has passed
+    // that no request could still be inside the window.
+    return age > CLAIM_ORPHAN_GRACE_MS;
+  }
+  return pledge.status !== 'pledged' && pledge.status !== 'sent';
+}
+
+export async function acquirePledgeClaim(projectId: string, donorId: string, pledgeId: string): Promise<boolean> {
+  const t = await table(CLAIMS_TABLE);
+  const entity = { partitionKey: projectId, rowKey: donorId, pledgeId, createdAt: now() };
+  try {
+    await t.createEntity(entity);
+    return true;
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+  }
+
+  const held = await getEntity(CLAIMS_TABLE, projectId, donorId);
+  if (!held) return acquirePledgeClaim(projectId, donorId, pledgeId);
+
+  const pledge = await getPledge(projectId, String(held.pledgeId ?? ''));
+  if (!claimIsReclaimable(String(held.createdAt ?? ''), pledge)) return false;
+
+  try {
+    await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+    return true;
+  } catch (err) {
+    // 412 means somebody else reclaimed it between our read and our write. They won.
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    throw err;
+  }
+}
+
+/** Give the slot back. Safe to call when it is not held, and when it is held by someone else. */
+export async function releasePledgeClaim(projectId: string, donorId: string, pledgeId: string): Promise<void> {
+  const held = await getEntity(CLAIMS_TABLE, projectId, donorId);
+  if (!held || String(held.pledgeId ?? '') !== pledgeId) return;
+  try {
+    await (await table(CLAIMS_TABLE)).deleteEntity(projectId, donorId, { etag: String(held.etag ?? '') });
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) return;
+    throw err;
+  }
+}
+
 export async function createPledge(p: Pledge): Promise<Pledge> {
   await (await table('pledges')).createEntity({ partitionKey: p.projectId, rowKey: p.id, ...p });
   return p;
 }
 
-export async function savePledge(p: Pledge): Promise<Pledge> {
+export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   const updated = { ...p, updatedAt: now() };
-  await (await table('pledges')).upsertEntity({ partitionKey: p.projectId, rowKey: p.id, ...updated }, 'Replace');
+  const entity = { partitionKey: p.projectId, rowKey: p.id, ...updated };
+  const t = await table('pledges');
+  // With ifMatch this is a conditional replace: it fails with 412 if the row changed since the
+  // caller read it, which is how two people acting on the same pledge stop overwriting each other.
+  if (ifMatch) await t.updateEntity(entity as TableEntity, 'Replace', { etag: ifMatch });
+  else await t.upsertEntity(entity, 'Replace');
   return updated;
 }
 
-export function totals(pledges: Pledge[]): { confirmed: number; pending: number } {
+/**
+ * Sum a project's pledges. Pending pledges older than PENDING_RESERVATION_DAYS stop counting
+ * towards the reserved total, so an abandoned pledge releases the capacity it was holding
+ * instead of blocking the project for ever.
+ */
+export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirmed: number; pending: number } {
+  const cutoff = asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
   let confirmed = 0;
   let pending = 0;
   for (const p of pledges) {
-    if (p.status === 'confirmed') confirmed += p.amount;
-    else if (p.status === 'pledged' || p.status === 'sent') pending += p.amount;
+    if (p.status === 'confirmed') {
+      confirmed += p.amount;
+    } else if (p.status === 'pledged' || p.status === 'sent') {
+      const created = Date.parse(p.createdAt);
+      if (!Number.isFinite(created) || created >= cutoff) pending += p.amount;
+    }
   }
   return { confirmed, pending };
 }
 
+/**
+ * Pledges by this donor on this project that still hold a reservation. Expiry is applied here as
+ * well as in totals(), so that once a reservation lapses the donor may start a replacement rather
+ * than being locked out for ever by their own abandoned pledge.
+ */
+/**
+ * Whether a pending pledge still holds its reservation. Expiry is a read-time rule rather than a
+ * stored status, because there is no timer to write one, so every path that treats a pledge as
+ * live has to apply it.
+ */
+export function pledgeExpired(p: Pledge, asOf: number = Date.now()): boolean {
+  if (p.status !== 'pledged' && p.status !== 'sent') return false;
+  const created = Date.parse(p.createdAt);
+  if (!Number.isFinite(created)) return false;
+  return created < asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
+}
+
+export function activePledgesBy(pledges: Pledge[], donorId: string, asOf: number = Date.now()): Pledge[] {
+  const cutoff = asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
+  return pledges.filter((p) => {
+    if (p.donorId !== donorId) return false;
+    if (p.status !== 'pledged' && p.status !== 'sent') return false;
+    const created = Date.parse(p.createdAt);
+    return !Number.isFinite(created) || created >= cutoff;
+  });
+}
+
 /** Recompute cached totals on the project from its pledges. */
-export async function recomputeProjectTotals(projectId: string): Promise<Project> {
-  const project = await getProject(projectId);
-  if (!project) notFound();
-  const t = totals(await listPledges(projectId));
-  return saveProject({ ...project, creditsConfirmed: t.confirmed, creditsPending: t.pending });
+/**
+ * Rewrite a project's cached credit totals from its pledges.
+ *
+ * Two pledge writes finishing at once would otherwise each compute totals from their own snapshot
+ * and write unconditionally, so whichever landed last would win with a figure that omitted the
+ * other's pledge. Nothing later repairs that: the cached total is only rebuilt by another pledge
+ * write, so a project could sit permanently under-counted. The write is therefore conditional on
+ * the row not having changed since it was read, and a conflict means recompute and try again,
+ * which converges because the totals are derived from the pledges rather than from the old value.
+ */
+export async function recomputeProjectTotals(projectId: string, attempts = 5): Promise<Project> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    const project = await getProject(projectId);
+    if (!project) notFound();
+    const t = totals(await listPledges(projectId));
+    if (project.creditsConfirmed === t.confirmed && project.creditsPending === t.pending) return project;
+    try {
+      return await patchProject(projectId, { creditsConfirmed: t.confirmed, creditsPending: t.pending }, project.etag);
+    } catch (err) {
+      if (!(err instanceof RestError && err.statusCode === 412)) throw err;
+      last = err;
+    }
+  }
+  throw last instanceof Error ? last : new HttpError(409, 'Could not update project totals');
 }
 
 export { now };

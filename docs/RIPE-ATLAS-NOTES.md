@@ -123,10 +123,13 @@ November 2025, https://arxiv.org/abs/2511.22474) analyses one full day of the pl
   built-in measurements 21.1%; user-defined measurements, the ones that cost credits,
   only 11.4%. A large share of existing data is free to reuse.
 - **Credits and quotas** (section 2.2): each measurement's cost is proportional to the
-  load it places on probes; a user cannot run more than 100 measurements at once, use
-  more than 1,000 probes per measurement, or spend more than 1M credits per day. The
-  Atlas team considers exceptions case by case. Anchors earn ten times the credits of
-  probes.
+  load it places on probes; a user cannot run more than 100 measurements at once or use
+  more than 1,000 probes per measurement. The paper gives the daily spend limit as 1M
+  credits, but that is **per account and not universal**: a production account checked on
+  2026-09-17 reported `max_daily_credits: 10000000`. The live value is in the
+  `max_daily_credits` field of `GET /api/v2/credits/`, so quote that rather than a
+  constant. The Atlas team considers exceptions case by case. Anchors earn ten times the
+  credits of probes.
 - **Researcher access** (section 1): the platform "is open for anyone to launch custom
   measurements, provided a user possesses a sufficient amount of RIPE Atlas credits",
   and "if in need, researchers can request them by contacting the RIPE Atlas team

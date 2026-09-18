@@ -27,7 +27,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
    │ static assets (global CDN)         │ @azure/data-tables
    │                                    ▼
    │                          Azure Storage account (Standard LRS)
-   │                             tables: users, projects, pledges
+   │                             tables: users, projects, pledges, claims
    │
    └── donor-initiated transfer ──▶ https://atlas.ripe.net/api/v2/credits/transfers/
                                      Authorization: Key <donor key, single use>
@@ -53,7 +53,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `title` (≤120), `summary` (≤280), `description` (≤8000, plain text with paragraphs) | |
 | `creditsRequested` | Integer 1..1e9. |
 | `creditsConfirmed`, `creditsPending` | Cached sums recomputed from pledges after every pledge change. |
-| `status` | `open` \| `closed`. `funded` is derived (`creditsConfirmed >= creditsRequested`) and does not stop pledges; `capacity` (100× request minus confirmed) does. |
+| `status` | `open` \| `closed`. `funded` is derived and does not stop pledges. Whether a project is *listed* depends on confirmed credits alone, so a pending pledge can never hide it. A pending pledge reserves capacity for `PENDING_RESERVATION_DAYS` (14) and then stops counting, so an abandoned pledge releases what it held. |
 | `tags` | Subset of: ping, traceroute, dns, sslcert, http, ntp, ipv4, ipv6, anchors, other. |
 | `affiliation`, `homepageUrl`, `repoUrl`, `paperUrl`, `deadline` | Optional. |
 | `createdAt`, `updatedAt` | |
@@ -63,10 +63,11 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | Field | Notes |
 | --- | --- |
 | `donorId`, `donorName` | |
-| `amount` | Integer ≥ 1, capped at the project's remaining *capacity* at pledge time: projects accept credits until they have received 100× their request (`OVERFUND_MULTIPLIER`). |
+| `amount` | Integer ≥ 1. Capped two ways: by the project's remaining *capacity* (100× the request, minus confirmed, minus live reservations) and by `maxSinglePledge`, which is what is left to the goal, or one goal's worth once the goal is met. The second cap stops any one pledge reserving the whole ceiling. |
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
-| `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. `api` pledges go straight to `confirmed` with `transactionUrl` proof because our server observed RIPE's 201. |
-| `transactionUrl` | The URL RIPE returned, when method is `api`. |
+| `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |
+| `transactionId` | RIPE's transaction id, looked up after the transfer. The transfer endpoint itself returns only a generic list URL (`.../credits/transactions/?sort=-date&type=admin`), the same for every transfer and readable only with the donor's own key, so it is not a reference. The lookup needs the credits-read permission and is best effort. |
+| `transactionUrl` | A link we build from `transactionId` when the lookup finds one unambiguous match, so it is present only when `transactionId` is. Rows created before that change may instead hold the generic list URL the transfer endpoint returned. |
 | `message` | Optional public note from the donor. |
 | `createdAt`, `updatedAt` | |
 
@@ -84,18 +85,51 @@ the partition after each change, so the project row never drifts.
    https://atlas.ripe.net/credits/ (transactions list). Close the project when done.
 
 ### Donor
-1. Open a project, click **Send credits**, pick an amount (defaults to what is left toward the goal; anything up to 100× the request is accepted).
+1. Open a project, click **Send credits**, pick an amount. It defaults to what is left toward the goal, and is bounded by `maxSinglePledge`: what is left to the goal, or one goal's worth once the goal is met. A project accepts up to 100× its request in total, but no single pledge may reserve that whole ceiling.
 2. Choose one:
    - **Transfer now with an API key**: the donor pastes a key created at
-     https://atlas.ripe.net/keys/ with only the credit-transfer permission. The
+     https://atlas.ripe.net/keys/ with two permissions, "Transfer credits to another
+     user" and "Get information about your credits", the latter so the balance can be
+     checked before sending. A transfer-only key works, with the check skipped. The
      function optionally reads the balance (`GET /credits/`) to warn on insufficient
-     funds, then calls `POST /credits/transfers/`. On 201 the pledge is stored as
-     `confirmed` with the transaction URL. The key lives only in the request scope.
-     The UI tells donors to delete or disable the key afterwards.
+     funds, then calls `POST /credits/transfers/` exactly once. On 201 the pledge is
+     stored as `confirmed`, and a transaction lookup runs to attach a reference. That
+     reference is best effort: it needs the credits-read permission, and it is stored
+     only when exactly one transaction matches, so a pledge may carry none. RIPE
+     accepting the call is what records that the credits moved. If RIPE never answers,
+     the pledge is stored as `sent`, keeps the donor's slot, and waits for a person to
+     settle it. The key lives only in the request scope, and the UI tells donors to
+     delete or disable it afterwards.
    - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
      donor marks it `sent`; the requester marks it `confirmed`.
 3. Donor's pledges are listed on their dashboard.
+
+### Abuse limits
+
+- A donor may hold one live pledge per project. Without it, one account could reserve a project
+  repeatedly and re-read the owner's contact address at will. The limit is held by a row in the
+  `claims` table, one per (project, donor), taken before anything else happens. Reading the pledge
+  list and then writing cannot enforce it, because a request that reads before a rival writes sees
+  nothing to conflict with and both proceed; creating a single row is atomic, so exactly one
+  request wins. A slot is reclaimable once its pledge has settled, and after the reservation window
+  regardless, so a release that never ran cannot lock a donor out for good.
+- No single pledge may reserve a project's whole ceiling, so one free account cannot block every
+  other donor.
+- Reservations expire after 14 days, so the site heals without a background job.
+- Listing and statistics key off confirmed credits, so reservations never affect what is visible.
+
+### Privacy
+
+The RIPE NCC Access email is the one piece of personal data the platform holds that matters. It
+never appears on an anonymous endpoint. A signed-in donor sees it when they begin a manual
+pledge, because they need it to transfer the credits, and the owner sees that donor by name
+against the pledge. `DELETE /api/me` removes the profile and the address; projects and pledges
+remain, carrying only the chosen display name, because other people rely on that record.
+
+Sign-in handles are never returned publicly. Static Web Apps fills `userDetails` with the email
+address for some identity providers, and that value seeds both the handle and the initial display
+name, so `publicName()` reduces anything email-shaped to its local part before it leaves the API.
 
 ### Trust model
 - Requester identity is a GitHub/Microsoft account plus a self-declared RIPE email.
@@ -112,6 +146,7 @@ the partition after each change, so the project row never drifts.
 | --- | --- | --- |
 | `GET /api/me` | user | Profile + client principal. Creates the user row on first call. |
 | `PUT /api/me` | user | Update `displayName`, `atlasEmail`, `affiliation`, `url`. |
+| `DELETE /api/me` | user | Delete the profile, including the stored RIPE NCC Access email. |
 | `GET /api/projects?status=open&tag=dns&q=` | public | List. Never includes emails. |
 | `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message). |
 | `POST /api/projects` | user (needs `atlasEmail`) | Create. |
@@ -136,7 +171,7 @@ the SPA shows its own sign-in prompt.
 | --- | --- | --- | --- |
 | Resource group `internetresearch` (westus2) | `infra/main.bicep` | | $0 |
 | Static Web App `swa-internetresearch` + `appsettings` | `infra/app.bicep` | Free | $0 (100 GB bandwidth/mo, 2 custom domains; staging environments disabled) |
-| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges` | `infra/app.bicep` | Standard LRS | ≈ $0.05/mo at expected volumes |
+| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS | ≈ $0.05/mo at expected volumes |
 | Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go | $0 inside the 5 GB/month free allowance |
 | Consumption budget `internetresearch-monthly` | `infra/platform.bicep` | $120, alerts at 50% and 80% actual, 100% forecast | $0 |
 | User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | | $0 |

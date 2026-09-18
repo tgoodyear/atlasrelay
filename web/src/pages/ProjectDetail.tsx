@@ -46,7 +46,7 @@ export default function ProjectDetail() {
   if (error) return <div className="narrow"><div className="empty" style={{ marginTop: '3rem' }}>{error}. <Link to="/projects">All projects</Link></div></div>;
   if (!project) return <div className="container"><Spinner /></div>;
 
-  const canPledge = project.status === 'open' && project.capacity > 0 && !isOwner;
+  const canPledge = project.open && project.maxPledge > 0 && !isOwner;
 
   const updatePledge = async (p: Pledge, status: Pledge['status']) => {
     setBusy(p.id);
@@ -108,7 +108,7 @@ export default function ProjectDetail() {
                           <span>
                             <strong>{p.donorName || 'Anonymous donor'}</strong> · {fmt(p.amount)} credits
                           </span>
-                          <PledgeStatusPill status={p.status} hasProof={p.hasProof} />
+                          <PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} />
                         </div>
                         {p.message && <p className="message">{p.message}</p>}
                         <div className="when">{fmtDate(p.createdAt)}{p.method === 'api' ? ' · via API' : ''}</div>
@@ -139,7 +139,7 @@ export default function ProjectDetail() {
               <p className="small muted" style={{ margin: '0.75rem 0 1rem' }}>
                 {project.remaining > 0
                   ? `${fmt(project.remaining)} credits to go, roughly ${pingsFor(project.remaining)} ping results.`
-                  : project.capacity > 0
+                  : project.maxPledge > 0
                     ? `The goal is reached, and the project can still accept ${fmt(project.capacity)} more credits, up to 100× its request.`
                     : 'This project has reached its ceiling of 100× its request. Thank you, donors.'}
                 {project.deadline ? ` Needed by ${fmtDate(project.deadline)}.` : ''}
@@ -167,7 +167,7 @@ export default function ProjectDetail() {
                 <dt>Requested</dt><dd>{fmt(project.creditsRequested)}</dd>
                 <dt>Received</dt><dd>{fmt(project.creditsConfirmed)}</dd>
                 <dt>Pending</dt><dd>{fmt(project.creditsPending)}</dd>
-                <dt>Posted by</dt><dd>{owner?.handle ? `${project.ownerName} (${owner.provider === 'aad' ? 'Microsoft' : owner.provider}: ${owner.handle})` : project.ownerName}</dd>
+                <dt>Posted by</dt><dd>{owner ? `${project.ownerName} (signed in with ${owner.provider === 'aad' ? 'Microsoft' : 'GitHub'})` : project.ownerName}</dd>
                 {project.deadline && (<><dt>Deadline</dt><dd>{fmtDate(project.deadline)}</dd></>)}
                 <dt>Updated</dt><dd>{fmtDate(project.updatedAt)}</dd>
               </dl>

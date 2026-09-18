@@ -106,8 +106,8 @@ export default function ProjectForm() {
               htmlFor="credits"
               hint={
                 credits > 0
-                  ? `≈ ${pingsFor(credits)} ping results, or ${Math.floor(credits / 30).toLocaleString('en-US')} traceroutes.${credits > 1_000_000 ? ` RIPE Atlas caps spending at 1M credits per user per day, so this takes at least ${Math.ceil(credits / 1_000_000)} days to spend.` : ''}`
-                  : 'Whole number. A ping result costs 3 credits, a traceroute 30. Each user can spend at most 1M credits per day.'
+                  ? `≈ ${pingsFor(credits)} ping results, or ${Math.floor(credits / 30).toLocaleString('en-US')} traceroutes. RIPE Atlas also caps how much any one account may spend per day, so a large request takes time to use; your own limit is shown on your credits page.`
+                  : 'Whole number. A ping result costs 3 credits, a traceroute 30. RIPE Atlas caps daily spending per account, so check your own limit before asking for a very large amount.'
               }
             >
               <input id="credits" type="number" min={1} max={1000000000} step={1} value={creditsRequested} onChange={(e) => setCreditsRequested(e.target.value)} required />

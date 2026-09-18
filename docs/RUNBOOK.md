@@ -2,10 +2,11 @@
 
 ## First deployment
 
-Prerequisites: `az` (logged in as an Owner of subscription
-`25bf257c-c94e-4d61-bba3-edc635f46602`; the tenant requires MFA, so use
-`az login --tenant <tenant-id>`), `gh` (logged in with `repo` and `workflow` scopes),
-`jq`, Node 22.12+.
+Prerequisites: `az`, logged in as an Owner of the target subscription and with it
+selected (`az account set -s <id>`), or with `SUBSCRIPTION_ID` exported. If the tenant
+enforces MFA, use `az login --tenant <tenant-id>`. Also `gh` (logged in with `repo` and
+`workflow` scopes), `jq`, and Node 22.12+. Set `BUDGET_CONTACT_EMAIL` to the address that
+should receive Azure budget alerts.
 
 ```bash
 ./scripts/bootstrap.sh
@@ -25,7 +26,9 @@ The script is idempotent and creates nothing outside Bicep. It:
    after 45 s (custom-role replication lag).
 4. Waits for the role assignment to be visible, then sets GitHub secrets
    `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identifiers, not
-   credentials) and the variables `BUDGET_CONTACT_EMAIL` and `AZURE_BOOTSTRAPPED`.
+   credentials), the secret `BUDGET_CONTACT_EMAIL`, and the variable `AZURE_BOOTSTRAPPED`.
+   The contact address is a secret rather than a variable because repository variables are
+   world-readable once the repository is public.
 5. Prints the site hostname.
 
 Role assignments can take a few minutes to propagate; if the first workflow run fails

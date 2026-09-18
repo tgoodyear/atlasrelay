@@ -12,7 +12,7 @@ export default function HowItWorks() {
         <div className="card"><div className="card-body">
           <h2>If you need credits</h2>
           <ol className="steps">
-            <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. That email is where donors send credits. It is never shown publicly, only to a donor who has committed to a pledge.</li>
+            <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. That email is where donors send credits. It never appears on a public page, and a signed-in donor sees it when they start a manual pledge to your project, so that they can send the transfer. You see each of those donors by name.</li>
             <li>Post a project: what you are measuring, why it matters, how many credits you need, and by when. Rough guide from the <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">RIPE Atlas docs</a>: a ping result costs 3 credits, DNS 10 to 20, traceroute 30, one-off measurements double.</li>
             <li>When a donor sends credits manually, they appear in your <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">Atlas credits page</a>. Confirm the pledge on your dashboard. API-driven transfers are confirmed automatically.</li>
             <li>Close the project when you are done and, ideally, link your results so donors see what they enabled.</li>
@@ -23,7 +23,7 @@ export default function HowItWorks() {
           <h2>If you have credits to share</h2>
           <ol className="steps">
             <li>Open a project and click <strong>Send credits</strong>. Choose an amount; you can't exceed what the project still needs.</li>
-            <li><strong>Transfer through the API.</strong> Create a key at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with only the credit-transfer permission and, ideally, a short validity window. Paste it in. We call <code>POST /api/v2/credits/transfers/</code> once, record RIPE's transaction reference as proof, and discard the key. Delete the key afterwards.</li>
+            <li><strong>Transfer through the API.</strong> Create a key at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with two permissions and no others: <strong>Transfer credits to another user</strong>, which sends the credits, and <strong>Get information about your credits</strong>, which lets us check your balance first, so the commonest reason a transfer fails is caught before anything moves. Give it a short validity window. Paste it in, and we call <code>POST /api/v2/credits/transfers/</code> exactly once, then discard the key. RIPE accepting that call is what confirms the credits moved. We also try to look up the matching transaction so the pledge can carry a reference, which needs the credits-read permission and is skipped when we cannot identify the transaction unambiguously. Delete the key afterwards. A key with only the transfer permission still works, but the balance check is skipped.</li>
             <li><strong>Or transfer by hand.</strong> We show you the recipient email and amount with a link to <a href="https://atlas.ripe.net/credits/transfer/" target="_blank" rel="noreferrer">the Atlas transfer page</a>. Mark the pledge as sent; the researcher confirms receipt.</li>
           </ol>
         </div></div>
@@ -31,16 +31,43 @@ export default function HowItWorks() {
         <div className="card"><div className="card-body">
           <h2>Before you ask for credits</h2>
           <p className="muted">
-            A 2025 operational study of RIPE Atlas found that user-defined measurements, the ones that cost credits, produce only about 11% of the platform's 1.3 billion daily results; anchoring and built-in measurements produce the rest and are free to reuse. The same study documents the per-user quotas: at most 100 concurrent measurements, 1,000 probes per measurement and 1,000,000 credits spent per day.
+            A 2025 operational study of RIPE Atlas found that user-defined measurements, the ones that cost credits, produce only about 11% of the platform's 1.3 billion daily results; anchoring and built-in measurements produce the rest and are free to reuse. The same study documents the default per-user quotas: at most 100 concurrent measurements, 1,000 probes per measurement and 1,000,000 credits spent per day. The daily figure is a default rather than a universal ceiling. It is set per account, the RIPE NCC raises it on request, and your own is in the <code>max_daily_credits</code> field of your credits page.
           </p>
           <ol className="steps">
             <li>Check whether <a href="https://atlas.ripe.net/docs/getting-started/built-in-measurements/" target="_blank" rel="noreferrer">built-in</a>, anchoring or existing public measurements already answer your question. Say so in your project description; donors appreciate it.</li>
-            <li>Size the request and the deadline against the 1M credits/day quota: a 30M-credit campaign takes at least 30 days of measuring, however fast the credits arrive.</li>
+            <li>Size the request and the deadline against your own daily spend limit, not just the total. On the default 1M credits/day a 30M-credit campaign takes at least 30 days of measuring, however fast the credits arrive. Check your own limit first, and say in the project what it is, because it is what decides your realistic timeline.</li>
             <li>Prefer recurring measurements over repeated one-offs (one-offs cost double), tag and describe them so others can reuse them, and avoid DNS queries for domains that are sensitive in some jurisdictions.</li>
             <li>RIPE NCC also considers direct credit requests from researchers; contact the <a href="https://atlas.ripe.net/contact/" target="_blank" rel="noreferrer">RIPE Atlas team</a>. This exchange complements that route.</li>
           </ol>
           <p className="small muted" style={{ marginTop: '1rem', marginBottom: 0 }}>
             Source: Nosyk, Tashiro, Lone, Kisteleki, Duda and Korczyński, <a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer"><em>Day in the Life of RIPE Atlas: Operational Insights and Applications in Network Measurements</em></a>, arXiv:2511.22474, November 2025.
+          </p>
+        </div></div>
+
+        <div className="card"><div className="card-body">
+          <h2>What this site stores about you</h2>
+          <p className="muted">
+            Signing in records an identifier from GitHub or Microsoft, your display name, and
+            anything you choose to add: affiliation, a homepage, and the email of your RIPE NCC
+            Access account. Projects and pledges you create are stored with your display name.
+          </p>
+          <p className="muted">
+            Your RIPE NCC Access email is never shown on a public page. It is shown to a signed-in
+            donor at the point they begin a manual pledge to your project, because they need it to
+            transfer the credits, and each such donor appears by name on your project. No advertising
+            service receives anything, and there are no tracking cookies. The site does send
+            operational telemetry to Azure Application Insights, which is what tells us the API is
+            working: request paths, status codes, timings and errors, kept for 30 days. That stream
+            carries no profile fields, no RIPE NCC Access email and no API key.
+          </p>
+          <p className="muted">
+            RIPE Atlas API keys are never stored. A key you paste is used for a single transfer
+            request and discarded; it is not written to storage or to logs.
+          </p>
+          <p className="muted">
+            You can delete your profile, including your RIPE email, at any time from your{' '}
+            <Link to="/profile">profile page</Link>. Projects and pledges remain, carrying only the
+            display name you chose, because other people rely on that record.
           </p>
         </div></div>
 

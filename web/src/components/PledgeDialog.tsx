@@ -10,7 +10,9 @@ interface Props {
 type Step = 'form' | 'manual-instructions' | 'api-done';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
-  const [amount, setAmount] = useState(String(Math.min(project.remaining > 0 ? project.remaining : project.capacity, 100_000)));
+  // Always bounded by the server-computed per-pledge limit, so the dialog never opens on a
+  // value the submit button would reject.
+  const [amount, setAmount] = useState(String(Math.min(project.remaining > 0 ? project.remaining : project.maxPledge, project.maxPledge, 100_000)));
   const [method, setMethod] = useState<'api' | 'manual'>('api');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
@@ -21,6 +23,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [step, setStep] = useState<Step>('form');
   const [recipient, setRecipient] = useState('');
   const [warning, setWarning] = useState('');
+  const [hasReference, setHasReference] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -30,7 +33,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   }, [onClose]);
 
   const n = Number(amount);
-  const amountOk = Number.isInteger(n) && n >= 1 && n <= project.capacity;
+  const amountOk = Number.isInteger(n) && n >= 1 && n <= project.maxPledge;
 
   const checkBalance = async () => {
     setChecking(true);
@@ -54,6 +57,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       const res = await api.createPledge(project.id, { amount: n, method, message, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
+      setHasReference(Boolean(res.pledge?.hasReference));
       if (method === 'manual') {
         setRecipient(res.recipientEmail ?? '');
         setStep('manual-instructions');
@@ -92,12 +96,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <form onSubmit={submit}>
               <div className="field">
                 <label htmlFor="amount">Amount</label>
-                <input id="amount" type="number" min={1} max={project.capacity} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                <input id="amount" type="number" min={1} max={project.maxPledge} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
                 <span className="hint">
                   {project.remaining > 0
-                    ? `This project still needs ${fmt(project.remaining)} credits to reach its goal`
-                    : 'This project has reached its goal'}
-                  {` and can accept up to ${fmt(project.capacity)} more (100× its request).`}
+                    ? `This project still needs ${fmt(project.remaining)} credits to reach its goal. `
+                    : 'This project has reached its goal. '}
+                  {`The largest single pledge it accepts right now is ${fmt(project.maxPledge)} credits, and it can take ${fmt(project.capacity)} in total.`}
                 </span>
               </div>
 
@@ -113,7 +117,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <input type="radio" name="method" checked={method === 'manual'} onChange={() => setMethod('manual')} />
                   <div>
                     <strong>I'll transfer on atlas.ripe.net myself</strong>
-                    <span>We show you the recipient and amount. You mark it sent; the researcher confirms.</span>
+                    <span>We show you the researcher's RIPE NCC Access email so you can send the credits. They will see your name against this pledge.</span>
                   </div>
                 </label>
               </div>
@@ -123,7 +127,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <label htmlFor="apiKey">RIPE Atlas API key</label>
                   <input id="apiKey" type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(e) => { setApiKey(e.target.value); setBalance(null); }} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
                   <span className="hint">
-                    Create one at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with the credit-transfer permission only, ideally with a short validity window. Delete it afterwards.
+                    Create one at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with these two permissions, and nothing else:
+                    {' '}<strong>Transfer credits to another user</strong> and <strong>Get information about your credits</strong>.
+                    The second is what lets us check your balance before sending. Set a short validity window, and delete the key afterwards.
                   </span>
                   <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.4rem', flexWrap: 'wrap' }}>
                     <button type="button" className="btn btn-secondary btn-sm" onClick={checkBalance} disabled={checking || apiKey.trim().length < 36}>
@@ -172,7 +178,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 </li>
                 <li>Back on your dashboard, mark the pledge as <strong>sent</strong>. The researcher will confirm once the credits appear.</li>
               </ol>
-              <p className="small muted" style={{ marginTop: '1rem' }}>Please keep the recipient email to yourself; it is only shown to committed donors.</p>
+              <p className="small muted" style={{ marginTop: '1rem' }}>
+                Use this address only to send these credits. The researcher can see that you asked for it, and you can hold one pledge per project at a time.
+              </p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={onClose}>Done</button>
               </div>
@@ -181,7 +189,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
 
           {step === 'api-done' && (
             <>
-              <div className="alert alert-success">RIPE Atlas accepted the transfer of {fmt(n)} credits. The pledge is confirmed with the transaction reference.</div>
+              <div className="alert alert-success">
+                RIPE Atlas accepted the transfer of {fmt(n)} credits, and the pledge is confirmed.
+                {hasReference
+                  ? ' It carries RIPE\u2019s transaction reference.'
+                  : ' We could not identify a single matching transaction, so the pledge carries no reference; RIPE accepting the transfer is the record.'}
+              </div>
               {warning && <div className="alert alert-warn">{warning}</div>}
               <p>Remember to delete or disable the API key you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.</p>
               <div className="form-actions">

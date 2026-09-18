@@ -1,26 +1,44 @@
 /** Projects keep accepting credits until they have received this many times their request. */
 export const OVERFUND_MULTIPLIER = 100;
 
+/**
+ * A pending pledge stops reserving capacity after this long. Reservations are how a donor is
+ * given time to make a manual transfer, but without an expiry one abandoned pledge would hold a
+ * project's capacity for ever, so stale ones fall away on their own.
+ */
+export const PENDING_RESERVATION_DAYS = 14;
+
 /** Upper bound on total confirmed credits for a project. */
 export function maxCredits(creditsRequested: number): number {
   return creditsRequested * OVERFUND_MULTIPLIER;
 }
 
+/** Credits still needed to reach the stated goal (never negative). */
+export function remainingToGoal(creditsRequested: number, creditsConfirmed: number): number {
+  return Math.max(0, creditsRequested - creditsConfirmed);
+}
+
 /**
- * Largest pledge a project will accept right now. Pending pledges (pledged/sent) reserve
- * capacity so several manual pledges cannot each claim the whole ceiling; cancelling one
- * releases its share because totals are recomputed from the pledge rows.
+ * Credits a project can still accept. Pending pledges reserve capacity so that several donors do
+ * not each transfer the last slice, but only confirmed credits decide whether a project is still
+ * listed (see acceptsMorePledges), so a pending pledge cannot hide a project from the site.
  */
 export function capacity(creditsRequested: number, creditsConfirmed: number, creditsPending = 0): number {
   return Math.max(0, maxCredits(creditsRequested) - creditsConfirmed - creditsPending);
 }
 
-/** True when confirming `amount` more credits would push the project past its ceiling. */
-export function exceedsCeiling(creditsRequested: number, creditsConfirmed: number, amount: number): boolean {
-  return creditsConfirmed + amount > maxCredits(creditsRequested);
+/** Whether the project is still short of its ceiling on confirmed credits alone. */
+export function acceptsMorePledges(creditsRequested: number, creditsConfirmed: number): boolean {
+  return creditsConfirmed < maxCredits(creditsRequested);
 }
 
-/** Credits still needed to reach the stated goal (never negative). */
-export function remainingToGoal(creditsRequested: number, creditsConfirmed: number): number {
-  return Math.max(0, creditsRequested - creditsConfirmed);
+/**
+ * Largest single pledge a project accepts. Capped at what is still needed to reach the goal, or
+ * at one goal's worth once the goal is met, so that no single pledge can reserve the whole 100x
+ * ceiling and lock everyone else out.
+ */
+export function maxSinglePledge(creditsRequested: number, creditsConfirmed: number, creditsPending = 0): number {
+  const remaining = remainingToGoal(creditsRequested, creditsConfirmed);
+  const perPledgeLimit = remaining > 0 ? remaining : creditsRequested;
+  return Math.min(perPledgeLimit, capacity(creditsRequested, creditsConfirmed, creditsPending));
 }

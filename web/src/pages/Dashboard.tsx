@@ -96,13 +96,20 @@ export default function Dashboard() {
                   <tr key={p.id}>
                     <td><Link to={`/projects/${p.projectId}`}>{p.projectTitle || p.projectId}</Link></td>
                     <td className="mono">{fmt(p.amount)}</td>
-                    <td>{p.method === 'api' ? 'API' : 'Manual'}{p.transactionUrl ? ' · proof recorded' : ''}</td>
-                    <td><PledgeStatusPill status={p.status} hasProof={p.hasProof} /></td>
+                    <td>{p.method === 'api' ? 'API' : 'Manual'}{p.transactionId ? ` · RIPE txn ${p.transactionId}` : ''}</td>
+                    <td><PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} /></td>
                     <td>{fmtDate(p.createdAt)}</td>
                     <td>
                       {p.status === 'pledged' && <button className="btn btn-sm" disabled={busy === p.id} onClick={() => updatePledge(p, 'sent')}>Mark sent</button>}
-                      {(p.status === 'pledged' || p.status === 'sent') && (
+                      {/* An API pledge sitting at 'sent' is one whose transfer RIPE never answered
+                          usefully. Only the owner can close those, because cancelling frees the
+                          donor's slot and the credits may actually have moved. Offering a button
+                          that always returns 409 would be worse than not offering one. */}
+                      {(p.status === 'pledged' || (p.status === 'sent' && p.method === 'manual')) && (
                         <button className="btn btn-sm btn-ghost" disabled={busy === p.id} onClick={() => confirm('Cancel this pledge?') && updatePledge(p, 'cancelled')}>Cancel</button>
+                      )}
+                      {p.status === 'sent' && p.method === 'api' && (
+                        <span className="small muted">Waiting for the project owner to confirm receipt</span>
                       )}
                     </td>
                   </tr>

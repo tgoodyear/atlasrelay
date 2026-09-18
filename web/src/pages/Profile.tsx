@@ -18,6 +18,7 @@ export default function Profile() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -57,7 +58,7 @@ export default function Profile() {
       {next && !user?.hasAtlasEmail && <div className="alert alert-info">Add your RIPE NCC Access email first, then you can post a project.</div>}
       <form className="card" onSubmit={submit}>
         <div className="card-body">
-          <Field label="Display name" htmlFor="displayName" hint="Shown on your projects and pledges.">
+          <Field label="Display name" htmlFor="displayName" hint="Shown publicly on your projects and pledges. Avoid using an email address here.">
             <input id="displayName" type="text" maxLength={80} value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
           </Field>
           <Field
@@ -65,7 +66,7 @@ export default function Profile() {
             htmlFor="atlasEmail"
             hint={
               <>
-                The email of the account you use at atlas.ripe.net. Donors transfer credits to this address. <strong>Never shown publicly</strong>; only revealed to a donor who has pledged to one of your projects.
+                The email of the account you use at atlas.ripe.net. Donors transfer credits to this address. It is never shown on public pages, and it is revealed to a signed-in donor at the moment they start a manual pledge to one of your projects, so that they can send the credits. You see each of those donors by name on the project. Only add an address you are willing to share with donors on that basis.
               </>
             }
           >
@@ -86,6 +87,55 @@ export default function Profile() {
           </div>
         </div>
       </form>
+
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <div className="card-body">
+          <h2>Delete your profile</h2>
+          <p className="muted">
+            This removes your profile, including your RIPE NCC Access email. Projects you posted and
+            pledges you made stay on the site, because donors and researchers rely on that record.
+            Publicly they show only the display name you chose. They do still carry the internal
+            account identifier they were created under, so signing in again with the same GitHub or
+            Microsoft account reconnects you to that history rather than starting you fresh. Any
+            project of yours still open is closed, because nobody can pledge to a project whose
+            owner has no address to receive the credits.
+          </p>
+          <button
+            className="btn btn-danger"
+            type="button"
+            disabled={deleting}
+            onClick={async () => {
+              if (!confirm('Delete your profile and remove your RIPE NCC Access email?')) return;
+              setDeleting(true);
+              try {
+                const res = await api.deleteMe();
+                // The profile is gone either way, which is the promise that matters. But the copy
+                // above also says every open project is closed, and the sweep can fail partway, so
+                // logging out silently would leave someone believing something untrue about what
+                // is still listed under their name.
+                if (!res.sweepComplete) {
+                  const n = res.projectsNotClosed;
+                  setError(
+                    `Your profile and RIPE NCC Access email have been deleted. ${
+                      n && n > 0
+                        ? `${n} of your projects could not be closed and may still be listed.`
+                        : 'Your projects could not all be closed and some may still be listed.'
+                    } Nobody can pledge to them, because there is no longer an address to send credits to. Please report this so they can be closed by hand.`,
+                  );
+                  setDeleting(false);
+                  return;
+                }
+                window.location.href = '/.auth/logout?post_logout_redirect_uri=/';
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : 'Could not delete your profile');
+                setDeleting(false);
+              }
+            }}
+          >
+            {deleting ? 'Deleting…' : 'Delete my profile'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

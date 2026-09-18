@@ -3,7 +3,6 @@ export const TAGS: Tag[] = ['ping', 'traceroute', 'dns', 'sslcert', 'http', 'ntp
 
 export interface Project {
   id: string;
-  ownerId: string;
   ownerName: string;
   title: string;
   summary: string;
@@ -13,8 +12,10 @@ export interface Project {
   creditsPending: number;
   status: 'open' | 'closed';
   funded: boolean;
+  open: boolean;
   remaining: number;
   capacity: number;
+  maxPledge: number;
   maxCredits: number;
   tags: Tag[];
   affiliation: string;
@@ -34,11 +35,14 @@ export interface Pledge {
   method: 'api' | 'manual';
   status: 'pledged' | 'sent' | 'confirmed' | 'cancelled';
   message: string;
-  hasProof: boolean;
+  apiTransfer: boolean;
+  hasReference: boolean;
   createdAt: string;
   updatedAt: string;
   donorId?: string;
   transactionUrl?: string;
+  transactionId?: string;
+  transferredAt?: string;
   projectTitle?: string;
 }
 
@@ -53,12 +57,12 @@ export interface User {
   hasAtlasEmail: boolean;
 }
 
+// Mirrors publicUser() in api/src/lib/views.ts. The sign-in handle is deliberately absent:
+// for some identity providers it is the user's email address.
 export interface PublicUser {
-  id: string;
   displayName: string;
   affiliation: string;
   url: string;
-  handle: string;
   provider: string;
 }
 
@@ -108,6 +112,7 @@ export const api = {
   updateProject: (id: string, body: unknown) => request<{ project: Project }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   me: () => request<{ user: User }>('/api/me'),
   updateMe: (body: unknown) => request<{ user: User }>('/api/me', { method: 'PUT', body: JSON.stringify(body) }),
+  deleteMe: () => request<{ deleted: boolean; projectsClosed: number; projectsNotClosed: number | null; sweepComplete: boolean }>('/api/me', { method: 'DELETE' }),
   my: () => request<{ projects: Project[]; pledges: Pledge[] }>('/api/my'),
   pledges: (projectId: string) => request<{ pledges: Pledge[]; isOwner: boolean }>(`/api/projects/${projectId}/pledges`),
   createPledge: (projectId: string, body: unknown) =>
