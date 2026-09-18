@@ -248,6 +248,14 @@ app.http('pledges-create', {
           pledge.etag = (await savePledge(pledge)).etag;
         } catch (markErr) {
           console.error('Could not record the transfer start marker:', markErr instanceof Error ? markErr.message : markErr);
+          // The write may have been applied and only its answer lost, in which case the row moved on
+          // and the version held here is the create-time one, so the conditional withdrawal below
+          // would fail 412 and leave the row in flight holding the donor's slot. They would be told
+          // nothing was sent and invited to retry, and then blocked from retrying until the owner
+          // settled it. Re-read for the current version first. Nothing has been sent at this point,
+          // so withdrawing is safe whichever of the two happened.
+          const fresh = await getPledge(id, pledge.id).catch(() => null);
+          if (fresh?.etag) pledge.etag = fresh.etag;
           throw await rollback(new HttpError(503, 'We could not start the transfer safely just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
         }
         // Set before the call, not after. The moment the POST is issued the outcome stops
@@ -350,7 +358,16 @@ app.http('pledges-create', {
               pledge.etag,
             );
           } catch (clearErr) {
-            console.error('Could not clear the in-flight marker after a completed transfer:', clearErr instanceof Error ? clearErr.message : clearErr);
+            // A 412 is not a failure here, it is the answer. This write is conditional on the marker
+            // version, and on this path the only thing that can have moved the row past it is the
+            // confirmation write above: it was applied and only its response was lost. So the
+            // pledge is confirmed in storage after all, and reporting "recording did not complete"
+            // would tell the donor the opposite of what the owner's dashboard shows.
+            if (clearErr instanceof RestError && clearErr.statusCode === 412) {
+              saved = true;
+            } else {
+              console.error('Could not clear the in-flight marker after a completed transfer:', clearErr instanceof Error ? describeErrorForLog(clearErr) : clearErr);
+            }
           }
         }
         if (!saved) {
