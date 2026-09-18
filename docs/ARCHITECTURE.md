@@ -67,7 +67,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |
 | `transactionId` | Empty on new pledges. RIPE does not index a transaction until well after it accepts the transfer (measured live: absent immediately, present 40 to 70 seconds later), so it cannot be looked up inside the request, and this platform has no background worker to do it later. The transfer endpoint's own response carries only a generic list URL, identical for every transfer, so it is not a reference either. Older rows may hold a value. |
-| `transactionUrl` | A link we build from `transactionId` when the lookup finds one unambiguous match, so it is present only when `transactionId` is. Rows created before that change may instead hold the generic list URL the transfer endpoint returned. |
+| `transactionUrl` | Empty on new pledges, for the same reason as `transactionId`: there is no lookup left to build a link from. Rows created before that change may hold a link to a matched transaction, or the generic list URL the transfer endpoint returned. |
 | `message` | Optional public note from the donor. |
 | `createdAt`, `updatedAt` | |
 
@@ -137,9 +137,9 @@ unknown" rather than a badge claiming a transfer we never saw succeed. The donor
 https://atlas.ripe.net/credits/transactions/ to check before sending anything again, and the
 dialog gives them no way to resubmit.
 
-Once the credits have moved, nothing in the handler is allowed to fail the request: the
-transaction lookup and the row update are both best-effort, because a retry at that point would
-send the credits twice.
+Once the credits have moved, nothing in the handler is allowed to fail the request. The row
+update is best-effort, because a retry at that point would send the credits twice; a confirmation
+that did not persist is reported as a warning on a pledge the owner can still confirm.
 
 ### Abuse limits
 

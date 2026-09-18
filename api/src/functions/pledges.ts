@@ -304,47 +304,25 @@ app.http('pledges-create', {
         // longer any failure the donor could usefully act on by retrying.
         pledge.status = 'confirmed';
         pledge.inFlight = false;
-        // The moment RIPE accepted, not the moment we asked. startedAt is kept for matching the
-        // transaction, where an earlier bound is what we want, but recording it here would date the
-        // acceptance up to the full twenty-second timeout early.
+        // The moment RIPE accepted, not the moment we asked. startedAt anchors the in-flight
+        // window, which wants the earlier bound; recording it here would date the acceptance up to
+        // the full twenty-second timeout early.
         pledge.transferredAt = new Date().toISOString();
-        // Persist the confirmation first, before the reference lookup. The lookup is another network
-        // call, and leaving the only durable record of a completed transfer behind it meant a crash
-        // or a timeout in between left the pledge looking like an untouched reservation. The
-        // reference is decoration; the status is the record.
-        // This is the write that matters: it makes `confirmed` durable. The one after the lookup only
-        // adds a reference, and whether that succeeds says nothing about whether this did.
-        let confirmedDurable = false;
+        // The one write that matters: it is what makes `confirmed` durable.
+        //
+        // No transaction lookup precedes it and none follows. RIPE does not index the transaction
+        // until well after it accepts the transfer (measured live: absent immediately, present 40
+        // to 70 seconds later), so a call here could only ever come back empty. The 201 is what
+        // records that the credits moved and transferredAt is when we saw it. Dropping the call
+        // also takes a RIPE round trip off the request, which is what keeps the worst case inside
+        // the platform's own timeout.
+        let saved = false;
         try {
           await savePledge(pledge);
-          confirmedDurable = true;
+          saved = true;
         } catch (confirmErr) {
           console.error('Transfer completed but the confirmation could not be written:', confirmErr instanceof Error ? confirmErr.message : confirmErr);
         }
-
-        // No transaction lookup. RIPE does not index the transaction until well after it accepts
-        // the transfer (measured live: absent immediately, present 40 to 70 seconds later), so a
-        // call here could only ever return nothing. The 201 is what records that the credits moved,
-        // and transferredAt is when we saw it. Dropping the call also takes a RIPE round trip off
-        // the request, which is what kept the worst case inside the platform's own timeout.
-
-        // Only attempted when there is a reference to add, and its failure is not the confirmation
-        // failing: if the write above succeeded the row is already `confirmed` and merely lacks a
-        // decoration. Reporting that as "recording failed" sent the donor and the owner chasing a
-        // record that exists, and skipped releasing a slot that was safe to release.
-        if (pledge.transactionId) {
-          try {
-            await savePledge(pledge);
-            confirmedDurable = true;
-          } catch (err) {
-            console.error('Transfer confirmed but its reference could not be attached:', err instanceof Error ? err.message : err);
-            // The durable row has no reference, so the response must not carry one. Leaving these
-            // populated advertised a reference that vanished on the next page load.
-            pledge.transactionId = '';
-            pledge.transactionUrl = '';
-          }
-        }
-        const saved = confirmedDurable;
         if (!saved) {
           apiSaveFailed = true;
           recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive.';

@@ -56,8 +56,9 @@ as often as you like. Each press sends the key to `POST /api/atlas/balance`,
 which makes one request to RIPE and returns the balance. Nothing is stored.
 
 **Submitting the transfer** sends the key once more, and that request uses it for
-at most three calls to RIPE: a balance check before sending, the transfer itself,
-and a lookup of the resulting transaction so the pledge can carry a reference.
+at most two calls to RIPE: a balance check before sending, and the transfer
+itself. A key carrying only the transfer permission makes just the one, because
+the balance check is skipped rather than retried.
 
 It is used for nothing else. Error paths deliberately avoid echoing request
 bodies so a key cannot reach a log.
