@@ -28,6 +28,10 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   // with a warning. Treating every 201 as confirmed made this screen contradict both that warning
   // and the dashboard, over the one case where the donor most needs to be told what to do next.
   const [recorded, setRecorded] = useState(true);
+  // Whether a pledge row exists at all after an unknown outcome. When the server could not write
+  // one either, there is nothing for the researcher to settle and saying otherwise sends the donor
+  // to somebody with no record to act on.
+  const [rowExists, setRowExists] = useState(true);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -93,6 +97,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       if (method === 'api' && !refusedBeforeSending) {
         setApiKey('');
         setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');
+        // A lost connection tells us nothing about whether a row was written, so assume one was:
+        // the alternative sends every dropped connection to the "tell them out of band" advice.
+        setRowExists(!serverAnswered || !(err as ApiError).transferNotRecorded);
         setStep('api-unknown');
       } else {
         // A refusal means nothing moved and the donor can correct and retry, but the key is
@@ -267,9 +274,19 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   stayed put.
                 </li>
                 <li>
-                  If it is still not there after that, tell the researcher what you found and let them
-                  settle the pledge. Only they can close a transfer we sent: cancelling frees your slot,
-                  and if the credits did move after all, your next pledge would send them a second time.
+                  {rowExists ? (
+                    <>
+                      If it is still not there after that, tell the researcher what you found and let them
+                      settle the pledge. Only they can close a transfer we sent: cancelling frees your slot,
+                      and if the credits did move after all, your next pledge would send them a second time.
+                    </>
+                  ) : (
+                    <>
+                      Whatever you find, tell the researcher directly, quoting the transaction if there is
+                      one. This pledge was never recorded here, so there is nothing on either dashboard for
+                      them to confirm or cancel, and nobody but you knows the transfer was attempted.
+                    </>
+                  )}
                 </li>
               </ol>
               <p className="small muted">

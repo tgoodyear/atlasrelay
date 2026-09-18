@@ -88,6 +88,16 @@ export class ApiError extends Error {
   get transferDefinitelyNotSent(): boolean {
     return (this.details as { transfer?: string } | undefined)?.transfer === 'not-sent';
   }
+
+  /**
+   * False only when the server said outright that it could not record the pledge either. On the
+   * outcome-unknown path that changes the advice completely: with a row, the researcher settles it;
+   * without one there is nothing for them to settle, and the donor has to tell them out of band.
+   * Undefined means a row exists, which is the ordinary case.
+   */
+  get transferNotRecorded(): boolean {
+    return (this.details as { transferRecorded?: boolean } | undefined)?.transferRecorded === false;
+  }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

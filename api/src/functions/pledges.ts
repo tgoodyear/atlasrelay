@@ -297,6 +297,11 @@ app.http('pledges-create', {
                 ? 'The pledge is recorded and waiting for the project owner to confirm it.'
                 : 'We could not record the pledge either, so nothing here knows about it: if the credits did move, tell the project owner with your RIPE transaction.'
             }`,
+            // In the message for a person, and here for the screen that follows it. Whether a row
+            // exists changes what the donor should do: a recorded pledge is one the owner settles,
+            // and an unrecorded one is not there to be settled, so telling them to hand it over
+            // would send them to somebody with nothing to act on.
+            { transferRecorded: recorded },
           )
         }
 
@@ -335,14 +340,22 @@ app.http('pledges-create', {
             // apiTransfer from that field, so the pending row would advertise a transfer this
             // server watched happen while the response for the same pledge said it had not been
             // recorded. Storage and the response have to describe the same pledge.
-            await savePledge({ ...pledge, status: 'pledged', inFlight: false, transferredAt: '', transactionId: '', transactionUrl: '' });
+            // Conditional on the marker version, which is what the row still holds if the write
+            // above genuinely failed. If instead that write was applied and only its response was
+            // lost, the row is already `confirmed` and its version has moved, so this comes back
+            // 412 and leaves it alone. Unconditionally, it would downgrade a confirmed transfer
+            // back to pending and hand the owner the option of cancelling credits that did move.
+            await savePledge(
+              { ...pledge, status: 'pledged', inFlight: false, transferredAt: '', transactionId: '', transactionUrl: '' },
+              pledge.etag,
+            );
           } catch (clearErr) {
             console.error('Could not clear the in-flight marker after a completed transfer:', clearErr instanceof Error ? clearErr.message : clearErr);
           }
         }
         if (!saved) {
           apiSaveFailed = true;
-          recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive; if it does not let them straight away, it will a minute or two later.';
+          recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive. If their dashboard refuses at first, it will accept a minute or two later.';
         }
         try {
           updatedProject = await recomputeProjectTotals(id);
