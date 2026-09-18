@@ -8,20 +8,24 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Preload then apply, with no inline script. The media="print" + onload="this.media='all'"
-         trick that was here is inline script, and the deployed CSP is script-src 'self', so
-         browsers enforcing it never ran the onload and the stylesheet stayed at media="print":
-         the fonts silently never applied for anyone with JavaScript enabled. The preload still
-         starts the fetch early, and the stylesheet below applies it whenever it arrives. -->
+    <!-- Non-blocking web fonts, without inline script. This was an inline
+         onload="this.media='all'" attribute, which the deployed CSP (script-src 'self') blocks, so
+         the stylesheet stayed at media="print" and the fonts silently never applied to anyone. It
+         was then a plain stylesheet, which applied them but put a third-party origin on the path to
+         first paint. The switch now lives in a same-origin file, which that CSP does allow. -->
     <link
-      rel="preload"
-      as="style"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
-    />
-    <link
+      id="webfonts"
       rel="stylesheet"
+      media="print"
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
     />
+    <script src="/fonts.js" defer></script>
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
+      />
+    </noscript>
     <!-- No API preloads here. index.html is served for every SPA route, so these fired on project
          pages, the dashboard and the FAQ, where the home page never mounts and the responses are
          never read. Both endpoints scan the project table, so a home-page optimisation became

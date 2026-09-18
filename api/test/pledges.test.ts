@@ -274,9 +274,16 @@ test('marking never overwrites what an error already said about a transfer', () 
   assert.equal(markNotSent(detailed), detailed);
 });
 
-test('an unexpected failure is never labelled as a transfer that did not happen', () => {
-  // handle() turns anything that is not an HttpError into a bare 500 with no details channel, so
-  // there is nowhere to put the marker and nothing that could honestly carry it.
-  const raw = new Error('table storage exploded');
-  assert.equal(markNotSent(raw), raw);
+test('an unexpected failure before a transfer still says nothing was sent', () => {
+  // This used to pass the error straight through, on the reasoning that a bare 500 has no details
+  // channel. That reached the donor as the outcome-unknown screen, telling them to check their RIPE
+  // account before sending again over a request that never got near RIPE. It is replaced by a 500
+  // that carries the marker.
+  const marked = markNotSent(new Error('table storage exploded: {"apiKey":"secret"}'));
+  assert.ok(marked instanceof HttpError);
+  assert.equal((marked as HttpError).status, 500);
+  assert.deepEqual((marked as HttpError).details, NOT_SENT);
+  // The original message is never published. An unknown error can carry the request body, and on
+  // this route the request body holds an API key.
+  assert.equal(/apiKey|exploded/.test((marked as HttpError).message), false);
 });

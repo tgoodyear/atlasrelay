@@ -131,11 +131,17 @@ What happens next depends on a single question: did RIPE answer?
 | 4xx or 429 from RIPE | RIPE refused, nothing moved | Pledge is cancelled, the donor sees why and can try again |
 | Timeout, network failure, or a 5xx | Unknown | Pledge is parked at `sent` and flagged uncertain |
 
-An uncertain pledge takes the same path a manual one does: it sits on both dashboards until the
-requester confirms the credits arrived or the donor cancels it. Both parties see "Sent, outcome
-unknown" rather than a badge claiming a transfer we never saw succeed. The donor is sent to
-https://atlas.ripe.net/credits/transactions/ to check before sending anything again, and the
-dialog gives them no way to resubmit.
+An uncertain pledge sits at `sent` on both dashboards, showing "Sent, outcome unknown" rather than
+a badge claiming a transfer we never saw succeed. The donor is sent to
+https://atlas.ripe.net/credits/transactions/ to check before sending anything again, and the dialog
+gives them no way to resubmit.
+
+Only the requester settles it, by confirming or cancelling. This is the one place an API pledge
+differs from a manual one, and the asymmetry is deliberate: cancelling frees the donor's slot, so
+if the transfer did complete, the donor's next pledge would send the same credits a second time.
+The donor can read their own transaction log, but acting on it here has a side effect they cannot
+see, whereas either answer the requester gives is safe. The donor's part is to check the log and
+tell them what they find.
 
 Once the credits have moved, nothing in the handler is allowed to fail the request. The row
 update is best-effort, because a retry at that point would send the credits twice; a confirmation

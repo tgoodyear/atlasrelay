@@ -127,12 +127,12 @@ app.http('pledges-create', {
        * no credits have moved.
        */
       const rollback = async (err: HttpError): Promise<HttpError> => {
-        // Best effort, every step. This runs on the paths where RIPE declined and nothing moved, and
-        // the donor's useful answer is that original 4xx: what was wrong and how to fix it. Letting a
-        // Table Storage hiccup here replace it with a 500 would hide that, and for an API pledge it
-        // would also strand a row the donor is not allowed to cancel. A row or slot left behind is
-        // recoverable on its own, through the in-flight window and the reservation expiry; a lost
-        // error message is not.
+        // Best effort, every step. Every path that reaches here is one where nothing moved: RIPE
+        // declined, or the request gave up before sending. The donor's useful answer is that original
+        // error, what was wrong and how to fix it. Letting a Table Storage hiccup here replace it with
+        // a 500 would hide that, and for an API pledge it would also strand a row the donor is not
+        // allowed to cancel. A row or slot left behind is recoverable on its own, through the
+        // in-flight window and the reservation expiry; a lost error message is not.
         let withdrawn = false;
         try {
           // Conditional on the row still being the one we created. A manual pledge is actionable the
@@ -146,8 +146,8 @@ app.http('pledges-create', {
           const changed = cleanupErr instanceof RestError && cleanupErr.statusCode === 412;
           console.error(
             changed
-              ? 'Did not withdraw a pledge after a refused transfer: somebody had already acted on it'
-              : 'Could not withdraw a pledge after a refused transfer:',
+              ? 'Did not withdraw a pledge: somebody had already acted on it'
+              : 'Could not withdraw a pledge:',
             cleanupErr instanceof Error ? cleanupErr.message : cleanupErr,
           );
         }
@@ -165,7 +165,7 @@ app.http('pledges-create', {
           try {
             await releasePledgeClaim(id, donor.id, pledge.id);
           } catch (cleanupErr) {
-            console.error('Could not release a pledge slot after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+            console.error('Could not release a pledge slot:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
           }
         }
         return err;
@@ -357,7 +357,18 @@ app.http('pledges-create', {
       // instructions with a blank in them. Withdraw instead and say so.
       let recipientEmail: string | undefined;
       if (method === 'manual') {
-        recipientEmail = (await getUser(project.ownerId))?.atlasEmail || undefined;
+        // A storage failure reading the owner is not the owner being gone, but either way this
+        // request is not going to disclose an address, and leaving the row and the slot behind would
+        // hold the donor out of a project they never managed to pledge to. The API path rolls the
+        // same failure back; this one used to let it escape to the outer catch untouched.
+        let ownerRow: Awaited<ReturnType<typeof getUser>>;
+        try {
+          ownerRow = await getUser(project.ownerId);
+        } catch (ownerErr) {
+          console.error('Could not read the project owner for a manual pledge:', ownerErr instanceof Error ? ownerErr.message : ownerErr);
+          throw await rollback(new HttpError(503, 'We could not look up where to send the credits just now, so the pledge was not created. Please try again in a moment.'));
+        }
+        recipientEmail = ownerRow?.atlasEmail || undefined;
         if (!recipientEmail) {
           // Exactly the API path's rollback, for exactly its reasons. A manual pledge is actionable
           // the moment its row exists, so between that write and this read the donor may have marked
@@ -398,7 +409,14 @@ app.http('pledges-create', {
         201,
       );
     } catch (err) {
-      throw transferIssued ? err : markNotSent(err);
+      if (transferIssued) throw err;
+      // markNotSent replaces an unexpected failure with a generic 500, so log the original here:
+      // handle() will not see it any more, and its message must not be published because an
+      // unknown error can carry the request body, which on this route holds an API key.
+      if (!(err instanceof HttpError)) {
+        console.error('Unexpected failure before a transfer was issued:', err instanceof Error ? err.message : err);
+      }
+      throw markNotSent(err);
     }
   }),
 });

@@ -23,6 +23,11 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [step, setStep] = useState<Step>('form');
   const [recipient, setRecipient] = useState('');
   const [warning, setWarning] = useState('');
+  // Whether the server got the confirmation into storage. It reports the row that exists rather
+  // than the one it meant to write, so a post-transfer write that failed comes back as 'pledged'
+  // with a warning. Treating every 201 as confirmed made this screen contradict both that warning
+  // and the dashboard, over the one case where the donor most needs to be told what to do next.
+  const [recorded, setRecorded] = useState(true);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -62,6 +67,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
         setRecipient(res.recipientEmail ?? '');
         setStep('manual-instructions');
       } else {
+        setRecorded(res.pledge.status === 'confirmed');
         setStep('api-done');
       }
       onDone(res.project);
@@ -117,7 +123,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             {step === 'form'
               ? 'Send credits'
               : step === 'api-done'
-                ? 'Credits transferred'
+                ? (recorded ? 'Credits transferred' : 'Credits transferred, recording incomplete')
                 : step === 'api-unknown'
                   ? 'Check before you send again'
                   : 'Finish the transfer on atlas.ripe.net'}
@@ -143,7 +149,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <input type="radio" name="method" checked={method === 'api'} onChange={() => setMethod('api')} />
                   <div>
                     <strong>Transfer now with an API key</strong>
-                    <span>We call the RIPE Atlas API once with a key you paste and record the transaction as proof. The key is never stored.</span>
+                    <span>We check your balance and send the transfer with a key you paste. RIPE accepting the transfer is the record; the transaction appears in your own RIPE log a minute or so later. The key is never stored.</span>
                   </div>
                 </label>
                 <label>
@@ -254,7 +260,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   If it is there, the transfer worked. The pledge is already recorded, and the researcher
                   confirms it once the credits show up on their side.
                 </li>
-                <li>If it is not there, cancel the pledge on your dashboard and start again.</li>
+                <li>
+                  If it is not there, nothing moved. Ask the researcher to cancel the pledge, which they
+                  can do from their own dashboard, and then send it again. Only they can close a transfer
+                  we sent, because cancelling frees your slot and a transfer that did go through would
+                  otherwise be sent twice.
+                </li>
               </ol>
               <p className="small muted">
                 Do not send the credits a second time until you have checked. Remember to delete the API key
@@ -268,8 +279,11 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
 
           {step === 'api-done' && (
             <>
-              <div className="alert alert-success">
-                RIPE Atlas accepted the transfer of {fmt(n)} credits, and the pledge is confirmed.
+              <div className={recorded ? 'alert alert-success' : 'alert alert-warn'}>
+                RIPE Atlas accepted the transfer of {fmt(n)} credits.
+                {recorded
+                  ? ' The pledge is confirmed.'
+                  : ' Recording it here did not complete, so the pledge is still showing as pending. Do not send the credits again: the researcher can confirm it once they arrive.'}
                 {' '}RIPE accepting the transfer is the record; it publishes the transaction to
                 your account’s log a minute or so later, where you can see it yourself.
               </div>

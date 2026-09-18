@@ -19,11 +19,19 @@ export const NOT_SENT = { transfer: 'not-sent' as const };
  * Label an error as raised before anything irreversible was attempted.
  *
  * Only ever adds the marker, never changes one: an error that already carries details is saying
- * something more specific and keeps it. A non-HttpError is left alone because handle() turns those
- * into a bare 500 with no details channel at all, so there is nowhere to put it.
+ * something more specific and keeps it.
+ *
+ * Anything that is not an HttpError is an unexpected failure, and handle() would turn it into a
+ * bare 500 with no details at all. That is the wrong answer here for the same reason the marker
+ * exists: with no marker the browser shows the outcome-unknown screen, so a storage rejection on
+ * the way to a transfer told the donor to go and check their RIPE account before sending again,
+ * over a request that never reached RIPE. It becomes a 500 that says so instead. The original is
+ * returned for the caller to log, because its message is not safe to publish: unknown errors can
+ * carry request bodies, and a request body here contains an API key.
  */
 export function markNotSent(err: unknown): unknown {
-  if (!(err instanceof HttpError) || err.details !== undefined) return err;
+  if (!(err instanceof HttpError)) return new HttpError(500, 'Something went wrong before anything was sent, so no credits moved. Please try again.', NOT_SENT);
+  if (err.details !== undefined) return err;
   return new HttpError(err.status, err.message, NOT_SENT);
 }
 
