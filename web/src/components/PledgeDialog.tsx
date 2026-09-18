@@ -23,7 +23,6 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [step, setStep] = useState<Step>('form');
   const [recipient, setRecipient] = useState('');
   const [warning, setWarning] = useState('');
-  const [hasReference, setHasReference] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -59,7 +58,6 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       const res = await api.createPledge(project.id, { amount: n, method, message, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
-      setHasReference(Boolean(res.pledge?.hasReference));
       if (method === 'manual') {
         setRecipient(res.recipientEmail ?? '');
         setStep('manual-instructions');
@@ -184,6 +182,22 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 <input id="message" type="text" maxLength={500} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Good luck with the study!" />
               </div>
 
+              <p className="small muted" style={{ marginTop: '1rem' }}>
+                Nobody checks that a request is genuine. Posting needs a sign-in and a RIPE NCC
+                Access email, both self-declared, and this site cannot verify that a person is who
+                they say they are or that the credits will be used as described. Read the project's links, start with a small amount, and
+                send only what you are willing to lose. Credits cannot be recalled once transferred.
+                {' '}
+                <a
+                  href={`https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&title=${encodeURIComponent(`Report a project: ${project.title}`)}&body=${encodeURIComponent(`Project: ${window.location.origin}/projects/${project.id}\n\nWhat is wrong with it:\n`)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Report this project
+                </a>{' '}
+                if it looks fraudulent.
+              </p>
+
               {error && <div className="alert alert-error">{error}</div>}
               <div className="form-actions">
                 <button className="btn" type="submit" disabled={submitting || !amountOk || (method === 'api' && apiKey.trim().length < 36)}>
@@ -256,9 +270,8 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
             <>
               <div className="alert alert-success">
                 RIPE Atlas accepted the transfer of {fmt(n)} credits, and the pledge is confirmed.
-                {hasReference
-                  ? ' It carries RIPE\u2019s transaction reference.'
-                  : ' We could not identify a single matching transaction, so the pledge carries no reference; RIPE accepting the transfer is the record.'}
+                {' '}RIPE accepting the transfer is the record; it publishes the transaction to
+                your account’s log a minute or so later, where you can see it yourself.
               </div>
               {warning && <div className="alert alert-warn">{warning}</div>}
               <p>Remember to delete or disable the API key you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.</p>

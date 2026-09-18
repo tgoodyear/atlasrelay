@@ -17,6 +17,34 @@ is a volunteer community project.
 Please do not run automated scanners against the live site, and do not use real
 people's credits, projects or email addresses to demonstrate a finding.
 
+## Reporting abuse, or asking for a takedown
+
+Nobody vets the projects posted here. Posting needs a GitHub or Microsoft
+sign-in and a RIPE NCC Access email added to the profile, which is where the
+credits would go. Neither is checked against anything: the address is
+self-declared, and the site cannot tell a real research project from an invented
+one. That is stated on the page where donors transfer credits,
+because it is the moment it matters.
+
+If a project is fraudulent, misrepresents who is behind it, or should come down
+for any other reason, open an issue labelled `abuse` on this repository, or use
+private vulnerability reporting if naming the project publicly would make things
+worse. Say which project (the URL is enough) and what is wrong with it.
+
+There is one maintainer and no rota, so expect days rather than hours. A project
+found to be fraudulent is closed, which stops it accepting further credits and
+takes it off the listing. That closure is marked as the site's rather than the
+owner's, so the owner cannot simply reopen it. The owner's profile, including their stored RIPE NCC
+Access email, can be deleted too. Be clear about what that is not: it is not a
+ban. Signing in again with the same account recreates a profile, and the past
+projects and pledges are still linked to it. Credits already transferred are
+gone; they move directly between RIPE Atlas accounts, and neither this site nor
+the RIPE NCC can reverse a transfer on our say-so.
+
+If you sent credits to a project you now believe was fraudulent, report it here
+so nobody else does, and raise it with RIPE NCC if you think a RIPE Atlas
+account is being misused.
+
 ## What the site does with sensitive data
 
 **RIPE Atlas API keys are never stored.** A key pasted into the transfer form is

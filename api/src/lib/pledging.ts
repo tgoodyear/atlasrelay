@@ -2,6 +2,14 @@
 export const OVERFUND_MULTIPLIER = 100;
 
 /**
+ * Open projects one account may hold at once. Posting is free and anonymous enough that without
+ * a cap one account could fill the front page, and every project exposes its owner's contact
+ * address to anyone who starts a pledge. Closing a funded project frees a slot, so an honest
+ * researcher running several studies is never blocked for long.
+ */
+export const MAX_OPEN_PROJECTS_PER_USER = 3;
+
+/**
  * A pending pledge stops reserving capacity after this long. Reservations are how a donor is
  * given time to make a manual transfer, but without an expiry one abandoned pledge would hold a
  * project's capacity for ever, so stale ones fall away on their own.
@@ -41,4 +49,32 @@ export function maxSinglePledge(creditsRequested: number, creditsConfirmed: numb
   const remaining = remainingToGoal(creditsRequested, creditsConfirmed);
   const perPledgeLimit = remaining > 0 ? remaining : creditsRequested;
   return Math.min(perPledgeLimit, capacity(creditsRequested, creditsConfirmed, creditsPending));
+}
+
+/** The figures on the home page. Derived only from projects, so it is a pure function of them. */
+export interface SiteStats {
+  projects: number;
+  openProjects: number;
+  creditsRequested: number;
+  creditsTransferred: number;
+  fundedProjects: number;
+}
+
+/**
+ * Compute the home-page figures. Separated from the handler so the definitions can be tested:
+ * "open" has to mean the same thing here as in the project listing, and "credits requested" is
+ * what open projects still need rather than what they originally asked for, which are exactly the
+ * kinds of thing that drift apart silently.
+ */
+export function siteStats(
+  projects: { status: string; creditsRequested: number; creditsConfirmed: number }[],
+): SiteStats {
+  const open = projects.filter((p) => p.status === 'open' && acceptsMorePledges(p.creditsRequested, p.creditsConfirmed));
+  return {
+    projects: projects.length,
+    openProjects: open.length,
+    creditsRequested: open.reduce((s, p) => s + remainingToGoal(p.creditsRequested, p.creditsConfirmed), 0),
+    creditsTransferred: projects.reduce((s, p) => s + p.creditsConfirmed, 0),
+    fundedProjects: projects.filter((p) => p.creditsConfirmed >= p.creditsRequested).length,
+  };
 }

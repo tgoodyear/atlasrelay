@@ -76,6 +76,16 @@ param additionalAppSettings object = {}
 @description('Public DNS zone to create, e.g. atlasrelay.org. Empty string skips DNS entirely.')
 param dnsZoneName string = ''
 
+@description('''
+Default hostname of the dev static web app, which gets dev.<zone>. Empty leaves that record
+uncreated. The dev instance is deployed separately by infra/dev.bicepparam against app.bicep, and
+its hostname is not an output of this deployment, so it has to be passed in:
+  az staticwebapp show -n swa-<baseName>-dev -g <rg> --query defaultHostname -o tsv
+then supplied to the Owner-only subscription deployment. Leave it empty when no dev instance
+exists; a stale value here would point dev.<zone> at a site that is gone.
+''')
+param devStaticWebAppDefaultHostname string = ''
+
 @description('Extra apex TXT values (e.g. the Static Web Apps domain-validation token)')
 param dnsApexTxtValues array = []
 
@@ -192,6 +202,7 @@ module dns 'dns.bicep' = if (!empty(dnsZoneName)) {
   params: {
     zoneName: dnsZoneName
     staticWebAppDefaultHostname: app.outputs.staticWebAppHostname
+    devStaticWebAppDefaultHostname: devStaticWebAppDefaultHostname
     staticWebAppInboundIp: app.outputs.staticWebAppInboundIp
     apexTxtValues: dnsApexTxtValues
     tags: tags

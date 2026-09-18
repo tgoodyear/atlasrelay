@@ -66,7 +66,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `amount` | Integer ≥ 1. Capped two ways: by the project's remaining *capacity* (100× the request, minus confirmed, minus live reservations) and by `maxSinglePledge`, which is what is left to the goal, or one goal's worth once the goal is met. The second cap stops any one pledge reserving the whole ceiling. |
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |
-| `transactionId` | RIPE's transaction id, looked up after the transfer. The transfer endpoint itself returns only a generic list URL (`.../credits/transactions/?sort=-date&type=admin`), the same for every transfer and readable only with the donor's own key, so it is not a reference. The lookup needs the credits-read permission and is best effort. |
+| `transactionId` | Empty on new pledges. RIPE does not index a transaction until well after it accepts the transfer (measured live: absent immediately, present 40 to 70 seconds later), so it cannot be looked up inside the request, and this platform has no background worker to do it later. The transfer endpoint's own response carries only a generic list URL, identical for every transfer, so it is not a reference either. Older rows may hold a value. |
 | `transactionUrl` | A link we build from `transactionId` when the lookup finds one unambiguous match, so it is present only when `transactionId` is. Rows created before that change may instead hold the generic list URL the transfer endpoint returned. |
 | `message` | Optional public note from the donor. |
 | `createdAt`, `updatedAt` | |
@@ -93,11 +93,11 @@ the partition after each change, so the project row never drifts.
      checked before sending. A transfer-only key works, with the check skipped. The
      function optionally reads the balance (`GET /credits/`) to warn on insufficient
      funds. The pledge row is written **before** the transfer, then the function calls
-     `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`,
-     and a transaction lookup runs to attach a reference. That reference is best
-     effort: it needs the credits-read permission, and it is stored only when exactly
-     one transaction matches, so a pledge may carry none. RIPE accepting the call is
-     what records that the credits moved. If RIPE never answers, the pledge is left at
+     `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
+     and `transferredAt` records when we saw RIPE accept it. No transaction reference
+     is attached: RIPE indexes the transaction well after accepting the transfer, so
+     it cannot be read back inside the request, and the donor's own credit log shows
+     it a minute or so later. If RIPE never answers, the pledge is left at
      `sent` and flagged uncertain, keeps the donor's slot, and waits for a person to
      settle it. The key lives only in the request scope, and the UI tells donors to
      delete or disable it afterwards.
@@ -127,7 +127,7 @@ What happens next depends on a single question: did RIPE answer?
 
 | Outcome | What we know | What the platform does |
 | --- | --- | --- |
-| 201 | The credits moved | Pledge becomes `confirmed`; the transaction id is looked up and stored |
+| 201 | The credits moved | Pledge becomes `confirmed`, with `transferredAt` as the record |
 | 4xx or 429 from RIPE | RIPE refused, nothing moved | Pledge is cancelled, the donor sees why and can try again |
 | Timeout, network failure, or a 5xx | Unknown | Pledge is parked at `sent` and flagged uncertain |
 
@@ -143,6 +143,8 @@ send the credits twice.
 
 ### Abuse limits
 
+- An account may hold 3 open projects at once. Posting is free, and every project hands its
+  owner's contact address to anyone who starts a pledge. Closing one frees a slot.
 - A donor may hold one live pledge per project. Without it, one account could reserve a project
   repeatedly and re-read the owner's contact address at will. The limit is held by a row in the
   `claims` table, one per (project, donor), taken before anything else happens. Reading the pledge

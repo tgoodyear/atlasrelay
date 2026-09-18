@@ -38,6 +38,12 @@ export interface Project {
   repoUrl: string;
   paperUrl: string;
   deadline: string;
+  /**
+   * Set by an operator when a project is taken down. Closing alone is not a takedown, because the
+   * owner can reopen their own project; this is the flag that says the closure was not theirs to
+   * undo. Only an operator, working directly against Table Storage, can clear it.
+   */
+  moderationClosed: boolean;
   createdAt: string;
   updatedAt: string;
   /** Table Storage row version, for conditional writes. Never published. */
@@ -240,6 +246,7 @@ function toProject(e: Entity): Project {
     repoUrl: String(e.repoUrl ?? ''),
     paperUrl: String(e.paperUrl ?? ''),
     deadline: String(e.deadline ?? ''),
+    moderationClosed: e.moderationClosed === true,
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
     totalsDirty: e.totalsDirty === true,

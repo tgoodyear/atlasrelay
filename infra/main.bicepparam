@@ -13,6 +13,9 @@ param storageKeyIndex = 0                            // (shared)
 param additionalAppSettings = {}                     // (shared)
 param logDailyCapGb = '0.1'
 param dnsZoneName = 'atlasrelay.org'
+// The dev instance's hostname, so dev.atlasrelay.org is declared rather than hand-made.
+// Clear this if the dev instance is torn down.
+param devStaticWebAppDefaultHostname = 'icy-bay-08401271e.1.azurestaticapps.net'
 // Apex domain-validation token issued by Static Web Apps, published as a TXT record at the
 // apex alongside the SPF policy. Recorded here so a later deployment does not remove it.
 param dnsApexTxtValues = [

@@ -208,6 +208,18 @@ export function transactionTime(date: number | string): number | null {
   return null;
 }
 
+/**
+ * NOT USABLE IMMEDIATELY AFTER A TRANSFER. Measured against the live API on 2026-09-18: a transfer
+ * of 1,000 credits returned 201 and moved the credits at once, but its row was absent from this
+ * list when queried straight afterwards and present when queried again 40 to 70 seconds later.
+ * RIPE indexes the transaction some time after accepting the transfer.
+ *
+ * The pledge handler therefore does not call this. It was written on the assumption that a
+ * reference could be attached synchronously, that assumption is simply false, and three separate
+ * bugs were found and fixed inside it before a live call showed the whole approach could never
+ * work. It is kept because it is correct for a lookup made later, which is what a deferred
+ * reconciliation would need, and because its tests pin the real response shape.
+ */
 export async function findTransferTransaction(key: string, amount: number, since: number): Promise<CreditTransaction | null> {
   // This lookup only ever adds a reference, and it runs after the transfer has completed, so it
   // must never raise anything the caller could mistake for a failed transfer.
@@ -231,7 +243,13 @@ export async function findTransferTransaction(key: string, amount: number, since
   // same-sized transfer the donor made moments earlier, and this lookup is allowed to find
   // nothing: the 201 is what says the credits moved, the reference is a convenience. No reference
   // beats a wrong one. A row whose date cannot be read is rejected for the same reason.
-  const earliest = since;
+  // RIPE stamps transactions in whole seconds, so a transfer started at 12:00:00.750 is recorded
+  // at 12:00:00.000 and sits up to 999ms BEFORE the moment we sent it. Comparing against a
+  // millisecond bound therefore rejected every row, including the one we had just created, which
+  // is why this lookup found nothing in a live test. Floor the bound to its own second so the
+  // comparison is like for like. This is not a skew allowance: it cannot reach into the previous
+  // second, so a same-sized transfer made a second earlier is still excluded.
+  const earliest = Math.floor(since / 1000) * 1000;
   const candidates = rows.filter((row) => {
     if (row.amount !== -amount) return false;
     const when = transactionTime(row.date);

@@ -2,7 +2,8 @@ import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Project, createProject, ensureUser, getProject, getUser, listPledges, listProjects, now, patchProject, totals } from '../lib/store';
+import { Project, createProject, ensureUser, getProject, getUser, listPledges, listProjects, listProjectsByOwner, now, patchProject, totals } from '../lib/store';
+import { MAX_OPEN_PROJECTS_PER_USER } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
 
@@ -132,6 +133,32 @@ function readProjectFields(body: Record<string, unknown>, required: boolean): Pa
   return out;
 }
 
+/**
+ * Bring an owner back under the open-project cap after a write that may have breached it.
+ *
+ * A count read before writing cannot enforce a limit: concurrent creates, concurrent reopens, and
+ * an edit form that submits status "open" on every save can each pass the check and then all
+ * write. Settling afterwards works because every racer re-reads and sees the others, and ids are
+ * time-prefixed so they all pick the same surplus set. Returns true when the caller's own project
+ * was the surplus, so the caller can report that rather than pretending the write stood.
+ *
+ * Closing a surplus row is best effort. Failing here after the row is already written would leave
+ * the account over the cap AND fail the request, and the next write settles it again anyway.
+ */
+async function settleOpenProjectCap(ownerId: string, ownId: string): Promise<boolean> {
+  const mine = (await listProjectsByOwner(ownerId)).filter((x) => x.status === 'open');
+  if (mine.length <= MAX_OPEN_PROJECTS_PER_USER) return false;
+  const surplus = mine.sort((a, b) => (a.id < b.id ? -1 : 1)).slice(MAX_OPEN_PROJECTS_PER_USER);
+  for (const extra of surplus) {
+    // Only the status: these rows were read a moment ago and a pledge recompute or an owner edit
+    // may have landed since, so writing a whole snapshot back would revert it.
+    await patchProject(extra.id, { status: 'closed' }).catch((err) => {
+      console.error(`Could not close surplus project ${extra.id}:`, err instanceof Error ? err.message : err);
+    });
+  }
+  return surplus.some((x) => x.id === ownId);
+}
+
 app.http('projects-create', {
   route: 'projects',
   methods: ['POST'],
@@ -140,6 +167,11 @@ app.http('projects-create', {
     const p = requirePrincipal(req);
     const user = await ensureUser(p.userId, p.identityProvider, p.userDetails);
     if (!user.atlasEmail) throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before posting a project');
+
+    // No preflight count here. The settlement after the write is what enforces the cap, because a
+    // count read before writing cannot, and running both doubled an owner scan on every post for
+    // an answer the settlement reaches anyway.
+
     const body = await readJson(req);
     const fields = readProjectFields(body, true);
     const ts = now();
@@ -160,6 +192,7 @@ app.http('projects-create', {
       repoUrl: fields.repoUrl ?? '',
       paperUrl: fields.paperUrl ?? '',
       deadline: fields.deadline ?? '',
+      moderationClosed: false,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -174,6 +207,15 @@ app.http('projects-create', {
     if (!(await getUser(user.id))?.atlasEmail) {
       await patchProject(project.id, { status: 'closed' }).catch(() => undefined);
       throw new HttpError(409, 'Your profile is no longer available, so this project was not published.');
+    }
+
+    // The cap check above reads before writing, so simultaneous requests can all pass it. Settle it
+    // now the row is visible: re-read, and if this owner is over the cap, the newest projects
+    // close themselves back down to it. Ids are time-prefixed, so the newest row always sees every
+    // older one and every racer reaches the same verdict without coordination. Unlike a transfer,
+    // nothing irreversible has happened, so closing is a complete remedy.
+    if (await settleOpenProjectCap(user.id, project.id)) {
+      throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
     }
 
     return json({ project: publicProject(project) }, 201);
@@ -195,26 +237,55 @@ app.http('projects-update', {
     const fields = readProjectFields(body, false);
     const status = oneOf(body, 'status', ['open', 'closed'] as const);
 
-    // Reopening needs the same precondition as posting. Deleting a profile closes its projects but
-    // leaves them on the site, and signing in again recreates the profile with no RIPE address, so
-    // without this an owner could reopen a project that lists publicly and fails every pledge,
-    // because the handler would have no recipient to name.
+    // Reopening has to clear every bar that posting clears, and one more besides.
     if (status === 'open' && project.status !== 'open') {
+      // A takedown has to survive the owner. Without this, closing a reported project is undone by
+      // its owner from any stale edit form, and the remedy in SECURITY.md is not a remedy at all.
+      if (project.moderationClosed) {
+        throw new HttpError(403, 'This project was closed by the site and cannot be reopened. Contact the maintainer if you think that was a mistake.');
+      }
+      // Deleting a profile closes its projects but leaves them on the site, and signing in again
+      // recreates the profile with no RIPE address. Without this an owner could reopen a project
+      // that lists publicly and fails every pledge, because there would be no recipient to name.
       const owner = await getUser(p.userId);
       if (!owner?.atlasEmail) {
         throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before reopening a project; donors cannot send credits without it');
       }
+      // Reopening is another way past the cap, and it is enforced by the same post-write
+      // settlement rather than a count here, for the same reason.
     }
 
-    // Merge rather than replace: this row was read at the top of the handler, and a pledge
-    // recompute may have rewritten its credit totals since.
+    // Merge rather than replace, and never send moderationClosed. An owner edit built on a row
+    // read before an operator set the flag would otherwise write the takedown away, along with any
+    // credit totals a pledge recompute changed in between. The check above stops a deliberate
+    // reopen; this stops an accidental one.
     const updated = await patchProject(id, { ...fields, ...(status ? { status } : {}) });
+
+    // The flag can be set between the read above and this write, so re-check what actually landed
+    // and put the project back if a takedown arrived while the edit was in flight.
+    if (updated.moderationClosed && updated.status === 'open') {
+      const restored = await patchProject(id, { status: 'closed' });
+      return json({ project: publicProject(restored) });
+    }
 
     // Same check as creation, for the same reason: the profile can be deleted between the guard
     // above and this write, and deletion's sweep may already have passed this row.
     if (updated.status === 'open' && !(await getUser(p.userId))?.atlasEmail) {
       const reclosed = await patchProject(id, { status: 'closed' });
       return json({ project: publicProject(reclosed) });
+    }
+
+    // Settle the cap after any write that leaves this project open, exactly as creation does. The
+    // count check above reads before writing, so two reopens can both pass it, and the edit form
+    // submits status "open" on every save, which can reopen a row the creation settlement had just
+    // closed. Neither is caught by a preflight; both are caught here.
+    if (updated.status === 'open' && (await settleOpenProjectCap(p.userId, id))) {
+      const reclosed = await getProject(id);
+      return json(
+        { project: publicProject(reclosed ?? updated) },
+        200,
+        {},
+      );
     }
 
     return json({ project: publicProject(updated) });

@@ -62,6 +62,44 @@ Owner-only subscription deployment. Bicep is the only writer of the zone.
 4. Put that token in `dnsApexTxtValues` in `infra/main.bicepparam` and re-run the
    subscription deployment, so a later deployment does not remove it.
 
+### A hostname stuck at "Validating"
+
+A hostname bound with the wrong validation method never recovers on its own, and the method
+cannot be changed in place. `az staticwebapp hostname set` with a different `--validation-method`
+returns 200 and changes nothing; the binding keeps its original method and its original token.
+
+Check which method a hostname is using:
+
+```bash
+az staticwebapp hostname list -n swa-internetresearch -g internetresearch -o table
+```
+
+A populated `ValidationToken` means TXT-token validation. That works for the apex, whose token is
+a TXT record on `@`, but it can never work for `www`, because the token would have to be a TXT
+record at `www`, where the CNAME already lives, and DNS forbids a CNAME alongside any other
+record at the same name. So `www` must use `cname-delegation`, which validates against the CNAME
+that is already there.
+
+The only fix is to recreate the binding, and the site carries a `CanNotDelete` lock, so:
+
+```bash
+SITE=$(az staticwebapp show -n swa-internetresearch -g internetresearch --query id -o tsv)
+az lock delete --name no-delete --resource "$SITE"
+az staticwebapp hostname delete -n swa-internetresearch -g internetresearch \
+  --hostname www.atlasrelay.org --yes
+az staticwebapp hostname set -n swa-internetresearch -g internetresearch \
+  --hostname www.atlasrelay.org --validation-method cname-delegation
+az lock create --name no-delete --lock-type CanNotDelete --resource "$SITE" \
+  --notes "Production site. Remove the lock deliberately before deleting."
+```
+
+Restore the lock in the same sitting. It is declared in `infra/rbac.bicep`, so a subscription
+deployment also restores it, but do not rely on that. The apex binding is untouched throughout.
+
+This was run against `www.atlasrelay.org` on 2026-09-17. Rebinding with `cname-delegation`
+returned `Ready` immediately, because the CNAME it validates against was already published, and
+the DigiCert certificate was serving within a minute. Both hostnames now answer 200 over TLS.
+
 The zone deliberately ships no apex A or ALIAS record. Static Web Apps creates that record
 itself during apex validation, because only the service knows the target to point at; until
 then the apex does not resolve while `www` already does. The binding script refuses to run
@@ -99,6 +137,37 @@ query charges.
 - **Trigger an infra run by hand**: `gh workflow run infra.yml`.
 - **Data export**: `az storage entity query --table-name projects ...` or use Azure
   Storage Explorer.
+- **Take a project down**: there is no admin console, so this is done against Table Storage.
+  Closing a project stops it accepting credits and takes it off the listing, which is the whole
+  remedy; it is reversible, so prefer it to deleting anything.
+
+  ```bash
+  az storage entity merge --table-name projects --account-name <storage account> --auth-mode key \
+    --entity PartitionKey=project RowKey=<project id> status=closed \
+              moderationClosed=true moderationClosed@odata.type=Edm.Boolean
+  ```
+
+  Set `moderationClosed` as well as `status`, not instead of it. Closing alone is not a takedown:
+  the owner can reopen their own project from the edit form, and would. The flag is what tells the
+  API to refuse that, and only this command can clear it again (`moderationClosed=false`).
+
+  To remove the owner as well, delete their row from `users`, which also removes the stored RIPE
+  NCC Access email. Find the id from the project's `ownerId`, then:
+
+  ```bash
+  az storage entity show --table-name users --account-name <storage account> --auth-mode key \
+    --partition-key user --row-key <owner id>
+  az storage entity delete --table-name users --account-name <storage account> --auth-mode key \
+    --partition-key user --row-key <owner id>
+  ```
+
+  Close every project they own first, using the command above: deleting the user alone would leave
+  projects advertised as pledgeable that nobody can actually pledge to, because the handler needs
+  the owner's address to name a recipient. Their projects and pledges stay, carrying only a display
+  name, because other people's records point at them. The internal account id stays on those rows,
+  so the same GitHub or Microsoft account signing in again is reconnected to that history rather
+  than starting clean; deletion is not a ban. Note what you did and why in the abuse issue; pledges
+  are the only audit trail there is.
 - **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and did not get an
   answer it could act on, so the platform cannot say whether the credits moved. Three things reach
   this state and they are worth telling apart: the request timed out, the connection failed, or

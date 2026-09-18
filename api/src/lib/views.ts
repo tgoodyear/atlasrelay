@@ -30,13 +30,25 @@ export function publicName(displayName: string, handle: string, id: string): str
 export function publicProject(p: Project, live?: { confirmed: number; pending: number }) {
   const confirmed = live ? live.confirmed : p.creditsConfirmed;
   const pending = live ? live.pending : p.creditsPending;
-  // etag is a storage row version used for conditional writes. It is internal, and this function
-  // spreads the row, so it has to be removed explicitly rather than merely not mentioned.
-  // ownerId is the identity-provider account id. The profile page tells people that retained
-  // records show only their chosen display name and that the account link is internal, so it
-  // cannot also appear on an anonymous endpoint. Whether the viewer owns a project is decided
-  // server-side and returned as `viewer.isOwner`, so nothing needs it out here.
-  const { etag: _etag, ownerId: _ownerId, totalsCheckedAt: _totalsCheckedAt, totalsDirty: _totalsDirty, ...rest } = p;
+  // This function spreads the row, so anything internal has to be removed by name rather than
+  // merely left unmentioned. A field added to Project is published by default here, which is why
+  // both this list and its tests exist.
+  //   ownerId          the identity-provider account id. The profile page tells people the account
+  //                    link is internal and that retained records show only their display name, so
+  //                    it cannot appear on an anonymous endpoint. Ownership is decided server-side
+  //                    and returned as viewer.isOwner, so nothing out here needs it.
+  //   moderationClosed an operator's note about the row, not something the project says of itself.
+  //   etag             the storage row version, used for conditional writes.
+  //   totalsCheckedAt  maintenance bookkeeping for the listing's refresh rotation.
+  //   totalsDirty      maintenance bookkeeping: totals that could not be written and need redoing.
+  const {
+    ownerId: _ownerId,
+    moderationClosed: _moderationClosed,
+    etag: _etag,
+    totalsCheckedAt: _totalsCheckedAt,
+    totalsDirty: _totalsDirty,
+    ...rest
+  } = p;
   return {
     ...rest,
     creditsConfirmed: confirmed,
