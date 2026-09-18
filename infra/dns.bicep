@@ -19,6 +19,9 @@ param zoneName string
 @description('Default hostname of the static web app, used for the www CNAME')
 param staticWebAppDefaultHostname string
 
+@description('Default hostname of the dev static web app. Empty leaves dev.atlasrelay.org uncreated.')
+param devStaticWebAppDefaultHostname string = ''
+
 @description('''Address the static web app serves on, for the apex A record. Empty skips the
 record, which is correct on a first deployment before the platform has assigned one.''')
 param staticWebAppInboundIp string = ''
@@ -56,6 +59,19 @@ resource wwwCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = {
     TTL: ttl
     CNAMERecord: {
       cname: staticWebAppDefaultHostname
+    }
+  }
+}
+
+// dev -> the dev static web app, for integration testing a PR stack before it reaches main.
+// Same cname-delegation validation as www. Created only when a dev instance exists.
+resource devCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = if (!empty(devStaticWebAppDefaultHostname)) {
+  parent: zone
+  name: 'dev'
+  properties: {
+    TTL: ttl
+    CNAMERecord: {
+      cname: devStaticWebAppDefaultHostname
     }
   }
 }
