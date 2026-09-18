@@ -80,9 +80,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       // working, and each of those left the form live with the key in it. Only statuses the server
       // cannot reach after sending a transfer keep the form open; everything else, including
       // anything that is not an ApiError at all, ends the dialog.
-      const REFUSED_BEFORE_SENDING = [400, 401, 403, 404, 409, 429];
+      // Branch on what the server said, not on the status code. A status cannot answer this: the
+      // handler raises 503 on paths where it stopped before sending anything, while a 503 from the
+      // platform edge can arrive over a transfer that was already in flight. The handler marks the
+      // cases it is certain about, and everything else, including a lost connection, is unknown.
       const serverAnswered = err instanceof ApiError;
-      const refusedBeforeSending = serverAnswered && REFUSED_BEFORE_SENDING.includes((err as ApiError).status);
+      const refusedBeforeSending = serverAnswered && (err as ApiError).transferDefinitelyNotSent;
       if (method === 'api' && !refusedBeforeSending) {
         setApiKey('');
         setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');

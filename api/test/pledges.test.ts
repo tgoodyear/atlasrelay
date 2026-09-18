@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { HttpError } from '../src/lib/http';
 import { activePledgesBy, claimIsReclaimable, pledgeExpired, pledgeInFlight, totals } from '../src/lib/store';
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, remainingToGoal } from '../src/lib/pledging';
 
@@ -196,4 +197,24 @@ test('the in-flight window is measured from the transfer, not from the row', () 
   assert.equal(pledgeInFlight({ ...row, inFlightSince: 'not a date' }, asOf), true);
   // A settled pledge is never in flight, whatever the timestamps say.
   assert.equal(pledgeInFlight({ ...row, inFlight: false, inFlightSince: new Date(asOf).toISOString() }, asOf), false);
+});
+
+test('an error only says "nothing was sent" when the handler actually knows that', () => {
+  // The browser decides whether to keep the transfer form live from this marker, never from the
+  // status code. A status cannot answer it: the handler raises 503 on paths where it stopped
+  // before sending, while a 503 from the platform edge can arrive over a transfer already in
+  // flight. Reading the marker the wrong way round either strands a donor who could safely retry,
+  // or invites a retry that sends the credits twice.
+  const notSent = new HttpError(503, 'nothing was sent', { transfer: 'not-sent' });
+  const unknown = new HttpError(503, 'edge gave up', undefined);
+  const refusal = new HttpError(400, 'RIPE declined', { transfer: 'not-sent' });
+
+  const saysNotSent = (e: HttpError): boolean =>
+    (e.details as { transfer?: string } | undefined)?.transfer === 'not-sent';
+
+  assert.equal(saysNotSent(notSent), true);
+  assert.equal(saysNotSent(refusal), true, 'a refusal is a definite no-send whatever its status');
+  assert.equal(saysNotSent(unknown), false, 'the same status without the marker must read as unknown');
+  // The default has to be unknown, because that is the direction that cannot double-send.
+  assert.equal(saysNotSent(new HttpError(500, 'internal')), false);
 });

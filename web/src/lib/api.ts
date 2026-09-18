@@ -76,8 +76,17 @@ export interface Stats {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public details?: unknown) {
     super(message);
+  }
+
+  /**
+   * True only when the server said outright that no transfer was issued. Absent means unknown,
+   * which is the safe default: an HTTP status cannot answer this, because the same 503 can mean
+   * "the handler stopped before sending" or "the edge gave up while a transfer was in flight".
+   */
+  get transferDefinitelyNotSent(): boolean {
+    return (this.details as { transfer?: string } | undefined)?.transfer === 'not-sent';
   }
 }
 
@@ -97,7 +106,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const message = (body as { error?: { message?: string } } | null)?.error?.message ?? (res.status === 401 ? 'Please sign in' : `Request failed (${res.status})`);
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, (body as { error?: { details?: unknown } } | null)?.error?.details);
   }
   return body as T;
 }
