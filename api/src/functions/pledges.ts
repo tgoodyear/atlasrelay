@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -142,7 +142,17 @@ app.http('pledges-create', {
     // no single row can arbitrate between them. Over-reserving is recoverable in a way a double
     // transfer is not: it only holds pending credits, it is re-checked when a pledge is confirmed,
     // and it expires. Losing here costs nothing, because this runs before the transfer.
-    let updatedProject = await recomputeProjectTotals(id);
+    // If the totals cannot be read, this check cannot be made, and it must fail closed: a stale
+    // snapshot would let a pledge through on a project already filled, and for a manual pledge
+    // that is what discloses the owner's address. Nothing has moved yet, so withdrawing and asking
+    // for a retry costs the donor nothing.
+    let updatedProject: Project;
+    try {
+      updatedProject = await recomputeProjectTotals(id);
+    } catch (err) {
+      console.error('Could not recompute project totals before a transfer:', err instanceof Error ? err.message : err);
+      throw await rollback(new HttpError(503, 'We could not check this project\u2019s current total just now, so nothing was sent. Please try again in a moment.'));
+    }
     if (updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
       throw await rollback(new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.'));
     }
@@ -191,16 +201,24 @@ app.http('pledges-create', {
         // transferredAt records the moment our server watched RIPE accept the transfer, and here
         // nothing was watched. Leaving it empty keeps that field honest; the status and the
         // uncertain flag are what describe this pledge.
+        let recorded = false;
         try {
           await savePledge(pledge);
+          recorded = true;
           await recomputeProjectTotals(id);
         } catch (saveErr) {
-          // The warning below matters more than the row's exact status, so say it either way.
           console.error('Could not park an uncertain transfer:', saveErr instanceof Error ? saveErr.message : saveErr);
         }
+        // Say which of the two situations this is. Claiming a pledge is recorded when the write
+        // failed sends the donor looking for something that is not there, and leaves them with no
+        // idea that nobody else knows about the transfer either.
         throw new HttpError(
           502,
-          `${err instanceof Error ? err.message : 'RIPE Atlas did not answer'}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. The pledge is recorded and waiting for the project owner to confirm it.`,
+          `${err instanceof Error ? err.message : 'RIPE Atlas did not answer'}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. ${
+            recorded
+              ? 'The pledge is recorded and waiting for the project owner to confirm it.'
+              : 'We could not record the pledge either, so nothing here knows about it: if the credits did move, tell the project owner with your RIPE transaction.'
+          }`,
         )
       }
 
@@ -208,7 +226,10 @@ app.http('pledges-create', {
       // longer any failure the donor could usefully act on by retrying.
       pledge.status = 'confirmed';
       pledge.inFlight = false;
-      pledge.transferredAt = new Date(startedAt).toISOString();
+      // The moment RIPE accepted, not the moment we asked. startedAt is kept for matching the
+      // transaction, where an earlier bound is what we want, but recording it here would date the
+      // acceptance up to the full twenty-second timeout early.
+      pledge.transferredAt = new Date().toISOString();
       try {
         // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
         // the transaction up to record a real id. A key without the credits-read permission still
@@ -218,8 +239,10 @@ app.http('pledges-create', {
           pledge.transactionId = String(txn.id);
           pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
         }
-      } catch {
-        // No reference beats failing a transfer that already happened.
+      } catch (lookupErr) {
+        // No reference beats failing a transfer that already happened, but it is worth a line in
+        // the log: a lookup that keeps failing is a real problem even though it is never fatal.
+        console.error('Transaction lookup failed after a completed transfer:', lookupErr instanceof Error ? lookupErr.message : lookupErr);
       }
 
       // These two are reported separately because they fail differently. If the row never reaches
