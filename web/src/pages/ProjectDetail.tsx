@@ -108,9 +108,12 @@ export default function ProjectDetail() {
                           <span>
                             <strong>{p.donorName || 'Anonymous donor'}</strong>
                             {/* A row carrying donorId came from the private view, so the name above
-                                is the real one and this viewer is the owner or the donor. Say that
-                                it is not public, or an owner could thank them by name in a place
-                                the donor asked not to be named. */}
+                                is the real one and this viewer is either the owner or the donor.
+                                Both are shown this, deliberately. The owner needs it so they do not
+                                repeat the name somewhere the donor asked not to be named. The donor
+                                needs it more: without it they see their own name sitting in the
+                                public pledge list with nothing to say it is hidden from everyone
+                                else, which reads as the checkbox having failed. */}
                             {p.anonymous && p.donorId && <span className="pill pill-quiet"> not shown publicly</span>}
                             {' '}· {fmt(p.amount)} credits
                           </span>
