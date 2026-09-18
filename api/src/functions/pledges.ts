@@ -359,19 +359,15 @@ app.http('pledges-create', {
       if (method === 'manual') {
         recipientEmail = (await getUser(project.ownerId))?.atlasEmail || undefined;
         if (!recipientEmail) {
-          // The slot goes back only if the withdrawal landed. Releasing it after a failed cancel
-          // leaves a live pledge reserving capacity with no slot behind it, and the same donor can
-          // then open a second one, which is the state the slot exists to prevent.
-          let withdrew = false;
-          try {
-            await savePledge({ ...pledge, status: 'cancelled' });
-            withdrew = true;
-          } catch (cancelErr) {
-            console.error('Could not withdraw a pledge with no recipient:', cancelErr instanceof Error ? cancelErr.message : cancelErr);
-          }
-          await recomputeProjectTotals(id).catch(() => undefined);
-          if (withdrew) await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
-          throw new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.');
+          // Exactly the API path's rollback, for exactly its reasons. A manual pledge is actionable
+          // the moment its row exists, so between that write and this read the donor may have marked
+          // it sent or the owner confirmed it. An unconditional replace would overwrite either with
+          // cancelled and then hand back the slot, losing the record of a transfer somebody had
+          // already made. Conditional on the version we created, a 412 says precisely that happened
+          // and the right answer is to leave their row alone. The slot goes back only if the
+          // withdrawal actually landed: releasing it after a failed cancel leaves a live pledge
+          // reserving capacity with no slot behind it, and the same donor could then open a second.
+          throw await rollback(new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.'));
         }
       }
 
