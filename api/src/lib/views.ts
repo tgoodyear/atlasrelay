@@ -30,8 +30,11 @@ export function publicName(displayName: string, handle: string, id: string): str
 export function publicProject(p: Project, live?: { confirmed: number; pending: number }) {
   const confirmed = live ? live.confirmed : p.creditsConfirmed;
   const pending = live ? live.pending : p.creditsPending;
+  // etag is a storage row version used for conditional writes. It is internal, and this function
+  // spreads the row, so it has to be removed explicitly rather than merely not mentioned.
+  const { etag: _etag, ...rest } = p;
   return {
-    ...p,
+    ...rest,
     creditsConfirmed: confirmed,
     creditsPending: pending,
     ownerName: publicName(p.ownerName, '', p.ownerId),

@@ -63,3 +63,13 @@ test('a transfer RIPE never answered is never shown as a watched transfer', () =
 test('a manual pledge is never an API transfer', () => {
   assert.equal(publicPledge(pledge({ method: 'manual' })).apiTransfer, false);
 });
+
+test('a project never publishes its storage row version', () => {
+  const p = publicProject({
+    id: 'j1', ownerId: 'o1', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
+    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
+    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
+    etag: 'W/"datetime\'2026-09-18T04%3A00%3A00.0000000Z\'"', createdAt: '', updatedAt: '',
+  });
+  assert.equal('etag' in p, false);
+});
