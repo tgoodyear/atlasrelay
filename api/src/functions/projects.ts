@@ -24,12 +24,10 @@ app.http('projects-list', {
     const q = (req.query.get('q') ?? '').trim().toLowerCase();
     const sort = req.query.get('sort') ?? 'newest';
 
-    // Expiry is a read-time rule, so the list has to apply it as well. Without this an abandoned
-    // pledge keeps showing as reserved on every card for ever, and the project keeps advertising a
-    // maxPledge of 0, until some unrelated write happens to recompute that row.
-    // Read-time expiry has to reach the listing too, or an abandoned reservation shows as pending
-    // for ever. Only a project that currently shows reserved credits can be stale, and the cached
-    // total is rewritten on every pledge write, so a cached pending of 0 is trustworthy.
+    // Read-time expiry has to reach the listing too, or an abandoned reservation shows as reserved
+    // on every card for ever and the project keeps advertising a maxPledge of 0. Only a project
+    // that currently shows reserved credits can be stale, and the cached total is rewritten on
+    // every pledge write, so a cached pending of 0 is trustworthy.
     //
     // Two things keep that from turning an anonymous request into unbounded table work. The fan-out
     // is capped, so a large number of stale projects cannot be used to amplify one request. And a
@@ -164,7 +162,18 @@ app.http('projects-create', {
     };
     await createProject(project);
 
-    // The check above reads before writing, so simultaneous requests can all pass it. Settle it
+    // The owner may have deleted their profile while this request was in flight. Deletion closes
+    // open projects, but it can only close the ones its sweep can see, so a project written after
+    // that sweep would survive as an open project with nobody able to receive credits for it.
+    // Checking after the write closes the gap from this side: either deletion sees this row and
+    // closes it, or this sees the missing user row and closes itself. One always holds, because
+    // both read after writing.
+    if (!(await getUser(user.id))?.atlasEmail) {
+      await patchProject(project.id, { status: 'closed' }).catch(() => undefined);
+      throw new HttpError(409, 'Your profile is no longer available, so this project was not published.');
+    }
+
+    // The cap check above reads before writing, so simultaneous requests can all pass it. Settle it
     // now the row is visible: re-read, and if this owner is over the cap, the newest projects
     // close themselves back down to it. Ids are time-prefixed, so the newest row always sees every
     // older one and every racer reaches the same verdict without coordination. Unlike a transfer,
@@ -239,6 +248,14 @@ app.http('projects-update', {
       const restored = await patchProject(id, { status: 'closed' });
       return json({ project: publicProject(restored) });
     }
+
+    // Same check as creation, for the same reason: the profile can be deleted between the guard
+    // above and this write, and deletion's sweep may already have passed this row.
+    if (updated.status === 'open' && !(await getUser(p.userId))?.atlasEmail) {
+      const reclosed = await patchProject(id, { status: 'closed' });
+      return json({ project: publicProject(reclosed) });
+    }
+
     return json({ project: publicProject(updated) });
   }),
 });
