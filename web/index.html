@@ -8,25 +8,26 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Non-blocking. As a plain stylesheet this sat in front of first paint, so the page waited
-         on Google before drawing anything. Loaded as print and switched to all on arrival, the
-         browser fetches it without blocking; the font-display:swap in the URL already covers the
-         moment before it lands. -->
+    <!-- Preload then apply, with no inline script. The media="print" + onload="this.media='all'"
+         trick that was here is inline script, and the deployed CSP is script-src 'self', so
+         browsers enforcing it never ran the onload and the stylesheet stayed at media="print":
+         the fonts silently never applied for anyone with JavaScript enabled. The preload still
+         starts the fetch early, and the stylesheet below applies it whenever it arrives. -->
     <link
+      rel="preload"
+      as="style"
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
-      rel="stylesheet"
-      media="print"
-      onload="this.media='all'"
     />
-    <noscript>
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-    </noscript>
-    <!-- Start the home page's two requests now, in parallel with the module bundle, instead of
-         after it has downloaded, parsed and mounted React. The responses sit in the HTTP cache and
-         the fetches in useEffect pick them straight up. Both are anonymous GETs, so warming them
-         for a visitor who navigates elsewhere costs one cheap request and nothing else. -->
-    <link rel="preload" as="fetch" href="/api/stats" />
-    <link rel="preload" as="fetch" href="/api/projects?status=open&amp;sort=newest" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
+    />
+    <!-- No API preloads here. index.html is served for every SPA route, so these fired on project
+         pages, the dashboard and the FAQ, where the home page never mounts and the responses are
+         never read. Both endpoints scan the project table, so a home-page optimisation became
+         extra backend work on unrelated visits. They also omitted crossorigin while the real
+         fetches send credentials same-origin, so the request modes did not match and the browser
+         was free to fetch both a second time anyway. -->
     <title>Atlas Credit Exchange</title>
   </head>
   <body>

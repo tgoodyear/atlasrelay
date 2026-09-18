@@ -6,6 +6,27 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * Attached to an error when the request is certain no transfer was issued, so the browser can keep
+ * the form live for a retry. Inferring this from the HTTP status does not work in either
+ * direction: a 503 raised inside a handler means nothing was sent, while a 503 from the platform
+ * edge can arrive over a transfer that was already in flight. Only the handler knows, so it says
+ * so. Read by the web client as details.transfer === 'not-sent'.
+ */
+export const NOT_SENT = { transfer: 'not-sent' as const };
+
+/**
+ * Label an error as raised before anything irreversible was attempted.
+ *
+ * Only ever adds the marker, never changes one: an error that already carries details is saying
+ * something more specific and keeps it. A non-HttpError is left alone because handle() turns those
+ * into a bare 500 with no details channel at all, so there is nowhere to put it.
+ */
+export function markNotSent(err: unknown): unknown {
+  if (!(err instanceof HttpError) || err.details !== undefined) return err;
+  return new HttpError(err.status, err.message, NOT_SENT);
+}
+
 export function json(body: unknown, status = 200, headers: Record<string, string> = {}): HttpResponseInit {
   return {
     status,

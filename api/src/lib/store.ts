@@ -503,9 +503,15 @@ export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   const t = await table('pledges');
   // With ifMatch this is a conditional replace: it fails with 412 if the row changed since the
   // caller read it, which is how two people acting on the same pledge stop overwriting each other.
-  if (ifMatch) await t.updateEntity(entity as TableEntity, 'Replace', { etag: ifMatch });
-  else await t.upsertEntity(entity, 'Replace');
-  return updated;
+  //
+  // The returned etag is the new row version, and callers that write the same pledge more than
+  // once must carry it forward. Not doing so was worse than having no guard at all: a later
+  // conditional write still held the version from the create, so it failed with 412 every single
+  // time, and the cancellation it was guarding simply never happened.
+  const res = ifMatch
+    ? await t.updateEntity(entity as TableEntity, 'Replace', { etag: ifMatch })
+    : await t.upsertEntity(entity, 'Replace');
+  return { ...updated, etag: res.etag };
 }
 
 /**

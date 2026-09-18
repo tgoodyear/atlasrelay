@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HttpError } from '../src/lib/http';
+import { HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
 import { activePledgesBy, claimIsReclaimable, pledgeExpired, pledgeInFlight, totals } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
@@ -254,3 +254,29 @@ test('an error only says "nothing was sent" when the handler actually knows that
   assert.equal(saysNotSent(unknown), false, 'the same status without the marker must read as unknown');
   // The default has to be unknown, because that is the direction that cannot double-send.
   assert.equal(saysNotSent(new HttpError(500, 'internal')), false);});
+
+test('an error raised before a transfer is issued tells the donor nothing was sent', () => {
+  // Without this the browser cannot tell a rejected key from a transfer whose outcome is unknown,
+  // so a donor who mistyped their key was sent to the terminal "check your RIPE Atlas account
+  // before you send again" screen instead of being allowed to correct it in the open form.
+  const marked = markNotSent(new HttpError(400, 'API key must be a RIPE Atlas key (UUID format)'));
+  assert.ok(marked instanceof HttpError);
+  assert.equal((marked as HttpError).status, 400);
+  assert.equal((marked as HttpError).message, 'API key must be a RIPE Atlas key (UUID format)');
+  assert.deepEqual((marked as HttpError).details, NOT_SENT);
+  assert.equal((NOT_SENT as { transfer: string }).transfer, 'not-sent');
+});
+
+test('marking never overwrites what an error already said about a transfer', () => {
+  // The paths that know more than "before the POST" set their own details, and the whole point of
+  // the marker is that it is only ever added where the answer is certain.
+  const detailed = new HttpError(409, 'Something specific', { transfer: 'sent' });
+  assert.equal(markNotSent(detailed), detailed);
+});
+
+test('an unexpected failure is never labelled as a transfer that did not happen', () => {
+  // handle() turns anything that is not an HttpError into a bare 500 with no details channel, so
+  // there is nowhere to put the marker and nothing that could honestly carry it.
+  const raw = new Error('table storage exploded');
+  assert.equal(markNotSent(raw), raw);
+});

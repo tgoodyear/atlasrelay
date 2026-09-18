@@ -60,3 +60,16 @@ test('no other backslash escapes in source outside of string literals we control
   }
   assert.deepEqual(offenders, [], `\n${offenders.join('\n')}\n`);
 });
+
+test('the pledge handler decides a transfer was issued before it issues one', () => {
+  // The flag gates a blanket "nothing was sent" onto every error the handler raises above it.
+  // Setting it after the POST rather than before would extend that promise over the POST itself,
+  // so a transfer whose outcome is genuinely unknown would tell the donor it never happened and
+  // invite them to send the same credits again. Order is the whole guarantee, so assert it.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const flag = src.indexOf('transferIssued = true');
+  const post = src.indexOf('await transferCredits(');
+  assert.ok(flag > 0, 'pledges.ts no longer marks when a transfer has been issued');
+  assert.ok(post > 0, 'pledges.ts no longer calls transferCredits');
+  assert.ok(flag < post, 'the transfer is issued before the handler stops promising nothing was sent');
+});
