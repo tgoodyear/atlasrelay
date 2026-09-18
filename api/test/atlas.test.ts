@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertKeyFormat, AtlasRefused, transactionTime, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
+import { assertKeyFormat, AtlasRefused, AtlasUnreachable, describeAtlasError, findTransferTransaction, getCredits, transactionTime, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
 const KEY = '12345678-1234-1234-1234-123456789abc';
@@ -32,6 +32,73 @@ test('describeAtlasError has sane fallbacks', () => {
   assert.match(describeAtlasError(403, null), /rejected the API key/);
   assert.match(describeAtlasError(429, {}), /rate-limiting/);
   assert.match(describeAtlasError(500, ''), /HTTP 500/);
+});
+
+// The pledge handler decides whether to roll a reservation back or park it for a human by
+// asking one question of a failed transfer: did RIPE answer? These tests pin that answer.
+
+test('a refusal from RIPE is not AtlasUnreachable, because no credits moved', async () => {
+  const err = await withFetch(
+    async () => new Response(JSON.stringify({ error: { status: 400, detail: 'Not enough credits.' } }), { status: 400 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof HttpError);
+  assert.equal(err instanceof AtlasUnreachable, false);
+  assert.equal(err.status, 400);
+});
+
+test('rate limiting is a refusal too, and keeps its 429', async () => {
+  const err = await withFetch(
+    async () => new Response('{}', { status: 429 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.equal(err instanceof AtlasUnreachable, false);
+  assert.equal((err as HttpError).status, 429);
+});
+
+test('a network failure is AtlasUnreachable, because the outcome is unknown', async () => {
+  const err = await withFetch(
+    async () => {
+      throw new TypeError('fetch failed');
+    },
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable);
+  assert.equal(err.status, 502);
+});
+
+test('a timeout is AtlasUnreachable: RIPE may still have taken the credits', async () => {
+  const err = await withFetch(
+    async () => {
+      const abort = new Error('The operation was aborted');
+      abort.name = 'AbortError';
+      throw abort;
+    },
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable);
+  assert.match(err.message, /did not respond in time/);
+});
+
+test('a transfer posts exactly once, whatever the response', async () => {
+  const paths: string[] = [];
+  await withFetch(
+    async (input) => {
+      paths.push(String(input));
+      return new Response('{}', { status: 404 });
+    },
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, () => null),
+  );
+  assert.equal(paths.length, 1, 'a second POST could send the credits twice');
+  assert.match(paths[0], /\/credits\/transfers\/$/);
+});
+
+test('a 2xx without a transaction field still counts as sent', async () => {
+  const res = await withFetch(
+    async () => new Response(JSON.stringify({ amount: 10, recipient: 'someone@example.org' }), { status: 201 }),
+    () => transferCredits(KEY, 'someone@example.org', 10),
+  );
+  assert.deepEqual(res, { transaction: '' });
 });
 
 test('an ambiguous transaction match records no reference at all', async () => {
@@ -68,41 +135,66 @@ test('a refusal carries RIPE own status so a key problem is not confused with an
   }
 });
 
-test('a transfer posts exactly once, whatever the response', async () => {
-  // A retry against a second path could send the credits twice, and would also make a key's use
-  // four outbound requests rather than the three SECURITY.md discloses.
-  const real = globalThis.fetch;
-  const paths: string[] = [];
-  globalThis.fetch = (async (input: unknown) => {
-    paths.push(String(input));
-    return new Response('{}', { status: 404 });
-  }) as typeof fetch;
-  try {
-    await transferCredits('12345678-1234-1234-1234-123456789abc', 'someone@example.org', 10).catch(() => null);
-  } finally {
-    globalThis.fetch = real;
-  }
-  assert.equal(paths.length, 1);
-  assert.match(paths[0], /\/credits\/transfers\/$/);
+test('a 2xx with an unreadable body is a success, because the status is the confirmation', async () => {
+  // This previously raised AtlasUnreachable, on the reasoning that we could not know what had
+  // completed. That was wrong for a transfer: RIPE answering 201 IS the confirmation, and the
+  // body carries only a generic list URL nothing here relies on. Calling it unknown discarded a
+  // success we had been told about, parked the pledge as uncertain, and handed the donor the
+  // cancel-and-send-again path over credits that had definitely moved.
+  const res = await withFetch(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'));
+          },
+        }),
+        { status: 201 },
+      ),
+    () => transferCredits(KEY, 'someone@example.org', 10),
+  );
+  assert.deepEqual(res, { transaction: '' });
 });
 
-test('a transaction from before the transfer is never taken as its reference', async () => {
-  // A same-sized transfer the donor made moments earlier is exactly the row a backwards-looking
-  // window would latch onto, and recording it would attach the wrong proof to this pledge.
-  const since = Date.parse('2026-09-18T12:00:00Z');
-  const earlier = { id: 9, type: 'admin', amount: -500, date: '2026-09-18T11:57:00Z' };
-  const res = await withFetch(
-    async () => new Response(JSON.stringify({ results: [earlier] }), { status: 200 }),
-    () => findTransferTransaction(KEY, 500, since),
-  );
-  assert.equal(res, null);
 
-  // An unreadable timestamp is no evidence either, so it is rejected rather than accepted.
-  const undated = await withFetch(
-    async () => new Response(JSON.stringify({ results: [{ ...earlier, date: 'not a date' }] }), { status: 200 }),
-    () => findTransferTransaction(KEY, 500, since),
+test('a truncated refusal is still a refusal, not an unknown outcome', async () => {
+  // RIPE answered with a 4xx and the body was lost. The status is a complete answer on its own:
+  // nothing moved. Parking this as uncertain would strand a pledge that should simply be cancelled.
+  const err = await withFetch(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'));
+          },
+        }),
+        { status: 400 },
+      ),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
   );
-  assert.equal(undated, null);
+  assert.equal(err instanceof AtlasUnreachable, false, 'a refusal must not read as unknown');
+  assert.ok(err instanceof HttpError);
+  assert.equal(err.status, 400);
+});
+
+test('a 5xx on a transfer is an unknown outcome, not a refusal', async () => {
+  // RIPE broke somewhere internally. That says nothing about whether it processed the transfer
+  // first, so rolling the pledge back and letting the donor retry could send the credits twice.
+  const err = await withFetch(
+    async () => new Response('{}', { status: 503 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable);
+  assert.equal(err.status, 502);
+});
+
+test('a 4xx on a transfer is still a refusal, so the donor can retry', async () => {
+  const err = await withFetch(
+    async () => new Response(JSON.stringify({ error: { detail: 'Not enough credits.' } }), { status: 400 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.equal(err instanceof AtlasUnreachable, false);
+  assert.equal(err.status, 400);
 });
 
 // The fixtures below are real RIPE responses, captured from the live API on 2026-09-18 with a

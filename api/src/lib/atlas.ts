@@ -9,15 +9,10 @@ import { HttpError } from './http';
 const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Thrown when RIPE answered and refused the request. The HTTP status we hand our own caller is
- * flattened (RIPE's 4xx becomes our 400), so RIPE's own status is kept here: it is the only way
- * to tell "this key lacks a permission" from "RIPE is having a bad day", and those two need
- * different words in front of a donor.
- */
-/**
- * Thrown when a call never reached RIPE, or RIPE never gave a usable answer. The distinction
- * matters for transfers: an AtlasRefused means RIPE read the request and declined, so no credits
- * moved, whereas this one means the outcome is unknown and the caller must not retry blindly.
+ * Thrown when a call never reached RIPE, or RIPE gave no usable answer: a timeout, a dropped
+ * connection, a body that never finished, or a 5xx. The distinction matters for transfers. An
+ * AtlasRefused means RIPE read the request and declined, so no credits moved and a retry is safe.
+ * This one means the outcome is unknown and the caller must not retry blindly.
  */
 export class AtlasUnreachable extends HttpError {
   constructor(message: string) {
@@ -25,6 +20,12 @@ export class AtlasUnreachable extends HttpError {
   }
 }
 
+/**
+ * Thrown when RIPE answered and refused the request. The HTTP status we hand our own caller is
+ * flattened (RIPE's 4xx becomes our 400), so RIPE's own status is kept here: it is the only way
+ * to tell "this key lacks a permission" from "RIPE is having a bad day", and those two need
+ * different words in front of a donor.
+ */
 export class AtlasRefused extends HttpError {
   constructor(public upstreamStatus: number, status: number, message: string) {
     super(status, message);
@@ -79,11 +80,41 @@ export interface CreditTransaction {
   balance_after?: number;
 }
 
-async function atlasFetch(path: string, key: string, init: RequestInit = {}): Promise<Response> {
+interface AtlasReply {
+  status: number;
+  ok: boolean;
+  body: unknown;
+}
+
+/**
+ * One call to RIPE, headers and body together, under a single deadline.
+ *
+ * The body has to be read inside the timeout rather than after it. A `fetch` promise settles as
+ * soon as the response headers arrive, so a deadline that is cleared at that point leaves a
+ * stalled body free to hang for as long as the connection stays open. On a transfer that means
+ * never learning whether the credits moved, which is the one outcome this client exists to make
+ * legible.
+ *
+ * Everything this throws is an AtlasUnreachable, meaning the request reached RIPE but we cannot
+ * say what happened. A reply that comes back at all is returned, refusal or not, so the caller
+ * can tell "RIPE said no" from "we do not know".
+ */
+/**
+ * Per-call deadlines. One pledge can make three RIPE calls, and at twenty seconds each the worst
+ * case ran past the Static Web Apps edge timeout, so the edge could give up on a request whose
+ * transfer then succeeded: the donor saw a gateway error over credits that had actually moved.
+ * The transfer keeps the full budget because it is the one that matters; the two best-effort
+ * calls around it are given far less, since neither is worth waiting on and both already treat
+ * failure as "carry on without it".
+ */
+const TRANSFER_TIMEOUT_MS = 20_000;
+const BEST_EFFORT_TIMEOUT_MS = 5_000;
+
+async function atlasCall(path: string, key: string, init: RequestInit = {}, timeoutMs = TRANSFER_TIMEOUT_MS): Promise<AtlasReply> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(`${base()}${path}`, {
+    const res = await fetch(`${base()}${path}`, {
       ...init,
       headers: {
         accept: 'application/json',
@@ -93,6 +124,30 @@ async function atlasFetch(path: string, key: string, init: RequestInit = {}): Pr
       },
       signal: controller.signal,
     });
+
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      // The status line is a complete answer on its own, either way. A non-2xx means RIPE refused
+      // and nothing moved; losing that body costs only the explanatory detail. A 2xx means RIPE
+      // accepted, and for a transfer that is the confirmation: the body carries a generic list URL
+      // this client does not rely on for anything. Treating a 201 with an unreadable body as an
+      // unknown outcome threw away a success we had been told about, parked the pledge as
+      // uncertain, and handed the donor the cancel-and-send-again path over credits that had
+      // definitely moved.
+      return { status: res.status, ok: res.ok, body: null };
+    }
+
+    let body: unknown = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = null;
+      }
+    }
+    return { status: res.status, ok: res.ok, body };
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
     throw new AtlasUnreachable(aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
@@ -122,20 +177,12 @@ export function describeAtlasError(status: number, body: unknown): string {
   }
 }
 
-async function parseBody(res: Response): Promise<unknown> {
-  const text = await res.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
 
 export async function getCredits(key: string): Promise<CreditsOverview> {
-  const res = await atlasFetch('/credits/', key);
-  const body = await parseBody(res);
-  if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
+  const { ok, status, body } = await atlasCall('/credits/', key, {}, BEST_EFFORT_TIMEOUT_MS);
+  // RIPE answered and refused, so no credits moved. Anything thrown from atlasCall itself is
+  // an AtlasUnreachable instead, and carries no such guarantee.
+  if (!ok) throw new AtlasRefused(status, status === 429 ? 429 : 400, describeAtlasError(status, body));
   return body as CreditsOverview;
 }
 
@@ -162,14 +209,16 @@ export function transactionTime(date: number | string): number | null {
 }
 
 export async function findTransferTransaction(key: string, amount: number, since: number): Promise<CreditTransaction | null> {
-  let res: Response;
+  // This lookup only ever adds a reference, and it runs after the transfer has completed, so it
+  // must never raise anything the caller could mistake for a failed transfer.
+  let body: unknown;
   try {
-    res = await atlasFetch('/credits/transactions/?sort=-date&type=admin&page_size=25', key);
+    const reply = await atlasCall('/credits/transactions/?sort=-date&type=admin&page_size=25', key, {}, BEST_EFFORT_TIMEOUT_MS);
+    if (!reply.ok) return null;
+    body = reply.body;
   } catch {
     return null;
   }
-  if (!res.ok) return null;
-  const body = await parseBody(res);
   const rows: CreditTransaction[] = Array.isArray(body)
     ? (body as CreditTransaction[])
     : (((body as { results?: CreditTransaction[] } | null)?.results) ?? []);
@@ -201,17 +250,18 @@ export async function transferCredits(key: string, recipient: string, amount: nu
   // One POST only. The manual documents a singular path too, but the plural one is what the live
   // API serves, and re-posting a transfer to guess at a path could send the credits twice. It also
   // keeps a key's use to the three requests SECURITY.md discloses.
-  const res = await atlasFetch('/credits/transfers/', key, { method: 'POST', body: payload });
-  const body = await parseBody(res);
-  // A 4xx is RIPE declining: it read the request and said no, so no credits moved and the donor can
-  // safely correct the problem and try again. A 5xx is not that. It says something broke inside
-  // RIPE, which is no evidence about whether the transfer had already been processed, so it is
-  // reported as unknown. Calling it a refusal would free the donor's slot and invite a retry that
-  // sends the credits a second time.
-  if (res.status >= 500) {
-    throw new AtlasUnreachable(`RIPE Atlas returned HTTP ${res.status} without saying whether the transfer completed`);
+  const { ok, status, body } = await atlasCall('/credits/transfers/', key, { method: 'POST', body: payload });
+  // A 4xx is RIPE declining: it read the request and said no, so no credits moved and the donor
+  // can safely correct the problem and try again. A 5xx is not that. It says something broke
+  // inside RIPE, which is no evidence about whether the transfer had already been processed, so
+  // it is reported as unknown. Calling it a refusal would release the reservation and invite a
+  // retry that sends the same credits a second time.
+  // 4xx only. A 3xx means fetch declined to follow a redirect, which says nothing about whether
+  // RIPE processed anything, and calling it a refusal would free the slot and invite a retry.
+  if (status >= 500 || (status >= 300 && status < 400)) {
+    throw new AtlasUnreachable(`RIPE Atlas returned HTTP ${status} without saying whether the transfer completed`);
   }
-  if (!res.ok) throw new AtlasRefused(res.status, res.status === 429 ? 429 : 400, describeAtlasError(res.status, body));
+  if (!ok) throw new AtlasRefused(status, status === 429 ? 429 : 400, describeAtlasError(status, body));
   const transaction = (body as TransferResult | null)?.transaction;
   // RIPE returns a list URL rather than a reference, so its absence is not worth failing on:
   // the 2xx is what tells us the credits moved.

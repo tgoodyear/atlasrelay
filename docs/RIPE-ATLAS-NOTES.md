@@ -33,13 +33,18 @@ Content-Type: application/json
 { "recipient": "user@example.com", "amount": 1000 }
 ```
 
-- Response `201 Created`: `{ "transaction": "<URL of the created transaction>" }`.
+- Response `201 Created`. The docstring promises `{ "transaction": "<URL>" }`, but the schema in
+  the OpenAPI document is `{amount, recipient}`, and a real transfer returned a generic list URL
+  (`.../credits/transactions/?sort=-date&type=admin`) identical for every transfer. So the 201
+  itself is the only signal that credits moved; the platform looks the transaction up separately
+  to record a reference.
 - `amount` is an integer; `recipient` must be a RIPE NCC Access account. The docs say a
   recipient who has never used Atlas can still receive and will see the credits after
   visiting atlas.ripe.net.
 - The manual's page uses `/credits/transfer/` (singular) while the reference uses
-  `/credits/transfers/` (plural). The reference is generated from the API schema, so the
-  platform uses the plural form and falls back to the singular on a 404.
+  `/credits/transfers/` (plural). The reference is generated from the API schema, and the plural
+  form is confirmed working against the live API, so the platform posts to it once and never
+  retries on another path. Re-posting a transfer to guess at a path could send credits twice.
 - No documented amount limits or rate limits. Measurement-creation endpoints are
   documented as more strictly rate-limited than reads; 429 = back off.
 

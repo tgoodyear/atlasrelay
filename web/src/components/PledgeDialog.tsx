@@ -7,7 +7,7 @@ interface Props {
   onDone: (project: Project) => void;
 }
 
-type Step = 'form' | 'manual-instructions' | 'api-done';
+type Step = 'form' | 'manual-instructions' | 'api-done' | 'api-unknown';
 
 export default function PledgeDialog({ project, onClose, onDone }: Props) {
   // Always bounded by the server-computed per-pledge limit, so the dialog never opens on a
@@ -27,10 +27,12 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // Not while a transfer is running: closing reloads the project, and the donor would be shown
+    // their pledge sitting at "Pledged" while the credits were actually moving.
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !submitting && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, submitting]);
 
   const n = Number(amount);
   const amountOk = Number.isInteger(n) && n >= 1 && n <= project.maxPledge;
@@ -66,7 +68,34 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       }
       onDone(res.project);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong');
+      const message = err instanceof ApiError ? err.message : 'Something went wrong';
+      // What matters is whether the server answered. An ApiError means it did, and its status
+      // says whether RIPE refused (nothing moved, retrying is right) or never replied (502,
+      // unknown). Anything that is not an ApiError is the browser losing the connection, and by
+      // then the server may already have sent the transfer, so it is unknown in exactly the same
+      // way. Both must end the dialog rather than leave a populated form and a live button.
+      // Classify by what the status can only mean, not by listing the failures we thought of.
+      // Singling out 502 as the unknown case was backwards: a completed transfer can end in a 500
+      // from a failed cleanup write, or a 504 from the edge giving up while RIPE was still
+      // working, and each of those left the form live with the key in it. Only statuses the server
+      // cannot reach after sending a transfer keep the form open; everything else, including
+      // anything that is not an ApiError at all, ends the dialog.
+      // Branch on what the server said, not on the status code. A status cannot answer this: the
+      // handler raises 503 on paths where it stopped before sending anything, while a 503 from the
+      // platform edge can arrive over a transfer that was already in flight. The handler marks the
+      // cases it is certain about, and everything else, including a lost connection, is unknown.
+      const serverAnswered = err instanceof ApiError;
+      const refusedBeforeSending = serverAnswered && (err as ApiError).transferDefinitelyNotSent;
+      if (method === 'api' && !refusedBeforeSending) {
+        setApiKey('');
+        setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');
+        setStep('api-unknown');
+      } else {
+        // A refusal means nothing moved and the donor can correct and retry, but the key is
+        // dropped even so: a populated field beside a live button is how a second transfer starts.
+        if (method === 'api') setApiKey('');
+        setError(message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -83,20 +112,26 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pledge-title">
         <div className="modal-head">
           <h2 id="pledge-title">
-            {step === 'form' ? 'Send credits' : step === 'api-done' ? 'Credits transferred' : 'Finish the transfer on atlas.ripe.net'}
+            {step === 'form'
+              ? 'Send credits'
+              : step === 'api-done'
+                ? 'Credits transferred'
+                : step === 'api-unknown'
+                  ? 'Check before you send again'
+                  : 'Finish the transfer on atlas.ripe.net'}
           </h2>
-          <button className="close" aria-label="Close" onClick={onClose}>×</button>
+          <button className="close" aria-label="Close" onClick={onClose} disabled={submitting}>×</button>
         </div>
         <div className="modal-body">
           {step === 'form' && (
             <form onSubmit={submit}>
               <div className="field">
                 <label htmlFor="amount">Amount</label>
-                <input id="amount" type="number" min={1} max={project.maxPledge} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                <input id="amount" type="number" min={1} max={project.maxPledge} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} disabled={submitting} required />
                 <span className="hint">
                   {project.remaining > 0
                     ? `This project still needs ${fmt(project.remaining)} credits to reach its goal. `
@@ -154,7 +189,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 <button className="btn" type="submit" disabled={submitting || !amountOk || (method === 'api' && apiKey.trim().length < 36)}>
                   {submitting ? (method === 'api' ? 'Transferring…' : 'Saving…') : method === 'api' ? `Transfer ${amountOk ? fmt(n) : ''} credits` : 'Create pledge'}
                 </button>
-                <button className="btn btn-ghost" type="button" onClick={onClose}>Cancel</button>
+                <button className="btn btn-ghost" type="button" onClick={onClose} disabled={submitting}>Cancel</button>
               </div>
             </form>
           )}
@@ -180,6 +215,36 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
               </ol>
               <p className="small muted" style={{ marginTop: '1rem' }}>
                 Use this address only to send these credits. The researcher can see that you asked for it, and you can hold one pledge per project at a time.
+              </p>
+              <div className="form-actions">
+                <button className="btn" type="button" onClick={onClose}>Done</button>
+              </div>
+            </>
+          )}
+
+          {step === 'api-unknown' && (
+            <>
+              <div className="alert alert-warn">{error}</div>
+              <p>
+                We cannot tell you whether the {fmt(n)} credits left your account. RIPE Atlas either
+                never answered, or answered in a way that does not say whether it completed the
+                transfer. It may have gone through. Check your transaction log before doing anything
+                else.
+              </p>
+              <ol className="steps">
+                <li>
+                  Open <a href="https://atlas.ripe.net/credits/transactions/" target="_blank" rel="noreferrer">atlas.ripe.net/credits/transactions</a>.
+                </li>
+                <li>Look for an outgoing transfer of <strong className="mono">{fmt(n)}</strong> credits in the last few minutes.</li>
+                <li>
+                  If it is there, the transfer worked. The pledge is already recorded, and the researcher
+                  confirms it once the credits show up on their side.
+                </li>
+                <li>If it is not there, cancel the pledge on your dashboard and start again.</li>
+              </ol>
+              <p className="small muted">
+                Do not send the credits a second time until you have checked. Remember to delete the API key
+                you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.
               </p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={onClose}>Done</button>

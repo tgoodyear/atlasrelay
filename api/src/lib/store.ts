@@ -70,6 +70,25 @@ export interface Pledge {
   transactionId: string;
   /** When our server observed RIPE accept the transfer. */
   transferredAt: string;
+  /**
+   * Set when an API transfer was sent but RIPE never answered, so we cannot say whether the
+   * credits moved. The pledge waits at `sent` for a human to settle it either way.
+   */
+  transferUncertain: boolean;
+  /**
+   * Set while this request is still attempting the transfer. The row has to exist before the
+   * credits move, but until the attempt resolves nobody may act on it: confirming or cancelling
+   * releases the donor's slot, which would let a second transfer start while the first is still
+   * in flight.
+   */
+  inFlight: boolean;
+  /**
+   * When the transfer attempt began. The in-flight window is measured from here rather than from
+   * createdAt, because the row is written first and the claim, the balance check and validation
+   * all happen in between: anchoring to creation could let the window lapse before the transfer
+   * was even issued, and an owner could then free the slot while the credits were moving.
+   */
+  inFlightSince: string;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -324,6 +343,9 @@ function toPledge(e: Entity): Pledge {
     transactionUrl: String(e.transactionUrl ?? ''),
     transactionId: String(e.transactionId ?? ''),
     transferredAt: String(e.transferredAt ?? ''),
+    transferUncertain: e.transferUncertain === true,
+    inFlight: e.inFlight === true,
+    inFlightSince: String(e.inFlightSince ?? ''),
     message: String(e.message ?? ''),
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
@@ -390,6 +412,21 @@ const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
  * reservation window regardless, which is what stops a release that never ran from locking a donor
  * out of a project permanently.
  */
+/**
+ * Whether a pledge's transfer attempt is still running. Bounded by the same grace a claim uses: a
+ * request that died mid-transfer must not leave its row frozen for ever, and after the grace there
+ * is nothing still in flight to protect.
+ */
+export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
+  if (!p.inFlight) return false;
+  // Measured from the moment the transfer was issued. Falling back to createdAt keeps rows written
+  // before this field existed readable, and an unparseable value counts as in flight rather than
+  // settled, because the failure that matters here is declaring a live transfer finished.
+  const since = Date.parse(p.inFlightSince || p.createdAt);
+  if (!Number.isFinite(since)) return true;
+  return asOf - since <= CLAIM_ORPHAN_GRACE_MS;
+}
+
 export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
   const heldSince = Date.parse(heldCreatedAt);
   if (!Number.isFinite(heldSince)) return true;
@@ -400,7 +437,8 @@ export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null,
     // taken first, and only then is the row written. Calling that free would hand a rival the
     // slot inside that gap, and both would go on to transfer, which is the exact failure the
     // slot exists to prevent. So a pledgeless slot counts as held until enough time has passed
-    // that no request could still be inside the window.
+    // that no request could still be inside the window, generously longer than the 20-second
+    // RIPE timeout that bounds it.
     return age > CLAIM_ORPHAN_GRACE_MS;
   }
   return pledge.status !== 'pledged' && pledge.status !== 'sent';
@@ -445,8 +483,11 @@ export async function releasePledgeClaim(projectId: string, donorId: string, ple
 }
 
 export async function createPledge(p: Pledge): Promise<Pledge> {
-  await (await table('pledges')).createEntity({ partitionKey: p.projectId, rowKey: p.id, ...p });
-  return p;
+  // Keep the version the create returned. Without it every later conditional write on this row
+  // would be handed undefined and silently fall back to an unconditional one, which is a guard
+  // that reads as present and does nothing.
+  const res = await (await table('pledges')).createEntity({ partitionKey: p.projectId, rowKey: p.id, ...p });
+  return { ...p, etag: res.etag };
 }
 
 export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
