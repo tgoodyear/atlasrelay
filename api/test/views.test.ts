@@ -122,7 +122,7 @@ test('an anonymous project carries no account identifier', () => {
     id: 'j1', ownerId: 'github|12345', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
     creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
     affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
-    createdAt: '', updatedAt: '',
+    moderationClosed: false, createdAt: '', updatedAt: '',
   });
   assert.equal('ownerId' in p, false);
   assert.equal(JSON.stringify(p).includes('github|12345'), false);
