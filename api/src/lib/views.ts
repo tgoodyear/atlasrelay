@@ -31,10 +31,22 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
   const confirmed = live ? live.confirmed : p.creditsConfirmed;
   const pending = live ? live.pending : p.creditsPending;
   // This function spreads the row, so anything internal has to be removed by name rather than
-  // merely left unmentioned: moderationClosed is an operator's note about the row, and etag is the
-  // storage version used for conditional writes. A field added to Project is published by default
-  // here, which is why both the omission and its test exist.
-  const { moderationClosed: _moderationClosed, etag: _etag, ...rest } = p;
+  // merely left unmentioned. A field added to Project is published by default here, which is why
+  // both this list and its tests exist.
+  //   ownerId          the identity-provider account id. The profile page tells people the account
+  //                    link is internal and that retained records show only their display name, so
+  //                    it cannot appear on an anonymous endpoint. Ownership is decided server-side
+  //                    and returned as viewer.isOwner, so nothing out here needs it.
+  //   moderationClosed an operator's note about the row, not something the project says of itself.
+  //   etag             the storage row version, used for conditional writes.
+  //   totalsCheckedAt  maintenance bookkeeping for the listing's refresh rotation.
+  const {
+    ownerId: _ownerId,
+    moderationClosed: _moderationClosed,
+    etag: _etag,
+    totalsCheckedAt: _totalsCheckedAt,
+    ...rest
+  } = p;
   return {
     ...rest,
     creditsConfirmed: confirmed,
@@ -88,7 +100,8 @@ export function privateUser(u: User) {
 // providers it is the user's email address, and this is returned on an unauthenticated endpoint.
 export function publicUser(u: User) {
   return {
-    id: u.id,
+    // No id, for the same reason publicProject drops ownerId: it is the account identifier, the
+    // privacy copy calls it internal, and nothing in the UI reads it.
     displayName: publicName(u.displayName, u.handle, u.id),
     affiliation: u.affiliation,
     url: u.url,

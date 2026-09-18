@@ -3,7 +3,6 @@ export const TAGS: Tag[] = ['ping', 'traceroute', 'dns', 'sslcert', 'http', 'ntp
 
 export interface Project {
   id: string;
-  ownerId: string;
   ownerName: string;
   title: string;
   summary: string;
@@ -62,7 +61,6 @@ export interface User {
 // Mirrors publicUser() in api/src/lib/views.ts. The sign-in handle is deliberately absent:
 // for some identity providers it is the user's email address.
 export interface PublicUser {
-  id: string;
   displayName: string;
   affiliation: string;
   url: string;

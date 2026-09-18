@@ -34,14 +34,15 @@ app.http('projects-list', {
     // correction is written back, so each stale project is re-read once and then drops out of the
     // fan-out for good, instead of being rescanned on every listing until somebody pledges to it.
     const rows = await listProjects();
-    // Least recently touched first. Taking the newest N would starve the rest: a project with a
+    // Least recently checked first. Taking the newest N would starve the rest: a project with a
     // genuinely live reservation never leaves that prefix, so it would be rescanned on every
-    // listing while an expired reservation on an older project was never looked at again. Any
-    // write to a project refreshes updatedAt, including the correction below, so ordering by it
-    // rotates through the candidates and the backlog actually drains.
+    // listing while an expired reservation on an older project was never looked at again. The
+    // ordering runs off totalsCheckedAt, which this refresh always advances, rather than off
+    // updatedAt, which belongs to the project's own history and must not move for maintenance.
+    const checked = (x: Project): string => x.totalsCheckedAt ?? '';
     const stale = rows
       .filter((p) => p.creditsPending > 0)
-      .sort((a, b) => (a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0))
+      .sort((a, b) => (checked(a) < checked(b) ? -1 : checked(a) > checked(b) ? 1 : 0))
       .slice(0, STALE_REFRESH_LIMIT);
     const live = new Map<string, { confirmed: number; pending: number }>();
     await Promise.all(stale.map(async (p) => {
@@ -57,8 +58,21 @@ app.http('projects-list', {
       // out of future refreshes, so the stale value would never be corrected. A 412 means somebody
       // else has just done this work, which is the outcome we wanted anyway. Best effort besides:
       // a listing must not fail because a correction could not be persisted.
-      await patchProject(p.id, { creditsConfirmed: t.confirmed, creditsPending: t.pending }, p.etag)
-        .catch(() => undefined);
+      await patchProject(
+        p.id,
+        {
+          creditsConfirmed: t.confirmed,
+          creditsPending: t.pending,
+          totalsCheckedAt: now(),
+          // Deliberately preserved. This write happens on anonymous listing traffic, and bumping
+          // updatedAt would tell everyone reading the project that it had just been edited when
+          // nothing about it changed. Rotation runs off totalsCheckedAt instead.
+          ...(t.pending === p.creditsPending && t.confirmed === p.creditsConfirmed
+            ? { updatedAt: p.updatedAt }
+            : {}),
+        },
+        p.etag,
+      ).catch(() => undefined);
     }));
     let projects = rows.map((p) => publicProject(p, live.get(p.id)));
     if (status === 'open') projects = projects.filter((p) => p.open);

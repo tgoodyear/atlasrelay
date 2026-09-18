@@ -120,8 +120,10 @@ app.http('pledges-create', {
       // would also strand a row the donor is not allowed to cancel. A row or slot left behind is
       // recoverable on its own, through the in-flight window and the reservation expiry; a lost
       // error message is not.
+      let withdrawn = false;
       try {
         await savePledge({ ...pledge, status: 'cancelled', inFlight: false });
+        withdrawn = true;
       } catch (cleanupErr) {
         console.error('Could not withdraw a pledge after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
       }
@@ -130,10 +132,17 @@ app.http('pledges-create', {
       } catch {
         // Totals are derived and the next write recomputes them.
       }
-      try {
-        await releasePledgeClaim(id, donor.id, pledge.id);
-      } catch (cleanupErr) {
-        console.error('Could not release a pledge slot after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+      // The slot goes back only if the row was actually withdrawn. Releasing it after a failed
+      // cancel would leave a live pledge still reserving capacity with no slot behind it, and the
+      // same donor could then open a second live pledge on the project, which is precisely what
+      // the slot exists to prevent. A slot left held is the safe direction: it frees itself once
+      // the pledge settles, and after the reservation window regardless.
+      if (withdrawn) {
+        try {
+          await releasePledgeClaim(id, donor.id, pledge.id);
+        } catch (cleanupErr) {
+          console.error('Could not release a pledge slot after a refused transfer:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+        }
       }
       return err;
     };
