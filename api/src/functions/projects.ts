@@ -122,6 +122,7 @@ app.http('projects-create', {
       repoUrl: fields.repoUrl ?? '',
       paperUrl: fields.paperUrl ?? '',
       deadline: fields.deadline ?? '',
+      moderationClosed: false,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -134,9 +135,16 @@ app.http('projects-create', {
     // nothing irreversible has happened, so closing is a complete remedy.
     const mine = (await listProjectsByOwner(user.id)).filter((x) => x.status === 'open');
     if (mine.length > MAX_OPEN_PROJECTS_PER_USER) {
-      const surplus = mine.map((x) => x.id).sort().slice(MAX_OPEN_PROJECTS_PER_USER);
-      if (surplus.includes(project.id)) {
-        await saveProject({ ...project, status: 'closed' });
+      // Close every surplus row, not just this request's own. A request that only withdrew itself
+      // would leave the cap broken whenever the row it should have closed belongs to a rival that
+      // has already returned: the newest rows are the surplus, and the request holding an older id
+      // is the one that sees them all. Ids are time-prefixed, so every racer that gets here picks
+      // the same surplus set, and closing twice is harmless.
+      const surplus = mine.sort((a, b) => (a.id < b.id ? -1 : 1)).slice(MAX_OPEN_PROJECTS_PER_USER);
+      for (const extra of surplus) {
+        await saveProject({ ...extra, status: 'closed' });
+      }
+      if (surplus.some((x) => x.id === project.id)) {
         throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
       }
     }
@@ -163,6 +171,11 @@ app.http('projects-update', {
     // Reopening is another way to end up with more open projects than the cap allows: close one,
     // post a replacement, then reopen the first. The limit has to hold on this path too.
     if (status === 'open' && project.status !== 'open') {
+      // A takedown has to survive the owner. Without this, closing a reported project is undone by
+      // its owner from any stale edit form, and the remedy in SECURITY.md is not a remedy at all.
+      if (project.moderationClosed) {
+        throw new HttpError(403, 'This project was closed by the site and cannot be reopened. Contact the maintainer if you think that was a mistake.');
+      }
       const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open').length;
       if (open >= MAX_OPEN_PROJECTS_PER_USER) {
         throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before reopening this.`);

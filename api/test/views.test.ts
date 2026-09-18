@@ -33,7 +33,7 @@ test('a project read with live totals releases an expired reservation', () => {
     id: 'p1', ownerId: 'o1', ownerName: 'Owner', title: 't', summary: 's', description: 'd',
     creditsRequested: 1000, creditsConfirmed: 0, creditsPending: 100_000,
     status: 'open' as const, tags: [], affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '',
-    deadline: '', createdAt: '', updatedAt: '',
+    deadline: '', moderationClosed: false, createdAt: '', updatedAt: '',
   };
   // Cached counters say fully reserved, so nothing more can be pledged.
   assert.equal(publicProject(p).maxPledge, 0);
@@ -62,4 +62,14 @@ test('a transfer RIPE never answered is never shown as a watched transfer', () =
 
 test('a manual pledge is never an API transfer', () => {
   assert.equal(publicPledge(pledge({ method: 'manual' })).apiTransfer, false);
+});
+
+test('an operator takedown flag is never published', () => {
+  const p = publicProject({
+    id: 'j1', ownerId: 'o1', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
+    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'closed', tags: [],
+    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
+    moderationClosed: true, createdAt: '', updatedAt: '',
+  });
+  assert.equal('moderationClosed' in p, false);
 });

@@ -31,7 +31,8 @@ worse. Say which project (the URL is enough) and what is wrong with it.
 
 There is one maintainer and no rota, so expect days rather than hours. A project
 found to be fraudulent is closed, which stops it accepting further credits and
-takes it off the listing. The owner's profile, including their stored RIPE NCC
+takes it off the listing. That closure is marked as the site's rather than the
+owner's, so the owner cannot simply reopen it. The owner's profile, including their stored RIPE NCC
 Access email, can be deleted too. Be clear about what that is not: it is not a
 ban. Signing in again with the same account recreates a profile, and the past
 projects and pledges are still linked to it. Credits already transferred are

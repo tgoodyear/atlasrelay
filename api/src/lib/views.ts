@@ -30,8 +30,11 @@ export function publicName(displayName: string, handle: string, id: string): str
 export function publicProject(p: Project, live?: { confirmed: number; pending: number }) {
   const confirmed = live ? live.confirmed : p.creditsConfirmed;
   const pending = live ? live.pending : p.creditsPending;
+  // moderationClosed is an operator's note about this row, not something the project says about
+  // itself, so it is dropped rather than published alongside the rest.
+  const { moderationClosed: _moderationClosed, ...rest } = p;
   return {
-    ...p,
+    ...rest,
     creditsConfirmed: confirmed,
     creditsPending: pending,
     ownerName: publicName(p.ownerName, '', p.ownerId),

@@ -143,8 +143,13 @@ query charges.
 
   ```bash
   az storage entity merge --table-name projects --account-name <storage account> --auth-mode key \
-    --entity PartitionKey=project RowKey=<project id> status=closed
+    --entity PartitionKey=project RowKey=<project id> status=closed \
+              moderationClosed=true moderationClosed@odata.type=Edm.Boolean
   ```
+
+  Set `moderationClosed` as well as `status`, not instead of it. Closing alone is not a takedown:
+  the owner can reopen their own project from the edit form, and would. The flag is what tells the
+  API to refuse that, and only this command can clear it again (`moderationClosed=false`).
 
   To remove the owner as well, delete their row from `users`, which also removes the stored RIPE
   NCC Access email. Find the id from the project's `ownerId`, then:
