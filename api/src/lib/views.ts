@@ -102,8 +102,8 @@ export function publicPledge(p: Pledge) {
  * name is restored here even when the donor chose to be anonymous publicly. `anonymous` stays set,
  * so the dashboard can tell them the name is not public and they should not repeat it.
  *
- * Only ever reached by those two: the pledges route gives every row to the owner and a donor only
- * their own, and the dashboard reads a donor's own pledges.
+ * Only ever reached by those two: the pledges route gives every row to the owner and gives a donor
+ * only their own rows, and the dashboard reads a donor's own pledges.
  */
 export function privatePledge(p: Pledge) {
   return {

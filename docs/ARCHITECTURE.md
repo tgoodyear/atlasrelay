@@ -191,7 +191,7 @@ name, so `publicName()` reduces anything email-shaped to its local part before i
 | `POST /api/projects` | user (needs `atlasEmail`) | Create. |
 | `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. |
 | `GET /api/projects/{id}/pledges` | owner or donor | Owner: all pledges. Donor: own. |
-| `POST /api/projects/{id}/pledges` | user, not owner | `{amount, method, message, apiKey?}`. Returns pledge and, for `manual`, the recipient email. |
+| `POST /api/projects/{id}/pledges` | user, not owner | `{amount, method, message, anonymous?, apiKey?}`. `anonymous` must be a real boolean when present; it withholds the donor's name from public views. Returns pledge and, for `manual`, the recipient email. |
 | `PATCH /api/pledges/{projectId}/{id}` | donor or owner | Donor: `sent`/`cancelled`. Owner: `confirmed`/`cancelled` (for stale pledges). |
 | `GET /api/my` | user | My projects + my pledges. |
 | `GET /api/stats` | public | Totals for the home page. |

@@ -185,10 +185,19 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
 
               <div className="field">
                 <label className="check">
-                  <input type="checkbox" checked={anonymous} onChange={(e) => setAnonymous(e.target.checked)} />
+                  {/* The caveats below are the substance of this choice, not decoration: who still
+                      sees the name, and what stays public regardless. Tied to the control so a
+                      screen reader reads them on focus rather than only when the paragraph is
+                      reached, by which point the box may already have been ticked. */}
+                  <input
+                    type="checkbox"
+                    checked={anonymous}
+                    onChange={(e) => setAnonymous(e.target.checked)}
+                    aria-describedby="anon-note"
+                  />
                   <span>Do not show my name on this project</span>
                 </label>
-                <p className="small muted">
+                <p className="small muted" id="anon-note">
                   The pledge is listed as Anonymous, with the amount and any message still shown.
                   The researcher receiving the credits still sees your name, because they are the
                   one who confirms the transfer arrived. The amount, the message and the date stay
