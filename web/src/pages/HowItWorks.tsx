@@ -31,11 +31,11 @@ export default function HowItWorks() {
         <div className="card"><div className="card-body">
           <h2>Before you ask for credits</h2>
           <p className="muted">
-            A 2025 operational study of RIPE Atlas found that user-defined measurements, the ones that cost credits, produce only about 11% of the platform's 1.3 billion daily results; anchoring and built-in measurements produce the rest and are free to reuse. The same study documents the per-user quotas: at most 100 concurrent measurements, 1,000 probes per measurement and 1,000,000 credits spent per day.
+            A 2025 operational study of RIPE Atlas found that user-defined measurements, the ones that cost credits, produce only about 11% of the platform's 1.3 billion daily results; anchoring and built-in measurements produce the rest and are free to reuse. The same study documents the default per-user quotas: at most 100 concurrent measurements, 1,000 probes per measurement and 1,000,000 credits spent per day. The daily figure is a default rather than a universal ceiling. It is set per account, the RIPE NCC raises it on request, and your own is in the <code>max_daily_credits</code> field of your credits page.
           </p>
           <ol className="steps">
             <li>Check whether <a href="https://atlas.ripe.net/docs/getting-started/built-in-measurements/" target="_blank" rel="noreferrer">built-in</a>, anchoring or existing public measurements already answer your question. Say so in your project description; donors appreciate it.</li>
-            <li>Size the request and the deadline against the 1M credits/day quota: a 30M-credit campaign takes at least 30 days of measuring, however fast the credits arrive.</li>
+            <li>Size the request and the deadline against your own daily spend limit, not just the total. On the default 1M credits/day a 30M-credit campaign takes at least 30 days of measuring, however fast the credits arrive. Check your own limit first, and say in the project what it is, because it is what decides your realistic timeline.</li>
             <li>Prefer recurring measurements over repeated one-offs (one-offs cost double), tag and describe them so others can reuse them, and avoid DNS queries for domains that are sensitive in some jurisdictions.</li>
             <li>RIPE NCC also considers direct credit requests from researchers; contact the <a href="https://atlas.ripe.net/contact/" target="_blank" rel="noreferrer">RIPE Atlas team</a>. This exchange complements that route.</li>
           </ol>

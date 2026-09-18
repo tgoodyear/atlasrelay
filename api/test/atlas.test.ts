@@ -153,3 +153,21 @@ test('a connection that dies mid-body is AtlasUnreachable, not a refusal', async
   assert.ok(err instanceof AtlasUnreachable, `expected AtlasUnreachable, got ${err?.constructor?.name}`);
   assert.equal(err.status, 502);
 });
+
+test('a transfer posts exactly once, whatever the response', async () => {
+  // A retry against a second path could send the credits twice, and would also make a key's use
+  // four outbound requests rather than the three SECURITY.md discloses.
+  const real = globalThis.fetch;
+  const paths: string[] = [];
+  globalThis.fetch = (async (input: unknown) => {
+    paths.push(String(input));
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  try {
+    await transferCredits('12345678-1234-1234-1234-123456789abc', 'someone@example.org', 10).catch(() => null);
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.equal(paths.length, 1);
+  assert.match(paths[0], /\/credits\/transfers\/$/);
+});

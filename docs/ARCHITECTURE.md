@@ -139,7 +139,12 @@ send the credits twice.
 ### Abuse limits
 
 - A donor may hold one live pledge per project. Without it, one account could reserve a project
-  repeatedly and re-read the owner's contact address at will.
+  repeatedly and re-read the owner's contact address at will. The limit is held by a row in the
+  `claims` table, one per (project, donor), taken before anything else happens. Reading the pledge
+  list and then writing cannot enforce it, because a request that reads before a rival writes sees
+  nothing to conflict with and both proceed; creating a single row is atomic, so exactly one
+  request wins. A slot is reclaimable once its pledge has settled, and after the reservation window
+  regardless, so a release that never ran cannot lock a donor out for good.
 - No single pledge may reserve a project's whole ceiling, so one free account cannot block every
   other donor.
 - Reservations expire after 14 days, so the site heals without a background job.
