@@ -109,7 +109,7 @@ export default function ProjectDetail() {
                             <strong>{p.donorName || 'Anonymous donor'}</strong>
                             {/* A row carrying donorId came from the private view, so the name above
                                 is the real one and this viewer is either the owner or the donor.
-                                Both are shown this, deliberately. The owner needs it so they do not
+                                Both are shown this way, deliberately. The owner needs it so they do not
                                 repeat the name somewhere the donor asked not to be named. The donor
                                 needs it more: without it they see their own name sitting in the
                                 public pledge list with nothing to say it is hidden from everyone

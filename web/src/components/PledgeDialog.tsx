@@ -199,8 +199,9 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 </label>
                 <p className="small muted" id="anon-note">
                   The pledge is listed as Anonymous, with the amount and any message still shown.
-                  The researcher receiving the credits still sees your name, because they are the
-                  one who confirms the transfer arrived. The amount, the message and the date stay
+                  The researcher receiving the credits still sees your name: they confirm manual
+                  transfers themselves, and may need to match any pledge against their own RIPE
+                  records, which name the sending account. The amount, the message and the date stay
                   public and can be compared with other pledges, so leave anything identifying out
                   of the message.
                 </p>

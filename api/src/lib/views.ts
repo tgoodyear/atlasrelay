@@ -97,9 +97,10 @@ export function publicPledge(p: Pledge) {
 }
 
 /**
- * What the project owner and the donor themselves see. The owner is the one who confirms the
- * credits arrived and may need to match the pledge against their own RIPE transaction log, so the
- * name is restored here even when the donor chose to be anonymous publicly. `anonymous` stays set,
+ * What the project owner and the donor themselves see. The owner confirms manual transfers
+ * themselves, and may need to reconcile any pledge against their own RIPE transaction log, which
+ * names the sending account, so the name is restored here even when the donor chose to be
+ * anonymous publicly. (An API transfer is confirmed by the server once it watches RIPE accept it.) `anonymous` stays set,
  * so the dashboard can tell them the name is not public and they should not repeat it.
  *
  * Only ever reached by those two: the pledges route gives every row to the owner and gives a donor

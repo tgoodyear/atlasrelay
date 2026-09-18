@@ -79,9 +79,10 @@ anonymous pledge carries the same name, so nothing account-derived is published
 that would tie one to another. It is not unlinkability. The amount, the message
 and the date stay public, and those can be correlated, so a distinctive amount or
 a message that gives the donor away still gives them away.
-The researcher receiving the credits still sees who pledged, because they
-are the one who confirms the transfer arrived and may need to match it against
-their own RIPE transaction log; their view says the name is not public. The row
+The researcher receiving the credits still sees who pledged. They confirm manual
+transfers themselves, and for any pledge they may need to reconcile it against
+their own RIPE transaction log, which lists the sending account. Their view says
+the name is not public. The row
 records the donor either way, which is what enforces one live pledge per project
 and lets a donor see their own pledges. So this withholds a name from public
 view; it does not make a pledge untraceable to the operator or to the
