@@ -56,6 +56,13 @@ app.http('projects-list', {
         t = totals(await listPledges(p.id));
       } catch (err) {
         console.error(`Could not refresh totals for project ${p.id}:`, err instanceof Error ? err.message : err);
+        // Rotate it even though the scan failed. Candidates are ordered least-recently-checked
+        // first, so a project whose scan keeps failing stays at the head of that order and is
+        // picked again on every single request, spending one of the refresh slots for ever and
+        // starving the projects behind it. Advancing the timestamp alone moves it to the back of
+        // the queue; totalsDirty is left set, so it stays a candidate and is retried in turn
+        // rather than abandoned. Best effort: this is maintenance about maintenance.
+        await patchProject(p.id, { totalsCheckedAt: now(), updatedAt: p.updatedAt }, p.etag).catch(() => undefined);
         return;
       }
       live.set(p.id, t);

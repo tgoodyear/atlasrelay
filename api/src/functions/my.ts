@@ -39,6 +39,11 @@ app.http('my', {
           t = totals(await listPledges(x.id));
         } catch (err) {
           console.error(`Could not refresh totals for project ${x.id}:`, err instanceof Error ? err.message : err);
+          // Same rotation as the public listing: a project whose scan keeps failing would otherwise
+          // stay least-recently-checked and be picked on every dashboard load, spending a refresh
+          // slot for ever. Advancing the timestamp moves it to the back; totalsDirty stays set, so
+          // it is retried in turn rather than dropped.
+          await patchProject(x.id, { totalsCheckedAt: now(), updatedAt: x.updatedAt }, x.etag).catch(() => undefined);
           return;
         }
         live.set(x.id, t);
