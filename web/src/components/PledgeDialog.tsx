@@ -62,13 +62,19 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!amountOk) return;
+    // Pin the method for the rest of this request. The radios are disabled while it runs, but the
+    // state is still what every branch below reads, and reading it after the await would let a
+    // stray change decide which recovery path an in-flight API transfer takes: an unknown outcome
+    // arriving as `manual` skips the terminal screen and leaves the form live with a transfer
+    // possibly already sent.
+    const sending = method;
     setSubmitting(true);
     setError('');
     try {
-      const res = await api.createPledge(project.id, { amount: n, method, message, anonymous, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
+      const res = await api.createPledge(project.id, { amount: n, method: sending, message, anonymous, ...(sending === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
-      if (method === 'manual') {
+      if (sending === 'manual') {
         setRecipient(res.recipientEmail ?? '');
         setStep('manual-instructions');
       } else {
@@ -104,7 +110,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
         setApiKey('');
         setError(message);
         setStep('settled-elsewhere');
-      } else if (method === 'api' && !refusedBeforeSending) {
+      } else if (sending === 'api' && !refusedBeforeSending) {
         setApiKey('');
         setError(serverAnswered ? message : 'The connection was lost before we got a usable answer.');
         // A lost connection tells us nothing about whether a row was written, so assume one was:
@@ -114,7 +120,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       } else {
         // A refusal means nothing moved and the donor can correct and retry, but the key is
         // dropped even so: a populated field beside a live button is how a second transfer starts.
-        if (method === 'api') setApiKey('');
+        if (sending === 'api') setApiKey('');
         setError(message);
       }
     } finally {
@@ -165,14 +171,14 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
 
               <div className="method-choice" role="radiogroup" aria-label="Transfer method">
                 <label>
-                  <input type="radio" name="method" checked={method === 'api'} onChange={() => setMethod('api')} />
+                  <input type="radio" name="method" checked={method === 'api'} disabled={submitting} onChange={() => setMethod('api')} />
                   <div>
                     <strong>Transfer now with an API key</strong>
                     <span>We check your balance and send the transfer with a key you paste. RIPE accepting the transfer is the record; the transaction appears in your own RIPE log a minute or so later. The key is never stored.</span>
                   </div>
                 </label>
                 <label>
-                  <input type="radio" name="method" checked={method === 'manual'} onChange={() => setMethod('manual')} />
+                  <input type="radio" name="method" checked={method === 'manual'} disabled={submitting} onChange={() => setMethod('manual')} />
                   <div>
                     <strong>I'll transfer on atlas.ripe.net myself</strong>
                     <span>We show you the researcher's RIPE NCC Access email so you can send the credits. They will see your name against this pledge.</span>

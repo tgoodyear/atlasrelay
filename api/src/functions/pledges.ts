@@ -299,10 +299,18 @@ app.http('pledges-create', {
           // Any other failure is ambiguous: the write may have been applied and only its answer
           // lost, leaving the row a version ahead of the one held here, so the conditional
           // withdrawal below would fail 412 and strand the row in flight holding the donor's slot.
-          // They would be told nothing was sent, invited to retry, and then blocked from retrying
-          // until the owner settled it. Re-read for the current version first; nothing has been
-          // sent at this point, so withdrawing is safe whichever of the two happened.
+          // Re-reading gives the current version -- but the row may equally have moved because
+          // somebody settled it, and adopting their version to force a withdrawal through would
+          // overwrite the settlement this handler is elsewhere careful to protect. So read the
+          // status, not just the version.
           const fresh = await getPledge(id, pledge.id).catch(() => null);
+          if (fresh && (fresh.status === 'sent' || fresh.status === 'confirmed')) {
+            throw new HttpError(409, 'This request sent nothing, but somebody else acted on this pledge while it was being set up, so it may already record a transfer. Open it on your dashboard before sending anything.', { transfer: 'unknown' });
+          }
+          if (fresh && fresh.status === 'cancelled') {
+            // Already withdrawn, and the claim went with it. Nothing to roll back.
+            throw new HttpError(409, 'This pledge was cancelled while the transfer was being set up, so nothing was sent. You can start a new one.', NOT_SENT);
+          }
           if (fresh?.etag) pledge.etag = fresh.etag;
           throw await rollback(new HttpError(503, 'We could not start the transfer safely just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
         }
@@ -424,23 +432,18 @@ app.http('pledges-create', {
             await savePledge(pledge, pledge.etag);
             saved = true;
           } catch (clearErr) {
-            // A 412 is not a failure here, it is the answer. This write is conditional on the marker
-            // version, and on this path the only thing that can have moved the row past it is the
-            // confirmation write above: it was applied and only its response was lost. So the
-            // pledge is confirmed in storage after all, and reporting "recording did not complete"
-            // would tell the donor the opposite of what the owner's dashboard shows.
-            if (clearErr instanceof RestError && clearErr.statusCode === 412) {
-              saved = true;
-            } else {
+            if (!(clearErr instanceof RestError && clearErr.statusCode === 412)) {
               console.error('Could not record a completed transfer on retry either:', describeErrorForLog(clearErr));
-              // A non-412 failure is as ambiguous as the first one: Table Storage can apply the
-              // replacement and lose the answer. Ask the row rather than the exception, as the
-              // uncertain-transfer path does. Getting this wrong understates what happened -- it
-              // reports a pending pledge over storage that says confirmed, and skips releasing a
-              // slot that was safe to release.
-              const stored = await getPledge(id, pledge.id).catch(() => null);
-              if (stored?.status === 'confirmed') saved = true;
             }
+            // Ask the row, whatever the exception was, because neither answer settles it alone. A
+            // 412 says the version moved, not who moved it: the first write may have landed with
+            // its response lost, or the in-flight grace may have expired and let the owner settle
+            // the pledge themselves. A non-412 is ambiguous for the same reason the first write
+            // was -- Table Storage can apply a replacement and lose the answer. Only a row that
+            // actually reads `confirmed` means this transfer is recorded; anything else leaves the
+            // warning standing, which is the honest answer.
+            const stored = await getPledge(id, pledge.id).catch(() => null);
+            if (stored?.status === 'confirmed') saved = true;
           }
         }
         if (!saved) {
