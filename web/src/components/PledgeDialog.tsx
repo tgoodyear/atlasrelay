@@ -203,7 +203,8 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   transfers themselves, and may need to match any pledge against their own RIPE
                   records, which name the sending account. The amount, the message and the date stay
                   public and can be compared with other pledges, so leave anything identifying out
-                  of the message.
+                  of the message. This site keeps a record of who pledged either way, so it hides
+                  your name from other visitors rather than making the pledge anonymous.
                 </p>
               </div>
 
