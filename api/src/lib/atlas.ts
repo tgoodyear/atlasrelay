@@ -123,12 +123,14 @@ async function atlasCall(path: string, key: string, init: RequestInit = {}, time
     try {
       text = await res.text();
     } catch (err) {
-      // A non-2xx status is already a complete answer: RIPE refused and nothing moved. Losing the
-      // body of a refusal costs only the explanatory detail, so report the status with no body.
-      if (!res.ok) return { status: res.status, ok: false, body: null };
-      // On a 2xx it is the opposite. The status said yes but the reply never finished, so what
-      // completed is unknown. Rethrow into the handler below, which names it as such.
-      throw err;
+      // The status line is a complete answer on its own, either way. A non-2xx means RIPE refused
+      // and nothing moved; losing that body costs only the explanatory detail. A 2xx means RIPE
+      // accepted, and for a transfer that is the confirmation: the body carries a generic list URL
+      // this client does not rely on for anything. Treating a 201 with an unreadable body as an
+      // unknown outcome threw away a success we had been told about, parked the pledge as
+      // uncertain, and handed the donor the cancel-and-send-again path over credits that had
+      // definitely moved.
+      return { status: res.status, ok: res.ok, body: null };
     }
 
     let body: unknown = null;

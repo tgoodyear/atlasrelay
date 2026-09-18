@@ -245,6 +245,16 @@ app.http('pledges-create', {
       // transaction, where an earlier bound is what we want, but recording it here would date the
       // acceptance up to the full twenty-second timeout early.
       pledge.transferredAt = new Date().toISOString();
+      // Persist the confirmation first, before the reference lookup. The lookup is another network
+      // call, and leaving the only durable record of a completed transfer behind it meant a crash
+      // or a timeout in between left the pledge looking like an untouched reservation. The
+      // reference is decoration; the status is the record.
+      try {
+        await savePledge(pledge);
+      } catch (confirmErr) {
+        console.error('Transfer completed but the confirmation could not be written yet:', confirmErr instanceof Error ? confirmErr.message : confirmErr);
+      }
+
       try {
         // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
         // the transaction up to record a real id. A key without the credits-read permission still

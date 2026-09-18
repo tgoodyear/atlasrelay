@@ -135,10 +135,13 @@ test('a refusal carries RIPE own status so a key problem is not confused with an
   }
 });
 
-test('a connection that dies mid-body is AtlasUnreachable, not a refusal', async () => {
-  // The status line arrived, so the request definitely reached RIPE, but the body never finished.
-  // Treating that as a refusal would roll the pledge back and invite a retry that sends twice.
-  const err = await withFetch(
+test('a 2xx with an unreadable body is a success, because the status is the confirmation', async () => {
+  // This previously raised AtlasUnreachable, on the reasoning that we could not know what had
+  // completed. That was wrong for a transfer: RIPE answering 201 IS the confirmation, and the
+  // body carries only a generic list URL nothing here relies on. Calling it unknown discarded a
+  // success we had been told about, parked the pledge as uncertain, and handed the donor the
+  // cancel-and-send-again path over credits that had definitely moved.
+  const res = await withFetch(
     async () =>
       new Response(
         new ReadableStream({
@@ -148,10 +151,9 @@ test('a connection that dies mid-body is AtlasUnreachable, not a refusal', async
         }),
         { status: 201 },
       ),
-    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+    () => transferCredits(KEY, 'someone@example.org', 10),
   );
-  assert.ok(err instanceof AtlasUnreachable, `expected AtlasUnreachable, got ${err?.constructor?.name}`);
-  assert.equal(err.status, 502);
+  assert.deepEqual(res, { transaction: '' });
 });
 
 test('a transfer posts exactly once, whatever the response', async () => {
