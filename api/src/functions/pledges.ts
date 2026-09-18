@@ -25,6 +25,14 @@ app.http('pledges-list', {
   }),
 });
 
+/**
+ * Attached to an error when the request is certain no transfer was issued, so the browser can keep
+ * the form live for a retry. Inferring this from the HTTP status does not work in either
+ * direction: a 503 raised here means nothing was sent, while a 503 from the platform edge can
+ * arrive over a transfer that was already in flight. Only the handler knows, so it says so.
+ */
+const NOT_SENT = { transfer: 'not-sent' as const };
+
 app.http('pledges-create', {
   route: 'projects/{id}/pledges',
   methods: ['POST'],
@@ -172,7 +180,7 @@ app.http('pledges-create', {
       updatedProject = await recomputeProjectTotals(id);
     } catch (err) {
       console.error('Could not recompute project totals before a transfer:', err instanceof Error ? err.message : err);
-      throw await rollback(new HttpError(503, 'We could not check this project’s current total just now, so nothing was sent. Please try again in a moment.'));
+      throw await rollback(new HttpError(503, 'We could not check this project’s current total just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
     }
     if (updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
       throw await rollback(new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.'));
@@ -206,9 +214,17 @@ app.http('pledges-create', {
       // minutes old by now, and a concurrent DELETE /api/me can have completed in between and been
       // told the address was removed. Transferring to a cached address after that would move
       // credits to an account the person has asked us to forget.
-      const ownerNow = await getUser(project.ownerId);
+      let ownerNow: Awaited<ReturnType<typeof getUser>>;
+      try {
+        ownerNow = await getUser(project.ownerId);
+      } catch (ownerErr) {
+        // A storage failure here is not the owner being gone, but either way no transfer has been
+        // made, so the row and the slot must not be left behind holding the donor out.
+        console.error('Could not re-read the project owner before transferring:', ownerErr instanceof Error ? ownerErr.message : ownerErr);
+        throw await rollback(new HttpError(503, 'We could not confirm where to send the credits just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
+      }
       if (!ownerNow?.atlasEmail) {
-        throw await rollback(new HttpError(409, 'The project owner is no longer available, so nothing was sent.'));
+        throw await rollback(new HttpError(409, 'The project owner is no longer available, so nothing was sent.', NOT_SENT));
       }
 
       const startedAt = Date.now();
@@ -216,7 +232,17 @@ app.http('pledges-create', {
       // claim, the write and the balance check, happens first, and anchoring the window to
       // createdAt could let it lapse before the transfer was even issued.
       pledge.inFlightSince = new Date(startedAt).toISOString();
-      await savePledge(pledge).catch(() => undefined);
+      // Not best-effort. This marker is what keeps the in-flight window anchored to the transfer
+      // rather than to row creation, and without it the stored row falls back to createdAt, which
+      // the claim, the write and the balance check above may already have used up. The owner could
+      // then settle the row while the transfer is still running and free the slot. Nothing has been
+      // sent yet, so the safe answer is to give up and let the donor try again.
+      try {
+        await savePledge(pledge);
+      } catch (markErr) {
+        console.error('Could not record the transfer start marker:', markErr instanceof Error ? markErr.message : markErr);
+        throw await rollback(new HttpError(503, 'We could not start the transfer safely just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
+      }
       try {
         await transferCredits(key, ownerNow.atlasEmail, amount);
       } catch (err) {
@@ -227,7 +253,8 @@ app.http('pledges-create', {
         // not know": treating an unrecognised error as a refusal would free the slot and invite a
         // retry that sends the credits twice.
         if (err instanceof AtlasRefused) {
-          throw await rollback(err);
+          // RIPE read the request and declined, so this is a definite no-send.
+          throw await rollback(new HttpError(err.status, err.message, NOT_SENT));
         }
         // Park the pledge exactly where a manual one waits after the donor says they have sent it:
         // the owner confirms it if the credits arrive, the donor cancels it if they never do. It
@@ -245,6 +272,9 @@ app.http('pledges-create', {
           await recomputeProjectTotals(id);
         } catch (saveErr) {
           console.error('Could not park an uncertain transfer:', saveErr instanceof Error ? saveErr.message : saveErr);
+          // If the row was updated but the totals were not, nothing revisits a project whose
+          // cached pending is zero, so mark it for the refreshers to pick up.
+          if (recorded) await patchProject(id, { totalsDirty: true }).catch(() => undefined);
         }
         // Say which of the two situations this is. Claiming a pledge is recorded when the write
         // failed sends the donor looking for something that is not there, and leaves them with no
@@ -271,10 +301,14 @@ app.http('pledges-create', {
       // call, and leaving the only durable record of a completed transfer behind it meant a crash
       // or a timeout in between left the pledge looking like an untouched reservation. The
       // reference is decoration; the status is the record.
+      // This is the write that matters: it makes `confirmed` durable. The one after the lookup only
+      // adds a reference, and whether that succeeds says nothing about whether this did.
+      let confirmedDurable = false;
       try {
         await savePledge(pledge);
+        confirmedDurable = true;
       } catch (confirmErr) {
-        console.error('Transfer completed but the confirmation could not be written yet:', confirmErr instanceof Error ? confirmErr.message : confirmErr);
+        console.error('Transfer completed but the confirmation could not be written:', confirmErr instanceof Error ? confirmErr.message : confirmErr);
       }
 
       // No transaction lookup. RIPE does not index the transaction until well after it accepts
@@ -283,16 +317,20 @@ app.http('pledges-create', {
       // and transferredAt is when we saw it. Dropping the call also takes a RIPE round trip off
       // the request, which is what kept the worst case inside the platform's own timeout.
 
-      // These two are reported separately because they fail differently. If the row never reaches
-      // 'confirmed' the owner still has to confirm it by hand; if only the cached totals are stale
-      // the pledge is already confirmed and telling the owner to confirm it would be wrong, since
-      // there is no transition left for them to make.
-      let saved = false;
-      try {
-        await savePledge(pledge);
-        saved = true;
-      } catch (err) {
-        console.error('Transfer completed but the pledge could not be updated:', err instanceof Error ? err.message : err);
+      // Only attempted when there is a reference to add, and its failure is not the confirmation
+      // failing: if the write above succeeded the row is already `confirmed` and merely lacks a
+      // decoration. Reporting that as "recording failed" sent the donor and the owner chasing a
+      // record that exists, and skipped releasing a slot that was safe to release.
+      if (pledge.transactionId) {
+        try {
+          await savePledge(pledge);
+          confirmedDurable = true;
+        } catch (err) {
+          console.error('Transfer confirmed but its reference could not be attached:', err instanceof Error ? err.message : err);
+        }
+      }
+      const saved = confirmedDurable;
+      if (!saved) {
         apiSaveFailed = true;
         recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive.';
       }
@@ -320,6 +358,21 @@ app.http('pledges-create', {
       }
     }
 
+    // A manual pledge is only useful if it can name a recipient, so resolve that before answering.
+    // The owner's profile can be deleted while this request is running, and returning a 201 with
+    // no address would leave the donor holding a slot, a pledge they cannot act on, and
+    // instructions with a blank in them. Withdraw instead and say so.
+    let recipientEmail: string | undefined;
+    if (method === 'manual') {
+      recipientEmail = (await getUser(project.ownerId))?.atlasEmail || undefined;
+      if (!recipientEmail) {
+        await savePledge({ ...pledge, status: 'cancelled' }).catch(() => undefined);
+        await recomputeProjectTotals(id).catch(() => undefined);
+        await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
+        throw new HttpError(409, 'The project owner is no longer available, so the pledge was not created and nothing was sent.');
+      }
+    }
+
     // If the confirmation write failed, the stored row is still the pre-transfer one, and the
     // response must not claim otherwise. The credits did move, which the warning says, but
     // reporting `confirmed` here would have the dialog and the dashboard disagree about the same
@@ -335,7 +388,7 @@ app.http('pledges-create', {
         // Re-read rather than serving the snapshot taken at the top of this handler. A concurrent
         // profile deletion can have completed since, and been told the address was removed; this
         // response is the disclosure, so it has to reflect the state at the moment it is sent.
-        recipientEmail: method === 'manual' ? (await getUser(project.ownerId))?.atlasEmail || undefined : undefined,
+        recipientEmail,
         transferUrl: 'https://atlas.ripe.net/credits/transfer/',
         warning: [balanceWarning, recordWarning].filter(Boolean).join(' ') || undefined,
       },
@@ -376,6 +429,20 @@ app.http('pledges-update', {
     };
     const role = isOwner ? 'owner' : 'donor';
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
+
+    // An API pledge only reaches 'sent' by one route: the transfer was issued and RIPE gave no
+    // usable answer. It is parked there, holding the donor's slot, precisely so a blind retry
+    // cannot happen. Letting the donor cancel it undoes that, because cancelling frees the slot,
+    // and if RIPE did complete the transfer the next pledge sends the credits a second time. The
+    // donor can read their own transaction log, but acting on it here has a side effect they
+    // cannot see. Only the owner settles these: they are the one who can say whether the credits
+    // arrived, and either answer they give is safe.
+    if (!isOwner && pledge.method === 'api' && pledge.status === 'sent' && status === 'cancelled') {
+      throw new HttpError(
+        409,
+        'This transfer was sent to RIPE Atlas and we never got a usable answer, so only the project owner can close it. Check your transaction log, then tell them what you find.',
+      );
+    }
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
 
     // The row exists before the credits move, so for a moment it is visible while its transfer is
