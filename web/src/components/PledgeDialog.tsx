@@ -16,6 +16,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
   const [method, setMethod] = useState<'api' | 'manual'>('api');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
+  const [anonymous, setAnonymous] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
   const [checking, setChecking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +56,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
     setSubmitting(true);
     setError('');
     try {
-      const res = await api.createPledge(project.id, { amount: n, method, message, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
+      const res = await api.createPledge(project.id, { amount: n, method, message, anonymous, ...(method === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
       if (method === 'manual') {
@@ -180,6 +181,31 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
               <div className="field">
                 <label htmlFor="message">Message (optional, public)</label>
                 <input id="message" type="text" maxLength={500} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Good luck with the study!" />
+              </div>
+
+              <div className="field">
+                <label className="check">
+                  {/* The caveats below are the substance of this choice, not decoration: who still
+                      sees the name, and what stays public regardless. Tied to the control so a
+                      screen reader reads them on focus rather than only when the paragraph is
+                      reached, by which point the box may already have been ticked. */}
+                  <input
+                    type="checkbox"
+                    checked={anonymous}
+                    onChange={(e) => setAnonymous(e.target.checked)}
+                    aria-describedby="anon-note"
+                  />
+                  <span>Do not show my name on this project</span>
+                </label>
+                <p className="small muted" id="anon-note">
+                  The pledge is listed as Anonymous, with the amount and any message still shown.
+                  The researcher receiving the credits still sees your name: they confirm manual
+                  transfers themselves, and may need to match any pledge against their own RIPE
+                  records, which name the sending account. The amount, the message and the date stay
+                  public and can be compared with other pledges, so leave anything identifying out
+                  of the message. This site keeps a record of who pledged either way, so it hides
+                  your name from other visitors rather than making the pledge anonymous.
+                </p>
               </div>
 
               <p className="small muted" style={{ marginTop: '1rem' }}>

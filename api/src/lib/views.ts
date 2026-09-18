@@ -71,7 +71,13 @@ export function publicPledge(p: Pledge) {
   return {
     id: p.id,
     projectId: p.projectId,
-    donorName: publicName(p.donorName, '', p.donorId),
+    // A donor who asked not to be named is not named, and the fallback is a constant rather than
+    // publicName's user-abc123 form: that is derived from the account id, so it is stable across
+    // every pledge the same person makes and would let anyone match up an anonymous donor's
+    // pledges across projects. Anonymous has to mean anonymous, not pseudonymous.
+    donorName: p.anonymous ? 'Anonymous' : publicName(p.donorName, '', p.donorId),
+    // Published so the listing can say the name is withheld by choice rather than missing.
+    anonymous: p.anonymous,
     amount: p.amount,
     method: p.method,
     status: p.status,
@@ -90,8 +96,25 @@ export function publicPledge(p: Pledge) {
   };
 }
 
+/**
+ * What the project owner and the donor themselves see. The owner confirms manual transfers
+ * themselves, and may need to reconcile any pledge against their own RIPE transaction log, which
+ * names the sending account, so the name is restored here even when the donor chose to be
+ * anonymous publicly. (An API transfer is confirmed by the server once it watches RIPE accept it.) `anonymous` stays set,
+ * so the dashboard can tell them the name is not public and they should not repeat it.
+ *
+ * Only ever reached by those two: the pledges route gives every row to the owner and gives a donor
+ * only their own rows, and the dashboard reads a donor's own pledges.
+ */
 export function privatePledge(p: Pledge) {
-  return { ...publicPledge(p), donorId: p.donorId, transactionUrl: p.transactionUrl, transactionId: p.transactionId, transferredAt: p.transferredAt };
+  return {
+    ...publicPledge(p),
+    donorName: publicName(p.donorName, '', p.donorId),
+    donorId: p.donorId,
+    transactionUrl: p.transactionUrl,
+    transactionId: p.transactionId,
+    transferredAt: p.transferredAt,
+  };
 }
 
 export function privateUser(u: User) {

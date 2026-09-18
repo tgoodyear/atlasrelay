@@ -153,6 +153,9 @@ img { max-width: 100%; }
 .pill-teal { background: var(--teal-soft); color: var(--teal); }
 .pill-amber { background: var(--amber-soft); color: #9a5b00; }
 .pill-green { background: var(--green-soft); color: var(--green); }
+/* Sits inline next to a donor name, so it stays quieter than a status pill: it is a note
+   about who can see the name, not a state the pledge is in. */
+.pill-quiet { background: transparent; border: 1px solid var(--line); color: var(--muted); margin-left: 0.4rem; }
 .pill-red { background: var(--red-soft); color: var(--red); }
 .pill-navy { background: var(--navy); color: #fff; }
 .pill-muted { background: #eef2f6; color: var(--muted); }
@@ -170,6 +173,10 @@ img { max-width: 100%; }
 .field label { font-weight: 600; font-size: 0.93rem; }
 .field .hint { color: var(--muted); font-size: 0.85rem; }
 .field .error { color: var(--red); font-size: 0.85rem; }
+/* A checkbox and its label on one line, so the label reads as the choice rather than as a
+   heading above an unlabelled box. */
+.field label.check { display: flex; gap: 0.6rem; align-items: baseline; font-weight: 600; cursor: pointer; }
+.field label.check input { flex: 0 0 auto; }
 input[type='text'], input[type='search'], input[type='email'], input[type='url'], input[type='number'], input[type='date'], input[type='password'], select, textarea {
   width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #cfd8e2; border-radius: 10px; background: #fff; color: var(--ink);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;

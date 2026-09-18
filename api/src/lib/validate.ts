@@ -72,6 +72,22 @@ export function isoDate(input: Record<string, unknown>, key: string): string | u
   return value;
 }
 
+/**
+ * Read a boolean field. Absent means false, but a present value has to be an actual boolean.
+ * Coercing here would be the wrong kind of lenient: this reads a donor's privacy choice, and
+ * "false" as a string, or 0, would otherwise quietly come out as "name me publicly".
+ *
+ * Only `undefined` takes the default. `null` is a value the caller sent, not a field they left
+ * out, so it is rejected like any other non-boolean: treating it as absent is the same silent
+ * coercion this exists to prevent, just spelled differently.
+ */
+export function bool(input: Record<string, unknown>, key: string): boolean {
+  const value = input[key];
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw new HttpError(400, `${key} must be true or false`);
+  return value;
+}
+
 export function oneOf<T extends string>(input: Record<string, unknown>, key: string, allowed: readonly T[], required = false): T | undefined {
   const value = str(input, key, { max: 32, required });
   if (value === undefined || value === '') return undefined;
