@@ -1,11 +1,11 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
-import { assertKeyFormat, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
+import { assertKeyFormat, AtlasRefused, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, Pledge, recomputeProjectTotals, savePledge, totals } from '../lib/store';
+import { Pledge, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, pledgeExpired, recomputeProjectTotals, savePledge, totals } from '../lib/store';
 import { int, MAX_CREDITS, oneOf, str } from '../lib/validate';
-import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, OVERFUND_MULTIPLIER } from '../lib/pledging';
+import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
 
 app.http('pledges-list', {
@@ -131,9 +131,14 @@ app.http('pledges-create', {
         }
       } catch (err) {
         if (err instanceof HttpError && err.status === 400 && /balance is/.test(err.message)) throw await rollback(err);
-        // Most often the key carries "Transfer credits to another user" but not
-        // "Get information about your credits", which is worth naming rather than hiding.
-        balanceWarning = 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.';
+        // Why the check failed decides what to tell the donor. A 401 or 403 really is the key
+        // lacking "Get information about your credits", which is worth naming. Anything else is
+        // RIPE being slow, rate-limiting or broken, and blaming the donor's key for that sends
+        // them off editing permissions that were never the problem.
+        const status = err instanceof AtlasRefused ? err.upstreamStatus : 0;
+        balanceWarning = status === 401 || status === 403
+          ? 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.'
+          : 'Your balance could not be checked first because RIPE Atlas did not answer the balance request.';
       }
 
       const startedAt = Date.now();
@@ -240,6 +245,14 @@ app.http('pledges-update', {
     const role = isOwner ? 'owner' : 'donor';
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
+
+    // A reservation that has expired no longer holds capacity, and that capacity may already have
+    // been given to someone else. Letting it move forward would invite a donor to send credits
+    // against a reservation that is gone, and could push the project past its ceiling on confirm.
+    // Cancelling stays available, so the row can always be cleared away.
+    if (status !== 'cancelled' && pledgeExpired(pledge)) {
+      throw new HttpError(409, `This pledge has been pending for more than ${PENDING_RESERVATION_DAYS} days and no longer holds its reservation. Cancel it and start again.`);
+    }
 
     // Confirming must never push confirmed credits past the ceiling, whatever was reserved.
     if (status === 'confirmed') {

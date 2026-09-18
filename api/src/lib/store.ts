@@ -312,6 +312,18 @@ export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirme
  * well as in totals(), so that once a reservation lapses the donor may start a replacement rather
  * than being locked out for ever by their own abandoned pledge.
  */
+/**
+ * Whether a pending pledge still holds its reservation. Expiry is a read-time rule rather than a
+ * stored status, because there is no timer to write one, so every path that treats a pledge as
+ * live has to apply it.
+ */
+export function pledgeExpired(p: Pledge, asOf: number = Date.now()): boolean {
+  if (p.status !== 'pledged' && p.status !== 'sent') return false;
+  const created = Date.parse(p.createdAt);
+  if (!Number.isFinite(created)) return false;
+  return created < asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
+}
+
 export function activePledgesBy(pledges: Pledge[], donorId: string, asOf: number = Date.now()): Pledge[] {
   const cutoff = asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
   return pledges.filter((p) => {

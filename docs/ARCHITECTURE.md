@@ -85,7 +85,7 @@ the partition after each change, so the project row never drifts.
    https://atlas.ripe.net/credits/ (transactions list). Close the project when done.
 
 ### Donor
-1. Open a project, click **Send credits**, pick an amount (defaults to what is left toward the goal; anything up to 100× the request is accepted).
+1. Open a project, click **Send credits**, pick an amount. It defaults to what is left toward the goal, and is bounded by `maxSinglePledge`: what is left to the goal, or one goal's worth once the goal is met. A project accepts up to 100× its request in total, but no single pledge may reserve that whole ceiling.
 2. Choose one:
    - **Transfer now with an API key**: the donor pastes a key created at
      https://atlas.ripe.net/keys/ with two permissions, "Transfer credits to another

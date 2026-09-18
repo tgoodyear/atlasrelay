@@ -93,8 +93,12 @@ export default function Profile() {
           <h2>Delete your profile</h2>
           <p className="muted">
             This removes your profile, including your RIPE NCC Access email. Projects you posted and
-            pledges you made stay on the site, because donors and researchers rely on that record,
-            but they carry only the display name you chose.
+            pledges you made stay on the site, because donors and researchers rely on that record.
+            Publicly they show only the display name you chose. They do still carry the internal
+            account identifier they were created under, so signing in again with the same GitHub or
+            Microsoft account reconnects you to that history rather than starting you fresh. Any
+            project of yours still open is closed, because nobody can pledge to a project whose
+            owner has no address to receive the credits.
           </p>
           <button
             className="btn btn-danger"
