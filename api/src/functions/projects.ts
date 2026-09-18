@@ -50,9 +50,16 @@ app.http('projects-list', {
       live.set(p.id, t);
       // Write back either way. When the totals differ this corrects them; when they match it still
       // moves updatedAt, which is what lets the next listing look at a different set of projects
-      // instead of the same prefix for ever. Best effort: a listing must not fail because a
-      // correction could not be persisted.
-      await patchProject(p.id, { creditsConfirmed: t.confirmed, creditsPending: t.pending }).catch(() => undefined);
+      // instead of the same prefix for ever.
+      //
+      // Conditional on the version this request selected. A pledge created or confirmed since the
+      // read above has already recomputed these totals, and overwriting that with the older figure
+      // would be worse than doing nothing: writing creditsPending back to 0 also drops the project
+      // out of future refreshes, so the stale value would never be corrected. A 412 means somebody
+      // else has just done this work, which is the outcome we wanted anyway. Best effort besides:
+      // a listing must not fail because a correction could not be persisted.
+      await patchProject(p.id, { creditsConfirmed: t.confirmed, creditsPending: t.pending }, p.etag)
+        .catch(() => undefined);
     }));
     let projects = rows.map((p) => publicProject(p, live.get(p.id)));
     if (status === 'open') projects = projects.filter((p) => p.open);
