@@ -1,7 +1,7 @@
 import { app, HttpRequest } from '@azure/functions';
 import { RestError } from '@azure/data-tables';
 import { requirePrincipal } from '../lib/auth';
-import { assertKeyFormat, AtlasRefused, AtlasUnreachable, findTransferTransaction, getCredits, transferCredits } from '../lib/atlas';
+import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
@@ -263,20 +263,11 @@ app.http('pledges-create', {
         console.error('Transfer completed but the confirmation could not be written yet:', confirmErr instanceof Error ? confirmErr.message : confirmErr);
       }
 
-      try {
-        // The transfer endpoint returns a generic list URL, not a per-transfer reference, so look
-        // the transaction up to record a real id. A key without the credits-read permission still
-        // completes the transfer, it just carries no id.
-        const txn = await findTransferTransaction(key, amount, startedAt);
-        if (txn) {
-          pledge.transactionId = String(txn.id);
-          pledge.transactionUrl = `https://atlas.ripe.net/api/v2/credits/transactions/?id=${txn.id}`;
-        }
-      } catch (lookupErr) {
-        // No reference beats failing a transfer that already happened, but it is worth a line in
-        // the log: a lookup that keeps failing is a real problem even though it is never fatal.
-        console.error('Transaction lookup failed after a completed transfer:', lookupErr instanceof Error ? lookupErr.message : lookupErr);
-      }
+      // No transaction lookup. RIPE does not index the transaction until well after it accepts
+      // the transfer (measured live: absent immediately, present 40 to 70 seconds later), so a
+      // call here could only ever return nothing. The 201 is what records that the credits moved,
+      // and transferredAt is when we saw it. Dropping the call also takes a RIPE round trip off
+      // the request, which is what kept the worst case inside the platform's own timeout.
 
       // These two are reported separately because they fail differently. If the row never reaches
       // 'confirmed' the owner still has to confirm it by hand; if only the cached totals are stale
