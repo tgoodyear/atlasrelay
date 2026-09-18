@@ -80,7 +80,9 @@ export function privatePledge(p: Pledge) {
 }
 
 export function privateUser(u: User) {
-  return { ...u, hasAtlasEmail: Boolean(u.atlasEmail) };
+  // Spreads the row, so the storage version has to be dropped by name like everywhere else.
+  const { etag: _etag, ...rest } = u;
+  return { ...rest, hasAtlasEmail: Boolean(u.atlasEmail) };
 }
 
 // Anonymous view of a person. The sign-in handle is deliberately absent: for some identity

@@ -17,6 +17,8 @@ export interface User {
   url: string;
   createdAt: string;
   updatedAt: string;
+  /** Table Storage row version, for conditional writes. Never published. */
+  etag?: string;
 }
 
 export interface Project {
@@ -140,6 +142,7 @@ function toUser(e: Entity): User {
     atlasEmail: String(e.atlasEmail ?? ''),
     affiliation: String(e.affiliation ?? ''),
     url: String(e.url ?? ''),
+    etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -174,7 +177,20 @@ export async function updateUser(id: string, patch: Partial<Pick<User, 'displayN
   const existing = await getUser(id);
   if (!existing) notFound();
   const updated: User = { ...existing, ...patch, updatedAt: now() };
-  await (await table('users')).upsertEntity({ partitionKey: USERS_PK, rowKey: id, ...updated }, 'Replace');
+  // updateEntity, not upsertEntity, and conditional on the version we read. An unconditional
+  // upsert here would recreate a profile that was deleted between the read above and this write,
+  // putting the RIPE NCC Access email back after the person had asked for it to be removed and
+  // been told it was. A 404 or 412 means exactly that happened, and the right answer is to fail.
+  try {
+    await (await table('users')).updateEntity(
+      { partitionKey: USERS_PK, rowKey: id, ...updated } as TableEntity,
+      'Replace',
+      existing.etag ? { etag: existing.etag } : undefined,
+    );
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) notFound();
+    throw err;
+  }
   return updated;
 }
 
