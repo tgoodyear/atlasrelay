@@ -2,7 +2,7 @@ import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Project, createProject, ensureUser, getProject, getUser, listPledges, listProjects, now, patchProject, saveProject, totals } from '../lib/store';
+import { Project, createProject, ensureUser, getProject, getUser, listPledges, listProjects, now, patchProject, totals } from '../lib/store';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
 
@@ -155,7 +155,21 @@ app.http('projects-update', {
     const body = await readJson(req);
     const fields = readProjectFields(body, false);
     const status = oneOf(body, 'status', ['open', 'closed'] as const);
-    const updated = await saveProject({ ...project, ...fields, ...(status ? { status } : {}) });
+
+    // Reopening needs the same precondition as posting. Deleting a profile closes its projects but
+    // leaves them on the site, and signing in again recreates the profile with no RIPE address, so
+    // without this an owner could reopen a project that lists publicly and fails every pledge,
+    // because the handler would have no recipient to name.
+    if (status === 'open' && project.status !== 'open') {
+      const owner = await getUser(p.userId);
+      if (!owner?.atlasEmail) {
+        throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before reopening a project; donors cannot send credits without it');
+      }
+    }
+
+    // Merge rather than replace: this row was read at the top of the handler, and a pledge
+    // recompute may have rewritten its credit totals since.
+    const updated = await patchProject(id, { ...fields, ...(status ? { status } : {}) });
     return json({ project: publicProject(updated) });
   }),
 });

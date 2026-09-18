@@ -20,10 +20,19 @@ people's credits, projects or email addresses to demonstrate a finding.
 ## What the site does with sensitive data
 
 **RIPE Atlas API keys are never stored.** A key pasted into the transfer form is
-used inside a single API call for up to three requests, and is then discarded: a
-balance check before sending, the transfer itself, and a lookup of the resulting
-transaction so the pledge can carry RIPE's reference. It is used for nothing else. It is not written to storage, and error
-paths deliberately avoid echoing request bodies so a key cannot reach a log.
+used and then discarded, never written to storage. Two separate things send it,
+and both are worth naming.
+
+The **Check balance** button on the transfer form is optional and can be pressed
+as often as you like. Each press sends the key to `POST /api/atlas/balance`,
+which makes one request to RIPE and returns the balance. Nothing is stored.
+
+**Submitting the transfer** sends the key once more, and that request uses it for
+at most three calls to RIPE: a balance check before sending, the transfer itself,
+and a lookup of the resulting transaction so the pledge can carry a reference.
+
+It is used for nothing else. Error paths deliberately avoid echoing request
+bodies so a key cannot reach a log.
 Donors are advised to create a key carrying only the two permissions the site uses,
 "Transfer credits to another user" and "Get information about your credits", with a
 short validity window, and to delete it afterwards.
