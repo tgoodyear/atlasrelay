@@ -5,11 +5,17 @@
 #   ./scripts/bind-custom-domain.sh [zone] [static-web-app] [resource-group]
 #
 # www uses cname-delegation: the CNAME already exists in the zone (infra/dns.bicep).
-# The apex uses dns-txt-token. Static Web Apps issues a token, publishes it as a TXT record and
-# creates the apex ALIAS record that routes traffic to the site; the zone deliberately ships no
-# apex A/ALIAS record of its own, because only the service knows the target to point at.
+# The apex uses dns-txt-token: the service issues a token that has to be published as a TXT record
+# at the apex before the hostname validates. Only the validation belongs to the service. The
+# routing is ours -- infra/dns.bicep declares the apex A record from the site's stable inbound
+# address, because DNS forbids a CNAME at the apex and an Azure alias record cannot target a
+# static site. An earlier version of this comment said the service creates that record itself,
+# which would send anyone debugging an apex outage to the wrong place.
 # Record the token in infra/main.bicepparam (dnsApexTxtValues) afterwards so that Bicep, which is
 # the only writer of this zone, does not remove it on the next deployment.
+#
+# Only production is bound here. dev.atlasrelay.org is declared on the dev site instead
+# (customDomain in infra/dev.bicepparam), so it returns with that environment (issue #24).
 set -euo pipefail
 
 ZONE="${1:-atlasrelay.org}"
@@ -96,5 +102,5 @@ for host in "$ZONE" "www.$ZONE"; do
     "$(dig +short "$host" CNAME @1.1.1.1 | tr '\n' ' ')"
 done
 echo
-echo "The apex only routes once Static Web Apps finishes validation and creates its ALIAS record."
-echo "Apex validation can take up to 72 hours, though it is usually much quicker."
+echo "The apex A record is already in the zone; until validation finishes the platform answers"
+echo "404 for that name. Apex validation can take up to 72 hours, though it is usually quicker."

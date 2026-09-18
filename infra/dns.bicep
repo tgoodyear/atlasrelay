@@ -2,9 +2,10 @@
 // Owner-only: the CI role grants no Microsoft.Network permissions, so CI cannot change DNS.
 //
 // Ordering note. Static Web Apps validates a custom domain only after the zone is delegated at
-// the registrar. So this template creates the zone and the records that do not depend on
-// validation; the custom-domain binding is added afterwards with `az staticwebapp hostname set`
-// (see docs/RUNBOOK.md). Once the apex validation token is issued, record it in
+// the registrar, which happens between two deployments and cannot be expressed as a dependency.
+// So this template creates the zone and the records, and the bindings that consume them are made
+// separately: production by scripts/bind-custom-domain.sh, dev by the customDomain parameter of
+// app.bicep (see docs/RUNBOOK.md). Once the apex validation token is issued, record it in
 // apexTxtValues so Bicep stays the only writer of this zone.
 //
 // Apex routing. DNS forbids a CNAME at the zone apex, and an Azure DNS alias record cannot
@@ -64,7 +65,10 @@ resource wwwCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = {
 }
 
 // dev -> the dev static web app, for integration testing a PR stack before it reaches main.
-// Same cname-delegation validation as www. Created only when a dev instance exists.
+// Same cname-delegation validation as www. Created only when a dev instance exists. The binding
+// on the other end is declared on the dev site itself (customDomain in infra/dev.bicepparam),
+// because that is the deployment which rebuilds dev; this record and that binding have to be
+// changed together when the dev site is recreated.
 resource devCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = if (!empty(devStaticWebAppDefaultHostname)) {
   parent: zone
   name: 'dev'
