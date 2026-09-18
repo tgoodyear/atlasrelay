@@ -96,9 +96,11 @@ the partition after each change, so the project row never drifts.
      requests, and sometimes one: a balance that comes back below the amount stops the
      request there, with nothing sent. The pledge row is written **before** the transfer, then the function
      calls `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
-     and `transferredAt` records when we saw RIPE accept it -- unless that write itself
-     fails, in which case the stored row stays `pledged`, the response says so rather
-     than claiming otherwise, and the requester confirms it once the credits arrive.
+     and `transferredAt` records when we saw RIPE accept it. If that write fails the
+     handler retries it and, failing that, re-reads the row, so a write whose response
+     was merely lost still ends up reported as confirmed. Only a failure that genuinely
+     left the row unchanged leaves it `pledged`; the response then says so rather than
+     claiming otherwise, and the requester confirms it once the credits arrive.
      No transaction reference is attached: RIPE indexes the transaction well after
      accepting the transfer, so it cannot be read back inside the request, and the
      donor's own credit log shows it a minute or so later. If RIPE never answers, the pledge is left at

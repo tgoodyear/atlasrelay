@@ -501,13 +501,15 @@ app.http('pledges-create', {
         }
       }
 
-      // If the confirmation write failed, the stored row is still the pre-transfer one, and the
-      // response must not claim otherwise. The credits did move, which the warning says, but
-      // reporting `confirmed` here would have the dialog and the dashboard disagree about the same
-      // pledge, and would tell the donor a record exists that nobody can find.
-      // When confirmation did not persist, report the row that exists rather than a mix of the two:
-      // status, the transfer timestamp and any reference all have to describe the same thing, or the
-      // success screen contradicts both storage and its own warning.
+      // Only when the confirmation is known not to have persisted -- apiSaveFailed is set after
+      // both attempts have failed and a re-read has not found a confirmed row, so a write whose
+      // response was merely lost has already been reconciled above and does not reach here. In that
+      // case the stored row is the pre-transfer one and the response must not claim otherwise. The
+      // credits did move, which the warning says, but reporting `confirmed` would have the dialog
+      // and the dashboard disagree about the same pledge and tell the donor a record exists that
+      // nobody can find. Report the row that exists rather than a mix of the two: status, the
+      // transfer timestamp and any reference all have to describe the same thing, or the success
+      // screen contradicts both storage and its own warning.
       const reported = apiSaveFailed
         ? { ...pledge, status: 'pledged' as const, inFlight: false, transferredAt: '', transactionId: '', transactionUrl: '' }
         : pledge;
