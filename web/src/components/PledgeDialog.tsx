@@ -172,10 +172,14 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 will be used as described. Read the project's links, start with a small amount, and
                 send only what you are willing to lose. Credits cannot be recalled once transferred.
                 {' '}
-                <a href="https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&title=Report%20a%20project" target="_blank" rel="noreferrer">
-                  Report a project
+                <a
+                  href={`https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&title=${encodeURIComponent(`Report a project: ${project.title}`)}&body=${encodeURIComponent(`Project: ${window.location.origin}/projects/${project.id}\n\nWhat is wrong with it:\n`)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Report this project
                 </a>{' '}
-                that looks fraudulent.
+                if it looks fraudulent.
               </p>
 
               {error && <div className="alert alert-error">{error}</div>}

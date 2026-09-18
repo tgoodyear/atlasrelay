@@ -126,6 +126,21 @@ app.http('projects-create', {
       updatedAt: ts,
     };
     await createProject(project);
+
+    // The check above reads before writing, so simultaneous requests can all pass it. Settle it
+    // now the row is visible: re-read, and if this owner is over the cap, the newest projects
+    // close themselves back down to it. Ids are time-prefixed, so the newest row always sees every
+    // older one and every racer reaches the same verdict without coordination. Unlike a transfer,
+    // nothing irreversible has happened, so closing is a complete remedy.
+    const mine = (await listProjectsByOwner(user.id)).filter((x) => x.status === 'open');
+    if (mine.length > MAX_OPEN_PROJECTS_PER_USER) {
+      const surplus = mine.map((x) => x.id).sort().slice(MAX_OPEN_PROJECTS_PER_USER);
+      if (surplus.includes(project.id)) {
+        await saveProject({ ...project, status: 'closed' });
+        throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
+      }
+    }
+
     return json({ project: publicProject(project) }, 201);
   }),
 });
@@ -144,6 +159,16 @@ app.http('projects-update', {
     const body = await readJson(req);
     const fields = readProjectFields(body, false);
     const status = oneOf(body, 'status', ['open', 'closed'] as const);
+
+    // Reopening is another way to end up with more open projects than the cap allows: close one,
+    // post a replacement, then reopen the first. The limit has to hold on this path too.
+    if (status === 'open' && project.status !== 'open') {
+      const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open').length;
+      if (open >= MAX_OPEN_PROJECTS_PER_USER) {
+        throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before reopening this.`);
+      }
+    }
+
     const updated = await saveProject({ ...project, ...fields, ...(status ? { status } : {}) });
     return json({ project: publicProject(updated) });
   }),

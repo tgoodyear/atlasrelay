@@ -30,10 +30,13 @@ private vulnerability reporting if naming the project publicly would make things
 worse. Say which project (the URL is enough) and what is wrong with it.
 
 There is one maintainer and no rota, so expect days rather than hours. A project
-found to be fraudulent is closed, which stops it accepting further credits, and
-its owner's account is removed. Credits already transferred are gone: they move
-directly between RIPE Atlas accounts, and neither this site nor the RIPE NCC can
-reverse a transfer on our say-so.
+found to be fraudulent is closed, which stops it accepting further credits and
+takes it off the listing. The owner's profile, including their stored RIPE NCC
+Access email, can be deleted too. Be clear about what that is not: it is not a
+ban. Signing in again with the same account recreates a profile, and the past
+projects and pledges are still linked to it. Credits already transferred are
+gone; they move directly between RIPE Atlas accounts, and neither this site nor
+the RIPE NCC can reverse a transfer on our say-so.
 
 If you sent credits to a project you now believe was fraudulent, report it here
 so nobody else does, and raise it with RIPE NCC if you think a RIPE Atlas

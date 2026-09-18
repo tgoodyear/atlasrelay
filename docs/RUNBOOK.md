@@ -147,9 +147,22 @@ query charges.
   ```
 
   To remove the owner as well, delete their row from `users`, which also removes the stored RIPE
-  NCC Access email. Their projects and pledges stay, carrying only a display name, because other
-  people's records point at them. Note what you did and why in the abuse issue; pledges are the
-  only audit trail there is.
+  NCC Access email. Find the id from the project's `ownerId`, then:
+
+  ```bash
+  az storage entity show --table-name users --account-name <storage account> --auth-mode key \
+    --partition-key user --row-key <owner id>
+  az storage entity delete --table-name users --account-name <storage account> --auth-mode key \
+    --partition-key user --row-key <owner id>
+  ```
+
+  Close every project they own first, using the command above: deleting the user alone would leave
+  projects advertised as pledgeable that nobody can actually pledge to, because the handler needs
+  the owner's address to name a recipient. Their projects and pledges stay, carrying only a display
+  name, because other people's records point at them. The internal account id stays on those rows,
+  so the same GitHub or Microsoft account signing in again is reconnected to that history rather
+  than starting clean; deletion is not a ban. Note what you did and why in the abuse issue; pledges
+  are the only audit trail there is.
 - **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and RIPE never
   answered, so the platform cannot say whether the credits moved. Only the two people involved
   can settle it, and both can: the requester confirms the pledge if the credits arrived, the
