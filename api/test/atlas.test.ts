@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, describeAtlasError, findTransferTransaction, getCredits, transferCredits } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 
+const KEY = '12345678-1234-1234-1234-123456789abc';
+
+async function withFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Promise<T> {
+  const real = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
 test('assertKeyFormat only accepts UUIDs', () => {
   assert.equal(assertKeyFormat(' 12345678-1234-1234-1234-123456789abc '), '12345678-1234-1234-1234-123456789abc');
   assert.throws(() => assertKeyFormat('not-a-key'), HttpError);
@@ -24,18 +36,6 @@ test('describeAtlasError has sane fallbacks', () => {
 
 // The pledge handler decides whether to roll a reservation back or park it for a human by
 // asking one question of a failed transfer: did RIPE answer? These tests pin that answer.
-
-const KEY = '12345678-1234-1234-1234-123456789abc';
-
-async function withFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Promise<T> {
-  const real = globalThis.fetch;
-  globalThis.fetch = impl;
-  try {
-    return await fn();
-  } finally {
-    globalThis.fetch = real;
-  }
-}
 
 test('a refusal from RIPE is not AtlasUnreachable, because no credits moved', async () => {
   const err = await withFetch(
@@ -189,5 +189,25 @@ test('a truncated refusal is still a refusal, not an unknown outcome', async () 
   );
   assert.equal(err instanceof AtlasUnreachable, false, 'a refusal must not read as unknown');
   assert.ok(err instanceof HttpError);
+  assert.equal(err.status, 400);
+});
+
+test('a 5xx on a transfer is an unknown outcome, not a refusal', async () => {
+  // RIPE broke somewhere internally. That says nothing about whether it processed the transfer
+  // first, so rolling the pledge back and letting the donor retry could send the credits twice.
+  const err = await withFetch(
+    async () => new Response('{}', { status: 503 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable);
+  assert.equal(err.status, 502);
+});
+
+test('a 4xx on a transfer is still a refusal, so the donor can retry', async () => {
+  const err = await withFetch(
+    async () => new Response(JSON.stringify({ error: { detail: 'Not enough credits.' } }), { status: 400 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.equal(err instanceof AtlasUnreachable, false);
   assert.equal(err.status, 400);
 });
