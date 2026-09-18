@@ -67,7 +67,7 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |
 | `transactionId` | RIPE's transaction id, looked up after the transfer. The transfer endpoint itself returns only a generic list URL (`.../credits/transactions/?sort=-date&type=admin`), the same for every transfer and readable only with the donor's own key, so it is not a reference. The lookup needs the credits-read permission and is best effort. |
-| `transactionUrl` | The URL RIPE returned, when method is `api`. |
+| `transactionUrl` | A link we build from `transactionId` when the lookup finds one unambiguous match, so it is present only when `transactionId` is. Rows created before that change may instead hold the generic list URL the transfer endpoint returned. |
 | `message` | Optional public note from the donor. |
 | `createdAt`, `updatedAt` | |
 
