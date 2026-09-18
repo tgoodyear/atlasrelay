@@ -161,7 +161,7 @@ app.http('pledges-create', {
       updatedProject = await recomputeProjectTotals(id);
     } catch (err) {
       console.error('Could not recompute project totals before a transfer:', err instanceof Error ? err.message : err);
-      throw await rollback(new HttpError(503, 'We could not check this project\u2019s current total just now, so nothing was sent. Please try again in a moment.'));
+      throw await rollback(new HttpError(503, 'We could not check this project’s current total just now, so nothing was sent. Please try again in a moment.'));
     }
     if (updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
       throw await rollback(new HttpError(409, 'Another donor took the remaining capacity a moment ago. Please try a smaller amount.'));

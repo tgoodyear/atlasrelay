@@ -267,7 +267,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
               <div className="alert alert-success">
                 RIPE Atlas accepted the transfer of {fmt(n)} credits, and the pledge is confirmed.
                 {' '}RIPE accepting the transfer is the record; it publishes the transaction to
-                your account\u2019s log a minute or so later, where you can see it yourself.
+                your account’s log a minute or so later, where you can see it yourself.
               </div>
               {warning && <div className="alert alert-warn">{warning}</div>}
               <p>Remember to delete or disable the API key you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.</p>
