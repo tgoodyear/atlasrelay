@@ -247,18 +247,31 @@ app.http('pledges-create', {
         // then settle the row while the transfer is still running and free the slot. Nothing has been
         // sent yet, so the safe answer is to give up and let the donor try again.
         try {
-          // Keep the version current: this write changes the row, and the rollback below is
-          // conditional on it. Holding the create-time version here is what made that rollback
-          // fail with 412 on every ordinary refusal.
-          pledge.etag = (await savePledge(pledge)).etag;
+          // Conditional on the row still being the one this request created. Until inFlightSince is
+          // stored, pledgeInFlight measures the window from createdAt, so a setup slow enough to
+          // outlast it makes this row actionable: the owner or the donor can settle it while the
+          // balance check and the owner re-read above are still running. An unconditional replace
+          // would put their settlement back to in-flight and then transfer against it.
+          //
+          // It also keeps the version current, which the rollback below depends on. Holding the
+          // create-time version past this write is what made that rollback fail 412 on every
+          // ordinary refusal.
+          pledge.etag = (await savePledge(pledge, pledge.etag)).etag;
         } catch (markErr) {
-          console.error('Could not record the transfer start marker:', markErr instanceof Error ? markErr.message : markErr);
-          // The write may have been applied and only its answer lost, in which case the row moved on
-          // and the version held here is the create-time one, so the conditional withdrawal below
-          // would fail 412 and leave the row in flight holding the donor's slot. They would be told
-          // nothing was sent and invited to retry, and then blocked from retrying until the owner
-          // settled it. Re-read for the current version first. Nothing has been sent at this point,
-          // so withdrawing is safe whichever of the two happened.
+          // A 412 is not a failure to write, it is somebody else having acted. Their settlement is
+          // the state that should survive, and it released the claim on its way, so there is
+          // nothing here to roll back and nothing to send. Rolling back would overwrite the thing
+          // the guard just protected.
+          if (markErr instanceof RestError && markErr.statusCode === 412) {
+            throw new HttpError(409, 'This pledge was settled while the transfer was being set up, so nothing was sent. Reload to see where it stands.', NOT_SENT);
+          }
+          console.error('Could not record the transfer start marker:', describeErrorForLog(markErr));
+          // Any other failure is ambiguous: the write may have been applied and only its answer
+          // lost, leaving the row a version ahead of the one held here, so the conditional
+          // withdrawal below would fail 412 and strand the row in flight holding the donor's slot.
+          // They would be told nothing was sent, invited to retry, and then blocked from retrying
+          // until the owner settled it. Re-read for the current version first; nothing has been
+          // sent at this point, so withdrawing is safe whichever of the two happened.
           const fresh = await getPledge(id, pledge.id).catch(() => null);
           if (fresh?.etag) pledge.etag = fresh.etag;
           throw await rollback(new HttpError(503, 'We could not start the transfer safely just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
