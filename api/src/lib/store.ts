@@ -247,11 +247,34 @@ export async function saveProject(p: Project): Promise<Project> {
  * tags is stored comma-joined, exactly as fromProject writes it, because a raw array would either
  * be rejected by Table Storage or persisted in a shape nothing can read back.
  */
-export async function patchProject(id: string, patch: Partial<Project>, ifMatch?: string): Promise<Project> {
+/**
+ * Issue the merge for patchProject. Separated so the conditional-write contract can be tested: an
+ * ifMatch that is accepted and then dropped makes every caller believe it is writing conditionally
+ * while it silently overwrites whatever landed in between, and the 412 its retry waits for never
+ * comes. With an ETag this is a conditional merge; without one it is an unconditional merge.
+ */
+export function projectPatchEntity(id: string, patch: Partial<Project>): Record<string, unknown> {
   const { tags, ...rest } = patch;
   const entity: Record<string, unknown> = { partitionKey: PROJECTS_PK, rowKey: id, ...rest, updatedAt: now() };
   if (tags !== undefined) entity.tags = tags.join(',');
-  await (await table('projects')).updateEntity(entity as TableEntity, 'Merge');
+  return entity;
+}
+
+export async function projectUpdateArgs(
+  client: { updateEntity(entity: never, mode: never, options?: never): Promise<unknown> },
+  id: string,
+  patch: Partial<Project>,
+  ifMatch?: string,
+): Promise<void> {
+  await client.updateEntity(
+    projectPatchEntity(id, patch) as never,
+    'Merge' as never,
+    (ifMatch ? { etag: ifMatch } : undefined) as never,
+  );
+}
+
+export async function patchProject(id: string, patch: Partial<Project>, ifMatch?: string): Promise<Project> {
+  await projectUpdateArgs(await table('projects'), id, patch, ifMatch);
   const after = await getProject(id);
   if (!after) notFound();
   return after;
