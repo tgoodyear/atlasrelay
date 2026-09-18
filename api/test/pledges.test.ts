@@ -79,18 +79,27 @@ test('a donor may hold only one live pledge per project', () => {
   assert.equal(activePledgesBy(list, 'd3').length, 0);
 });
 
-test('concurrent pledges from one donor settle on the lowest id, deterministically', () => {
-  // Ids are time-prefixed and sortable, so every racing request picks the same winner
-  // without coordination, which is what makes the post-write settlement safe.
-  const base = { projectId: '', donorId: 'd1', donorName: '', method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, message: '', createdAt: '', updatedAt: '', amount: 10, status: 'pledged' as const };
-  const racing = [{ ...base, id: '0mu45rmy60912b13q' }, { ...base, id: '0mu45rmy10912b13q' }, { ...base, id: '0mu45rmz00912b13q' }];
-  const winner = activePledgesBy(racing, 'd1').map((x) => x.id).sort()[0];
-  assert.equal(winner, '0mu45rmy10912b13q');
-  // Every participant computes the same answer regardless of the order it sees them in.
-  for (const order of [[2, 0, 1], [1, 2, 0], [0, 1, 2]]) {
-    const shuffled = order.map((i) => racing[i]);
-    assert.equal(activePledgesBy(shuffled, 'd1').map((x) => x.id).sort()[0], winner);
-  }
+test('the slot, not id ordering, is what keeps a donor to one live pledge', () => {
+  // An earlier version settled this by sorting ids after the fact. That could not work: a request
+  // that reads before a rival writes never sees it, so both proceed. Uniqueness now rests on
+  // creating one row in the claims table, which Table Storage makes atomic. What is testable here
+  // without storage is the rule that decides when a held slot may be taken from its owner.
+  const asOf = Date.parse('2026-09-18T12:00:00.000Z');
+  const day = 24 * 60 * 60 * 1000;
+  const recent = new Date(asOf - day).toISOString();
+  const live = {
+    id: 'p1', projectId: 'j1', donorId: 'd1', donorName: '', amount: 1, method: 'api' as const,
+    status: 'pledged' as const, transactionUrl: '', transactionId: '', transferredAt: '',
+    transferUncertain: false, message: '', createdAt: recent, updatedAt: recent,
+  };
+  assert.equal(claimIsReclaimable(recent, live, asOf), false, 'a live pledge holds its slot');
+  assert.equal(claimIsReclaimable(recent, { ...live, status: 'confirmed' }, asOf), true);
+  assert.equal(claimIsReclaimable(recent, { ...live, status: 'cancelled' }, asOf), true);
+  assert.equal(
+    claimIsReclaimable(new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * day).toISOString(), live, asOf),
+    true,
+    'an abandoned slot frees itself rather than locking the donor out for ever',
+  );
 });
 
 test('a transfer of unknown outcome keeps reserving credits and keeps its donor out', () => {
