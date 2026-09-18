@@ -191,3 +191,23 @@ test('a truncated refusal is still a refusal, not an unknown outcome', async () 
   assert.ok(err instanceof HttpError);
   assert.equal(err.status, 400);
 });
+
+test('a 5xx on a transfer is an unknown outcome, not a refusal', async () => {
+  // RIPE broke somewhere internally. That says nothing about whether it processed the transfer
+  // first, so rolling the pledge back and letting the donor retry could send the credits twice.
+  const err = await withFetch(
+    async () => new Response('{}', { status: 503 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.ok(err instanceof AtlasUnreachable);
+  assert.equal(err.status, 502);
+});
+
+test('a 4xx on a transfer is still a refusal, so the donor can retry', async () => {
+  const err = await withFetch(
+    async () => new Response(JSON.stringify({ error: { detail: 'Not enough credits.' } }), { status: 400 }),
+    () => transferCredits(KEY, 'someone@example.org', 10).then(() => null, (e) => e),
+  );
+  assert.equal(err instanceof AtlasUnreachable, false);
+  assert.equal(err.status, 400);
+});

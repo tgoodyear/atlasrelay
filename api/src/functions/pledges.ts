@@ -264,6 +264,16 @@ app.http('pledges-update', {
     const ok = allowed[role].some(([from, to]) => from === pledge.status && to === status);
     if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
 
+    // A donor cannot cancel away an API transfer that our server sent. If the row is still
+    // 'pledged' on an api pledge, the most likely reason is that the transfer completed and only
+    // the follow-up write failed, so cancelling would discard credits that really moved and leave
+    // the owner unable to record them. The exception is a transfer we already know is uncertain:
+    // there the donor is the one who can read their own transaction log, so they are exactly the
+    // right person to settle it. Everything else goes to the owner, who can see what arrived.
+    if (role === 'donor' && status === 'cancelled' && pledge.method === 'api' && !pledge.transferUncertain) {
+      throw new HttpError(409, 'This transfer was sent through the API, so only the project owner can close it. If the credits never arrived, ask them to cancel it.');
+    }
+
     // An expired reservation no longer holds capacity, and that capacity may already have gone to
     // someone else. What that should prevent is a donor SENDING credits against a reservation
     // that is gone, which is the 'sent' transition. It must not prevent an owner RECORDING credits
