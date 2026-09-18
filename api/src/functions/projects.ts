@@ -64,12 +64,11 @@ app.http('projects-list', {
           creditsConfirmed: t.confirmed,
           creditsPending: t.pending,
           totalsCheckedAt: now(),
-          // Deliberately preserved. This write happens on anonymous listing traffic, and bumping
-          // updatedAt would tell everyone reading the project that it had just been edited when
-          // nothing about it changed. Rotation runs off totalsCheckedAt instead.
-          ...(t.pending === p.creditsPending && t.confirmed === p.creditsConfirmed
-            ? { updatedAt: p.updatedAt }
-            : {}),
+          // Always preserved, correcting or not. This runs on anonymous listing traffic, and
+          // expiring a reservation is bookkeeping rather than something the owner did, so moving
+          // updatedAt would tell every reader the project had just been edited. Rotation runs off
+          // totalsCheckedAt precisely so that updatedAt can stay the project's own history.
+          updatedAt: p.updatedAt,
         },
         p.etag,
       ).catch(() => undefined);
