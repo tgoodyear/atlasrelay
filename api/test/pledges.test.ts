@@ -427,3 +427,15 @@ test('the page is told who may cancel rather than working it out', () => {
   // Never published to people who are not party to the pledge.
   assert.equal('donorMayCancel' in publicPledge(unresolved()), false);
 });
+
+test('a pledge still in flight is not offered a Cancel button', () => {
+  // The predicate exists so the page and the handler cannot disagree about who may cancel. It first omitted
+  // the in-flight window, which pledges-update checks before it ever reaches this rule -- so the page
+  // offered Cancel on a fresh API pledge for the whole grace period and the handler answered 409 to every
+  // click. The same mismatch, one condition further in.
+  const fresh = unresolved({ status: 'pledged', transferUncertain: false, inFlight: true, inFlightSince: '', createdAt: new Date().toISOString() });
+  assert.equal(donorMayCancelApiPledge(fresh), false, 'in flight: the handler would refuse');
+  // Once the window has lapsed the row is settleable, and this is the case the exception exists for.
+  const lapsed = Date.parse(fresh.createdAt) + 10 * 60 * 1000;
+  assert.equal(donorMayCancelApiPledge(fresh, lapsed), true);
+});
