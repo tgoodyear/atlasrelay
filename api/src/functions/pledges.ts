@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { describeErrorForLog, handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -117,12 +117,6 @@ app.http('pledges-create', {
       if (!(await acquirePledgeClaim(id, donor.id, pledge.id))) {
         throw new HttpError(409, 'You already have a pledge in progress on this project. Complete or cancel it first.');
       }
-
-      // The row is written before any credits move. Table Storage has no transaction that can span
-      // a local write and a call to RIPE, so the order decides which way a failure hurts. An orphan
-      // row is a pledge someone cancels; an untracked transfer is credits nobody can account for.
-      pledge.etag = (await createPledge(pledge)).etag;
-
       /**
        * Release the reservation and hand back the error to throw. Callers write
        * `throw await rollback(...)` so that the exit is visible at the call site. Only safe while
@@ -135,6 +129,50 @@ app.http('pledges-create', {
       // check and the owner re-read are still running.
       let rollbackFoundConflict = false;
       const rollback = async (err: HttpError): Promise<HttpError> => {
+        // Establish a version first when there is none. Only createPledge can leave us here: every other
+        // caller holds a version from a write that returned, and overwriting theirs would break the
+        // conditional writes downstream that depend on it.
+        //
+        // This is not a formality. savePledge's ifMatch is optional and pledge.etag is optional, so a
+        // withdrawal called with no version type-checks and silently degrades to an unconditional upsert --
+        // which would either overwrite a settlement or, worse, CREATE a cancelled row for a pledge that was
+        // never written. A guard that reads as present and does nothing is the exact failure this file has
+        // been bitten by before.
+        if (!pledge.etag) {
+          let stored: Pledge | null = null;
+          let readFailed = false;
+          try {
+            stored = await getPledge(id, pledge.id);
+          } catch (readErr) {
+            readFailed = true;
+            console.error('Could not read back a pledge whose creation was ambiguous:', describeErrorForLog(readErr));
+          }
+          // Ambiguous on top of ambiguous. Hold the slot: the invariant worth keeping is that a live row
+          // always has a slot behind it, and releasing buys the donor nothing here anyway, because the
+          // one-live-pledge check refuses their retry on the row itself regardless of the slot.
+          if (readFailed) return err;
+          if (!stored) {
+            // The write did not land, so only the slot is held. releasePledgeClaim refuses unless the slot
+            // still names this pledge, so it cannot take one somebody else has since reclaimed.
+            await releasePledgeClaim(id, donor.id, pledge.id).catch(() => undefined);
+            return err;
+          }
+          // It landed. But a stored row is not necessarily the row we wrote: between the create and this
+          // read, a manual pledge is actionable, so the donor or the owner may already have moved it on.
+          // Adopting its version and then saving our in-memory copy as cancelled would make the conditional
+          // write succeed and overwrite their settlement -- the guard passing precisely because we had just
+          // handed it the version it was meant to detect. Anything other than the row as created is somebody
+          // else's action, and this request has sent nothing, so leave it alone and say so.
+          if (stored.status !== 'pledged' || stored.transferUncertain || stored.transferredAt) {
+            return new HttpError(
+              409,
+              'Somebody acted on this pledge while it was being created, and it may already record a transfer. Open it on your dashboard before sending anything.',
+              { transfer: 'unknown' },
+            );
+          }
+          // The row as we wrote it, so only the answer was lost. Withdraw it properly.
+          pledge.etag = stored.etag;
+        }
         // Best effort, every step. Every path that reaches here is one where nothing moved: RIPE
         // declined, or the request gave up before sending. The donor's useful answer is that original
         // error, what was wrong and how to fix it. Letting a Table Storage hiccup here replace it with
@@ -196,6 +234,22 @@ app.http('pledges-create', {
         }
         return err;
       };
+
+
+      // The row is written before any credits move. Table Storage has no transaction that can span
+      // a local write and a call to RIPE, so the order decides which way a failure hurts. An orphan
+      // row is a pledge someone cancels; an untracked transfer is credits nobody can account for.
+      //
+      // This is the one write on the path where no prior version exists, which is why it was the one the
+      // reconcilers downstream could not cover: each of those re-reads a row it already wrote. A create
+      // that commits and loses its answer left the row and the slot behind while the response told the
+      // donor to try again, and their retry was then refused by a pledge only the owner could clear.
+      try {
+        pledge.etag = (await createPledge(pledge)).etag;
+      } catch (createErr) {
+        console.error('Could not create a pledge row:', describeErrorForLog(createErr));
+        throw await rollback(new HttpError(503, 'We could not record your pledge just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
+      }
 
       // Reserved capacity still needs a post-write settlement, because it spans different donors and
       // no single row can arbitrate between them. Over-reserving is recoverable in a way a double
@@ -618,7 +672,14 @@ app.http('pledges-update', {
     // half: the next person to read this file found two comments stating opposite policies. Reading
     // the log is not the problem; acting on it here frees the slot, and if RIPE did complete the
     // transfer the next pledge sends the credits a second time. The owner settles these.
-    if (role === 'donor' && status === 'cancelled' && pledge.method === 'api') {
+    //
+    // `method === 'api'` alone is too broad a proxy for "a transfer may have been issued". The real
+    // distinguisher is inFlightSince, which is written before the POST and not best-effort: the handler
+    // gives up if that write fails, so a `pledged` API row without it provably never reached RIPE. Those
+    // rows exist because creating the pledge or checking the balance failed, and holding their donor to an
+    // owner-only rule stranded them behind a pledge they could not clear and the owner had no reason to
+    // look at. Rows that did reach the POST keep the rule.
+    if (role === 'donor' && status === 'cancelled' && pledge.method === 'api' && !donorMayCancelApiPledge(pledge)) {
       throw new HttpError(409, 'This transfer was sent through the API, so only the project owner can close it. If the credits never arrived, ask them to cancel it.');
     }
 
