@@ -172,7 +172,17 @@ export default function ProjectDetail() {
                             {isOwner && (
                               <button className="btn btn-sm" disabled={busy === p.id} onClick={() => updatePledge(p, 'confirmed')}>Confirm received</button>
                             )}
-                            <button className="btn btn-sm btn-danger" disabled={busy === p.id} onClick={() => confirm('Cancel this pledge?') && updatePledge(p, 'cancelled')}>Cancel</button>
+                            {/* The owner may always cancel. Whether the donor may is a server rule that
+                                turns on fields the page cannot see, so it is asked rather than guessed:
+                                donorMayCancel comes from the same predicate the update handler enforces.
+                                This page used to offer the button regardless, so a donor's only route to
+                                an API pledge was a button that always came back 409. */}
+                            {(isOwner || p.donorMayCancel) && (
+                              <button className="btn btn-sm btn-danger" disabled={busy === p.id} onClick={() => confirm('Cancel this pledge?') && updatePledge(p, 'cancelled')}>Cancel</button>
+                            )}
+                            {!isOwner && !p.donorMayCancel && (
+                              <span className="small muted">Waiting for the project owner to settle this</span>
+                            )}
                           </div>
                         )}
                       </div>

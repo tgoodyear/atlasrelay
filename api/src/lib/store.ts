@@ -1,6 +1,6 @@
 import { TableClient, TableEntity, odata, RestError } from '@azure/data-tables';
 import { HttpError } from './http';
-import { PENDING_RESERVATION_DAYS } from './pledging';
+import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
 
 export type ProjectStatus = 'open' | 'closed';
@@ -389,6 +389,92 @@ export function nextResultsPostedAt(
   return patch.resultsSummary || patch.resultsUrl ? at : '';
 }
 
+/**
+ * The owner's open projects, for the cap.
+ *
+ * Still a scan. ownerId is not a key and the projects table has a single constant partition, so
+ * the service reads every row to answer this, and that is issue #19's real subject. What the
+ * status filter changes is only what comes back: closed projects are never pruned, so the previous
+ * client-side filter carried an owner's entire history -- every closed row, each with a description
+ * of up to 8000 characters -- across the wire on every create and every reopen, and that part grew
+ * without bound. Filtering server-side leaves a result bounded by the cap itself. Stated plainly
+ * rather than left to read as a fix for the scan: making the scan keyed needs a key structure
+ * beside this table, which this is not.
+ *
+ * Safe against a row with no status column, which would read as open through toProject's default
+ * and be hidden by this filter: createProject writes status on every row and patchProject only
+ * ever merges, so no such row can exist.
+ */
+export async function listOpenProjectsByOwner(ownerId: string): Promise<Project[]> {
+  const open: ProjectStatus = 'open';
+  const out: Project[] = [];
+  for await (const e of (await table('projects')).listEntities<Entity>({
+    queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId} and status eq ${open}` },
+  })) {
+    out.push(toProject(e));
+  }
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/**
+ * The per-account window on posting projects, held as a row.
+ *
+ * Returns false when this account posted less than minIntervalMs ago, and takes the window when it
+ * did not. Reading a stamp and then writing one cannot enforce an interval, for the same reason
+ * the pledge claim above spells out and the open-project cap had to learn twice: a burst of
+ * concurrent posts all read before any of them writes, all see an old stamp, and all proceed.
+ * Creating a row is atomic and a conditional replace is atomic, so exactly one request in a burst
+ * takes the window and the rest are refused.
+ *
+ * The row lives in the users table under its own partition, not on the user row. A second writer
+ * on the user row would collide with updateUser's conditional replace, and updateUser answers a
+ * 412 with 404 Not found -- so posting a project would make a profile save being written at the
+ * same moment report that the profile was gone. It is kept out of the claims table for the reverse
+ * reason: that table is the one guard against a double transfer, and nothing that is not a pledge
+ * claim belongs in it.
+ */
+const PROJECT_POST_PK = 'project-post';
+
+export async function acquireProjectPostWindow(userId: string, minIntervalMs: number): Promise<boolean> {
+  const t = await table('users');
+  const entity = { partitionKey: PROJECT_POST_PK, rowKey: userId, lastProjectAt: now() };
+  try {
+    await t.createEntity(entity);
+    return true;
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+  }
+
+  const held = await getEntity('users', PROJECT_POST_PK, userId);
+  // Gone between the create and this read: profile deletion drops this row. Start again rather
+  // than refuse, because there is now no stamp to refuse on.
+  if (!held) return acquireProjectPostWindow(userId, minIntervalMs);
+
+  if (!projectPostAllowed(String(held.lastProjectAt ?? ''), minIntervalMs)) return false;
+
+  try {
+    await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+    return true;
+  } catch (err) {
+    // 412 means another post by this account took the window between our read and our write. Two
+    // posts inside the interval is exactly what this refuses, so the rival winning is the answer.
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Drop the posting window. Called when a profile is deleted, because the row is keyed by account
+ * id and so is an identifier of an account that asked to be removed.
+ */
+export async function deleteProjectPostWindow(userId: string): Promise<void> {
+  try {
+    await (await table('users')).deleteEntity(PROJECT_POST_PK, userId);
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 404)) throw err;
+  }
+}
+
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
   const out: Project[] = [];
   for await (const e of (await table('projects')).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId}` } })) {
@@ -497,7 +583,59 @@ export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
   return asOf - since <= CLAIM_ORPHAN_GRACE_MS;
 }
 
+/**
+ * Whether a pledge is unresolved rather than merely pending: the transfer was issued, RIPE never gave a
+ * usable answer, and nobody has established whether the credits moved.
+ *
+ * The reservation expiry answers "has this donor abandoned their reservation?", and for that question age is
+ * real evidence. These rows pose a different question -- "did the credits move?" -- and age is no evidence
+ * about it whatever. Fourteen days of silence says nothing about whether a POST that timed out was processed
+ * at RIPE. One cutoff was serving both questions, so the second was being answered by default in the
+ * direction that sends the same credits twice.
+ *
+ * The status conjunct is load-bearing rather than defensive. transferUncertain is never cleared when a
+ * pledge is settled -- pledges-update writes `{ ...pledge, status }` -- so a confirmed row still carries the
+ * flag, and keying on it alone would hold that row's slot and its reservation for ever.
+ */
+export function pledgeUnresolved(p: Pledge): boolean {
+  return p.transferUncertain && (p.status === 'pledged' || p.status === 'sent');
+}
+
+/**
+ * Whether a donor may withdraw their own API pledge.
+ *
+ * Normally they may not: once a transfer has been issued, cancelling frees the donor's slot, and if RIPE did
+ * complete it the next pledge sends the same credits again. Only the owner can say whether they arrived.
+ *
+ * The exception is a row that provably never reached the POST, which exists when the pledge was written and
+ * then the balance check or the recipient read failed. Holding its donor to the owner-only rule strands them
+ * behind a pledge they cannot clear and the owner has no reason to look at.
+ *
+ * `inFlight` is what makes the proof sound, and an empty `inFlightSince` on its own would not be. toPledge
+ * fills every absent field with a default, so a row written before `inFlightSince` existed also reads empty
+ * -- and such a row may well have transferred. But those rows predate `inFlight` too, so they read false,
+ * while every API pledge written by current code is created with it true. Requiring true therefore admits
+ * only rows this code wrote, which are the only ones whose empty marker means what it says.
+ */
+export function donorMayCancelApiPledge(p: Pledge, asOf: number = Date.now()): boolean {
+  // The in-flight window is part of the rule, not a separate concern. pledges-update refuses any action on
+  // an in-flight pledge before it reaches the guard this predicate backs, so leaving it out here offered a
+  // Cancel button on exactly the rows the handler rejects -- a fresh API pledge, in the seconds between its
+  // row being written and the grace window lapsing. That is the mismatch this predicate was extracted to
+  // end, reappearing one condition further in.
+  if (pledgeInFlight(p, asOf)) return false;
+  return p.status === 'pledged' && p.inFlight === true && !p.inFlightSince;
+}
+
 export function claimIsReclaimable(heldCreatedAt: string, pledge: Pledge | null, asOf: number = Date.now()): boolean {
+  // The row comes first, before anything derived from the clock. This is the one site of the four that had
+  // to be reordered rather than extended, and it has two clock-based exits, not one: the age check, and the
+  // unreadable-timestamp fallback above it. Either would hand away an unresolved pledge's slot without ever
+  // looking at the pledge -- and a claim whose own createdAt is malformed is exactly the row least worth
+  // trusting a clock about. Asking the row first is behaviour-preserving for every other input: an old
+  // pledged or sent row, an old settled row and an old orphan all still reclaim as before.
+  if (pledge && pledgeUnresolved(pledge)) return false;
+  if (pledge && pledge.status !== 'pledged' && pledge.status !== 'sent') return true;
   const heldSince = Date.parse(heldCreatedAt);
   if (!Number.isFinite(heldSince)) return true;
   const age = asOf - heldSince;
@@ -597,6 +735,11 @@ export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirme
     if (p.status === 'confirmed') {
       confirmed += p.amount;
     } else if (p.status === 'pledged' || p.status === 'sent') {
+      // An unresolved row keeps its reservation at any age. It is also what keeps the owner being told
+      // something is waiting: the dashboard's prompt and the refresh rotation that keeps it accurate are
+      // both derived from creditsPending, so releasing the capacity would silence the only signal that
+      // gets these settled.
+      if (pledgeUnresolved(p)) { pending += p.amount; continue; }
       const created = Date.parse(p.createdAt);
       if (!Number.isFinite(created) || created >= cutoff) pending += p.amount;
     }
@@ -616,6 +759,9 @@ export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirme
  */
 export function pledgeExpired(p: Pledge, asOf: number = Date.now()): boolean {
   if (p.status !== 'pledged' && p.status !== 'sent') return false;
+  // Unreachable for these rows today -- the only caller guards the transition to `sent`, which an already
+  // sent row cannot take -- but the rule belongs in the predicate rather than depending on that staying true.
+  if (pledgeUnresolved(p)) return false;
   const created = Date.parse(p.createdAt);
   if (!Number.isFinite(created)) return false;
   return created < asOf - PENDING_RESERVATION_DAYS * 24 * 60 * 60 * 1000;
@@ -626,6 +772,10 @@ export function activePledgesBy(pledges: Pledge[], donorId: string, asOf: number
   return pledges.filter((p) => {
     if (p.donorId !== donorId) return false;
     if (p.status !== 'pledged' && p.status !== 'sent') return false;
+    // Holds the donor's single live-pledge slot for as long as it is unresolved. This is the site the
+    // duplicate transfer actually came through: with the row aged out, the donor could open a second pledge
+    // on the same project and send the credits again.
+    if (pledgeUnresolved(p)) return true;
     const created = Date.parse(p.createdAt);
     return !Number.isFinite(created) || created >= cutoff;
   });

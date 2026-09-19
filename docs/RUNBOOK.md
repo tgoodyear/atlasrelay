@@ -62,6 +62,9 @@ Owner-only subscription deployment. Bicep is the only writer of the zone.
 4. Put that token in `dnsApexTxtValues` in `infra/main.bicepparam` and re-run the
    subscription deployment, so a later deployment does not remove it.
 
+`dev.atlasrelay.org` is not bound by that script. It is declared on the dev site and comes back
+with it; see [Dev environment](#dev-environment).
+
 ### A hostname stuck at "Validating"
 
 A hostname bound with the wrong validation method never recovers on its own, and the method
@@ -100,15 +103,79 @@ This was run against `www.atlasrelay.org` on 2026-09-17. Rebinding with `cname-d
 returned `Ready` immediately, because the CNAME it validates against was already published, and
 the DigiCert certificate was serving within a minute. Both hostnames now answer 200 over TLS.
 
-The zone deliberately ships no apex A or ALIAS record. Static Web Apps creates that record
-itself during apex validation, because only the service knows the target to point at; until
-then the apex does not resolve while `www` already does. The binding script refuses to run
-unless all four nameservers are delegated, and fails loudly if a binding is rejected.
+The apex routes from a plain A record, and the zone ships one. DNS forbids a CNAME at the apex
+and an Azure DNS alias record cannot target a static site, so `infra/dns.bicep` declares an A
+record built from the site's `stableInboundIP`. The TXT token only validates the hostname; it
+does not route it, and Static Web Apps creates no record of its own. This paragraph said the
+reverse until 2026-09-18, which would send anyone debugging an apex outage to the service instead
+of to the zone, and might get the A record deleted as service-owned clutter. The binding script
+refuses to run unless all four nameservers are delegated, and fails loudly if a binding is
+rejected.
 
 The zone already publishes a `www` CNAME to the site, and records stating the domain sends
 no mail (RFC 7505 null MX, `v=spf1 -all`, DMARC `p=reject`). Remove `rejectMail` if the
 domain ever needs to send email. Azure DNS costs about $0.50 per zone per month plus
 query charges.
+
+## Dev environment
+
+`infra/dev.bicepparam` deploys a second, isolated copy of `app.bicep` into the same resource
+group: `swa-internetresearch-dev`, its own storage account and tables, no App Insights, and
+`dev.atlasrelay.org` bound to it. Nothing deploys it automatically. The Infrastructure workflow
+deploys `infra/app.bicepparam` and nothing else, so dev is created and refreshed by hand, as a
+subscription Owner:
+
+```bash
+az deployment group create \
+  --name "dev-$(date +%Y%m%d%H%M%S)" \
+  --resource-group internetresearch \
+  --template-file infra/app.bicep \
+  --parameters infra/dev.bicepparam
+```
+
+As an Owner, not as CI: the CI role denies `Microsoft.Web/staticSites/customDomains/write`, so
+the binding in this file would fail if a workflow ever deployed it. That is deliberate, and if
+CI is ever given the dev environment to deploy, the denial is the thing to reconsider, carefully
+enough that production stays out of reach.
+
+The subdomain takes two resources in two different deployments at two different scopes:
+
+1. the `dev` CNAME, declared in `infra/dns.bicep` from `devStaticWebAppDefaultHostname` in
+   `infra/main.bicepparam`, deployed by `scripts/bootstrap.sh`. That hostname is pasted in by
+   hand, because the dev site is not created by the subscription deployment and so is not one of
+   its outputs;
+2. the binding, declared on the site itself as `customDomain` in `infra/dev.bicepparam`.
+
+An existing dev site redeploys in one pass. A dev site created for the first time, or recreated
+after a delete, comes up with a new `defaultHostname` and needs three steps:
+
+```bash
+# 1. deploy dev. The binding fails while the CNAME still points at the old site; everything else applies.
+az deployment group create -g internetresearch --template-file infra/app.bicep --parameters infra/dev.bicepparam
+# 2. read the new hostname, put it in devStaticWebAppDefaultHostname in infra/main.bicepparam,
+#    and re-run the subscription deployment so the CNAME follows it.
+az staticwebapp show -n swa-internetresearch-dev -g internetresearch --query defaultHostname -o tsv
+./scripts/bootstrap.sh
+# 3. deploy dev again. The binding now validates.
+az deployment group create -g internetresearch --template-file infra/app.bicep --parameters infra/dev.bicepparam
+```
+
+The dev deployment runs twice because Static Web Apps validates a `cname-delegation` binding
+against public DNS rather than against the zone resource, so the record has to be published, and
+its negative cache expired (the zone's SOA minimum is 300 s), before the binding can succeed. If
+dev is being torn down for good, clear `customDomain` in `infra/dev.bicepparam` and
+`devStaticWebAppDefaultHostname` in `infra/main.bicepparam` together: a CNAME left behind
+resolves a name that still works to a site that no longer exists.
+
+### What-if always reports the custom domain as modified
+
+Against a dev deployment, `az deployment group what-if` shows the `customDomains` resource as
+`Modify` on every run: `validationMethod` created, `expiresOn` and `isDefault` deleted. Nothing
+is changing. `validationMethod` is write-only and never comes back from a GET, so what-if reads
+it as new, while `expiresOn` (the certificate expiry) and `isDefault` are set by the service, so
+what-if reads them as removed. The PUT is the same no-op as re-running `az staticwebapp hostname
+set` against a binding that already exists. The Infrastructure workflow's what-if never prints
+this, because `infra/app.bicepparam` binds nothing.
 
 ## Operations
 

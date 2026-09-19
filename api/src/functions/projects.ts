@@ -1,9 +1,9 @@
 import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
-import { handle, HttpError, json, readJson } from '../lib/http';
+import { describeErrorForLog, handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Project, createProject, ensureUser, getProject, getUser, listPledges, listProjects, listProjectsByOwner, nextResultsPostedAt, now, patchProject, totals } from '../lib/store';
-import { MAX_OPEN_PROJECTS_PER_USER } from '../lib/pledging';
+import { Project, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, totals } from '../lib/store';
+import { MAX_OPEN_PROJECTS_PER_USER, PROJECT_POST_INTERVAL_MS, SurplusClose, capSettlement, surplusOpenProjects } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
 
@@ -165,24 +165,38 @@ function readProjectFields(body: Record<string, unknown>, required: boolean): Pa
  * A count read before writing cannot enforce a limit: concurrent creates, concurrent reopens, and
  * an edit form that submits status "open" on every save can each pass the check and then all
  * write. Settling afterwards works because every racer re-reads and sees the others, and ids are
- * time-prefixed so they all pick the same surplus set. Returns true when the caller's own project
- * was the surplus, so the caller can report that rather than pretending the write stood.
+ * time-prefixed so they all pick the same surplus set.
  *
  * Closing a surplus row is best effort. Failing here after the row is already written would leave
- * the account over the cap AND fail the request, and the next write settles it again anyway.
+ * the account over the cap AND fail the request, and the next write settles it again anyway. What
+ * the caller gets back is therefore read from the rows, never from the set this meant to close:
+ * the two agree only when every write landed, which is exactly what the best-effort catch gives
+ * up. See capSettlement for what shipped when they were treated as the same thing.
  */
-async function settleOpenProjectCap(ownerId: string, ownId: string): Promise<boolean> {
-  const mine = (await listProjectsByOwner(ownerId)).filter((x) => x.status === 'open');
-  if (mine.length <= MAX_OPEN_PROJECTS_PER_USER) return false;
-  const surplus = mine.sort((a, b) => (a.id < b.id ? -1 : 1)).slice(MAX_OPEN_PROJECTS_PER_USER);
+async function settleOpenProjectCap(ownerId: string, ownId: string): Promise<{ ownClosed: boolean; unclosed: number }> {
+  const surplus = surplusOpenProjects(await listOpenProjectsByOwner(ownerId), MAX_OPEN_PROJECTS_PER_USER);
+  const closes: SurplusClose[] = [];
   for (const extra of surplus) {
     // Only the status: these rows were read a moment ago and a pledge recompute or an owner edit
     // may have landed since, so writing a whole snapshot back would revert it.
-    await patchProject(extra.id, { status: 'closed' }).catch((err) => {
-      console.error(`Could not close surplus project ${extra.id}:`, err instanceof Error ? err.message : err);
-    });
+    let after: Project | null;
+    try {
+      after = await patchProject(extra.id, { status: 'closed' });
+    } catch (err) {
+      console.error(`Could not close surplus project ${extra.id}:`, describeErrorForLog(err));
+      // Ask storage what is stored rather than reading the throw as "the row is untouched". A
+      // merge that failed on the way back has still applied, and this is the same rule the pledge
+      // path settled on: read the row, not the exception.
+      after = await getProject(extra.id).catch(() => null);
+    }
+    closes.push({ id: extra.id, closed: after?.status === 'closed' });
   }
-  return surplus.some((x) => x.id === ownId);
+  return capSettlement(closes, ownId);
+}
+
+/** One line for the log when the settlement left an account over the cap. */
+function overCapNote(unclosed: number): string {
+  return `Open-project cap: ${unclosed} surplus project(s) could not be closed, so this account is over the cap until its next create or reopen settles them.`;
 }
 
 app.http('projects-create', {
@@ -200,6 +214,28 @@ app.http('projects-create', {
 
     const body = await readJson(req);
     const fields = readProjectFields(body, true);
+
+    // Take the posting window before writing the row, and after validating the body so that a
+    // rejected draft does not spend it.
+    //
+    // The cap below limits open projects, not rows, and it closes the surplus itself, so a loop of
+    // POSTs needs no close step to leave a permanent row per request. Nothing prunes those rows,
+    // and every create, reopen and profile deletion scans the whole projects partition to count an
+    // owner's open projects, so one account could grow the work every other account's writes do.
+    // This is a rate, not a total: it does not shrink a table already grown, and pruning closed
+    // projects is still the only thing that would.
+    //
+    // Held as a row rather than checked as a count, for the reason the pledge claim spells out and
+    // this very cap had to learn twice: a burst of concurrent posts all read the old stamp before
+    // any of them writes, and all proceed.
+    //
+    // A post the cap refuses below has still spent the window, so an owner who frees a slot and
+    // reposts at once may wait the interval out. Giving the window back on refusal would add a
+    // release that can itself fail, for a case where the owner has something to do first anyway.
+    if (!(await acquireProjectPostWindow(user.id, PROJECT_POST_INTERVAL_MS))) {
+      throw new HttpError(429, `Projects can be posted once every ${Math.round(PROJECT_POST_INTERVAL_MS / 1000)} seconds per account. Try again shortly.`);
+    }
+
     const ts = now();
     const project: Project = {
       id: newId(),
@@ -241,14 +277,23 @@ app.http('projects-create', {
       throw new HttpError(409, 'Your profile is no longer available, so this project was not published.');
     }
 
-    // The cap check above reads before writing, so simultaneous requests can all pass it. Settle it
-    // now the row is visible: re-read, and if this owner is over the cap, the newest projects
-    // close themselves back down to it. Ids are time-prefixed, so the newest row always sees every
-    // older one and every racer reaches the same verdict without coordination. Unlike a transfer,
-    // nothing irreversible has happened, so closing is a complete remedy.
-    if (await settleOpenProjectCap(user.id, project.id)) {
+    // Nothing before this write could have enforced the cap: simultaneous requests can all pass a
+    // count read before writing. Settle it now the row is visible: re-read, and if this owner is
+    // over the cap, the newest projects close themselves back down to it. Ids are time-prefixed, so
+    // the newest row always sees every older one and every racer reaches the same verdict without
+    // coordination. Unlike a transfer, nothing irreversible has happened, so closing is a complete
+    // remedy.
+    //
+    // Refuse only when this project was really closed. If its close failed, the row is open and
+    // publicly listed, and 201 is the true answer: telling the owner their post was refused while
+    // the site serves it leaves them with no id, no link, and a project they do not know they have.
+    // The account then sits one over a soft anti-spam limit of three until its next create or
+    // reopen re-derives the surplus, which costs nobody anything visible.
+    const settled = await settleOpenProjectCap(user.id, project.id);
+    if (settled.ownClosed) {
       throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
     }
+    if (settled.unclosed > 0) console.error(overCapNote(settled.unclosed));
 
     return json({ project: publicProject(project) }, 201);
   }),
@@ -320,13 +365,12 @@ app.http('projects-update', {
     // count check above reads before writing, so two reopens can both pass it, and the edit form
     // submits status "open" on every save, which can reopen a row the creation settlement had just
     // closed. Neither is caught by a preflight; both are caught here.
-    if (updated.status === 'open' && (await settleOpenProjectCap(p.userId, id))) {
-      const reclosed = await getProject(id);
-      return json(
-        { project: publicProject(reclosed ?? updated) },
-        200,
-        {},
-      );
+    if (updated.status === 'open') {
+      const settled = await settleOpenProjectCap(p.userId, id);
+      if (settled.unclosed > 0) console.error(overCapNote(settled.unclosed));
+      // Answer from the row either way. This path already did: it re-read after settling rather
+      // than describing what it had planned, which is the shape the create path was missing.
+      if (settled.ownClosed) return json({ project: publicProject((await getProject(id)) ?? updated) });
     }
 
     return json({ project: publicProject(updated) });

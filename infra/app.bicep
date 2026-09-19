@@ -52,6 +52,13 @@ param storageKeyIndex int = 0
 @description('Extra app settings merged into the managed-functions configuration. Bicep is the only writer of app settings.')
 param additionalAppSettings object = {}
 
+@description('''Hostname to bind to this site, e.g. dev.atlasrelay.org. Empty binds nothing.
+Its CNAME must already resolve in public DNS when this deployment runs: Static Web Apps validates
+a cname-delegation binding by querying public DNS, not by reading the zone resource that declares
+the record (infra/dns.bicep). Production hostnames are deliberately not bound from here, and
+infra/app.bicepparam says why.''')
+param customDomain string = ''
+
 @description('Tags applied to every resource')
 param tags object = {}
 
@@ -145,6 +152,30 @@ resource swaSettings 'Microsoft.Web/staticSites/config@2024-04-01' = {
   parent: swa
   name: 'appsettings'
   properties: union(baseAppSettings, monitoringAppSettings, additionalAppSettings)
+}
+
+// The second half of a custom domain. The record is in infra/dns.bicep; the binding is here, on
+// the site that answers for the name. Only the record was ever declared, so dev.atlasrelay.org
+// resolved to a site that returned 404 for it unless somebody remembered to run
+// `az staticwebapp hostname set` after every rebuild (issue #24).
+//
+// The binding is declared on the site rather than beside the record in dns.bicep because the
+// command that rebuilds the dev environment is a resource-group deployment of this template with
+// infra/dev.bicepparam. In dns.bicep the binding would need an Owner-only subscription deployment
+// as well, so it would still be a step to remember, just a differently placed one.
+//
+// cname-delegation is the only method that can be declared. The apex uses dns-txt-token, where
+// the service issues a token that has to reach DNS before the binding validates, so the binding
+// cannot be part of the deployment that asks for it; scripts/bind-custom-domain.sh does that.
+// Nothing in Bicep can express the real ordering constraint either, which is not
+// CNAME-before-binding but registrar-delegation-before-binding. See docs/RUNBOOK.md, which also
+// records why what-if reports this resource as modified on every single run.
+resource swaCustomDomain 'Microsoft.Web/staticSites/customDomains@2024-04-01' = if (!empty(customDomain)) {
+  parent: swa
+  name: customDomain
+  properties: {
+    validationMethod: 'cname-delegation'
+  }
 }
 
 output storageAccountName string = storage.name
