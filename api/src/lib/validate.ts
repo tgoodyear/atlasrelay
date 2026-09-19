@@ -48,7 +48,12 @@ export function httpsUrl(input: Record<string, unknown>, key: string): string | 
   } catch {
     throw new HttpError(400, `${key} must be a valid URL`);
   }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new HttpError(400, `${key} must start with https://`);
+  // https only, which is what this function is called, what its error says, and what the fields using it
+  // are documented as accepting. It accepted http as well, so the name, the message and the behaviour all
+  // disagreed -- and a project could carry an http homepage, repo or paper link that the docs promised was
+  // https. Tightening it rather than renaming, because the docs and the message are the intent and the
+  // behaviour was the accident.
+  if (parsed.protocol !== 'https:') throw new HttpError(400, `${key} must start with https://`);
   return parsed.toString();
 }
 

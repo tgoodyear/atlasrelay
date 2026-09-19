@@ -12,6 +12,14 @@ param stagingEnvironmentPolicy = 'Disabled'
 param enableApplicationInsights = false
 param storageKeyIndex = 0
 param additionalAppSettings = {}
+// dev.atlasrelay.org, bound here so it comes back with the environment instead of being something
+// to remember after every rebuild. The matching CNAME is declared in infra/dns.bicep from
+// devStaticWebAppDefaultHostname in infra/main.bicepparam, which is a different deployment at a
+// different scope, so a dev site recreated with a new defaultHostname needs the two passes
+// docs/RUNBOOK.md describes: the binding validates against public DNS and will fail the
+// deployment while that record still points at the old site. Clear this and that hostname
+// together if dev is ever torn down for good.
+param customDomain = 'dev.atlasrelay.org'
 param tags = {
   project: 'atlas-credit-exchange'
   repo: 'tgoodyear/internetresearch'

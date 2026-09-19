@@ -45,6 +45,16 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `affiliation`, `url` | Optional public profile fields. |
 | `createdAt`, `updatedAt` | ISO timestamps. |
 
+### Posting window (`users` table, PK `project-post`, RK `<swa userId>`)
+
+One row per account that has posted a project, holding `lastProjectAt`. It is taken before the
+project row is written, by creating the row or by replacing it conditionally on its version, so a
+burst of concurrent posts has exactly one winner rather than all of them passing a count. It sits
+in its own partition rather than on the user row, because a second writer there would collide with
+the conditional replace `PUT /api/me` uses and make a concurrent profile save report the profile as
+gone. `DELETE /api/me` removes it with the profile: it is keyed by account id, so keeping it would
+retain an identifier of an account that asked to be removed.
+
 ### Project (`projects` table, PK `project`, RK `<id>`)
 
 | Field | Notes |
@@ -56,7 +66,13 @@ credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 | `status` | `open` \| `closed`. `funded` is derived and does not stop pledges. Whether a project is *listed* depends on confirmed credits alone, so a pending pledge can never hide it. A pending pledge reserves capacity for `PENDING_RESERVATION_DAYS` (14) and then stops counting, so an abandoned pledge releases what it held. |
 | `tags` | Subset of: ping, traceroute, dns, sslcert, http, ntp, ipv4, ipv6, anchors, other. |
 | `affiliation`, `homepageUrl`, `repoUrl`, `paperUrl`, `deadline` | Optional. |
+| `resultsSummary` (≤4000, plain text), `resultsUrl` | What came of the work, posted by the owner after the credits were spent. Kept separate from `paperUrl`, which is the proposal that justified the ask. Both public. |
+| `resultsPostedAt` | ISO, stamped the first time either of the two above goes non-empty and never cleared afterwards, so a write-up that is later edited away does not retract the fact that the researcher reported. `hasResults` is derived from it in `publicProject`, and the listing filter, the card pill and the home-page `projectsWithResults` count all read that one flag. Absent on rows written before the fields existed, which reads as empty. |
 | `createdAt`, `updatedAt` | |
+
+Whether a project reported back is deliberately not a `status` value. Whether it still wants
+credits and whether it published anything are orthogonal, and a closed project that reported is a
+different thing from a closed one that did not.
 
 ### Pledge (`pledges` table, PK `<projectId>`, RK `<id>`)
 
@@ -158,7 +174,18 @@ that did not persist is reported as a warning on a pledge the owner can still co
 ### Abuse limits
 
 - An account may hold 3 open projects at once. Posting is free, and every project hands its
-  owner's contact address to anyone who starts a pledge. Closing one frees a slot.
+  owner's contact address to anyone who starts a pledge. Closing one frees a slot. The cap is
+  settled after the write rather than checked before it, because a count read before a write cannot
+  enforce anything, and closing the surplus is best effort: what the poster is told comes from the
+  rows the settlement observed, so a close that did not land is reported as a project that is live
+  rather than as a post that was refused. An account can therefore sit one over the cap until its
+  next create or reopen re-derives the surplus.
+- An account may post one project a minute. The cap above limits open projects, not rows, and it
+  closes the surplus itself, so a loop of posts needs no close step to leave a permanent row per
+  request -- and every create, reopen and profile deletion counts an owner's open projects by
+  scanning the whole projects partition. The limit is held as a row, for the same reason the pledge
+  claim is. It bounds the rate, not the total: nothing prunes closed projects, so a table already
+  grown stays grown.
 - A donor may hold one live pledge per project. Without it, one account could reserve a project
   repeatedly and re-read the owner's contact address at will. The limit is held by a row in the
   `claims` table, one per (project, donor), taken before anything else happens. Reading the pledge
@@ -199,9 +226,9 @@ name, so `publicName()` reduces anything email-shaped to its local part before i
 | `GET /api/me` | user | Profile + client principal. Creates the user row on first call. |
 | `PUT /api/me` | user | Update `displayName`, `atlasEmail`, `affiliation`, `url`. |
 | `DELETE /api/me` | user | Delete the profile, including the stored RIPE NCC Access email. |
-| `GET /api/projects?status=open&tag=dns&q=` | public | List. Never includes emails. |
+| `GET /api/projects?status=open&tag=dns&q=` | public | List. `status` is `open`, `funded`, `closed`, `results` or `all`. Never includes emails. |
 | `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message). |
-| `POST /api/projects` | user (needs `atlasEmail`) | Create. |
+| `POST /api/projects` | user (needs `atlasEmail`) | Create. 429 when the account posted less than a minute ago; 409 when the open-project cap closed this project again. |
 | `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. |
 | `GET /api/projects/{id}/pledges` | owner or donor | Owner: all pledges. Donor: own. |
 | `POST /api/projects/{id}/pledges` | user, not owner | `{amount, method, message, anonymous?, apiKey?}`. `anonymous` must be a real boolean when present; it withholds the donor's name from public views. Returns pledge and, for `manual`, the recipient email. |

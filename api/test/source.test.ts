@@ -61,6 +61,19 @@ test('no other backslash escapes in source outside of string literals we control
   assert.deepEqual(offenders, [], `\n${offenders.join('\n')}\n`);
 });
 
+test('the post limiter takes its window before the project row is written', () => {
+  // Order is the enforcement. Taking the window after the write would make it a count read before
+  // a write dressed up as a row: a burst of concurrent posts would each write a project and only
+  // then discover they were too fast, which is the same defect the open-project cap has now been
+  // caught by twice and the reason the pledge claim is taken first.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'projects.ts'), 'utf8');
+  const window = src.indexOf('acquireProjectPostWindow(');
+  const write = src.indexOf('await createProject(');
+  assert.ok(window > 0, 'projects.ts no longer takes a posting window');
+  assert.ok(write > 0, 'projects.ts no longer creates project rows');
+  assert.ok(window < write, 'the posting window is taken before the project row is written');
+});
+
 test('the pledge handler decides a transfer was issued before it issues one', () => {
   // The flag gates a blanket "nothing was sent" onto every error the handler raises above it.
   // Setting it after the POST rather than before would extend that promise over the POST itself,
@@ -72,4 +85,23 @@ test('the pledge handler decides a transfer was issued before it issues one', ()
   assert.ok(flag > 0, 'pledges.ts no longer marks when a transfer has been issued');
   assert.ok(post > 0, 'pledges.ts no longer calls transferCredits');
   assert.ok(flag < post, 'the transfer is issued before the handler stops promising nothing was sent');
+});
+
+test('the pledge handler records the uncertainty before it can be caused', () => {
+  // The record of "we do not know whether the credits moved" has to be written before the POST, not
+  // after. Written after, it can only exist if the handler survives the very failure it describes, and a
+  // process that dies between the POST and that write leaves the row saying `pledged` -- whose meaning is
+  // that nothing was sent. Ordering is the whole guarantee, exactly as it is for transferIssued, so assert
+  // it in the source the same way.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const marker = src.indexOf('pledge.transferUncertain = true;');
+  const post = src.indexOf('await transferCredits(');
+  assert.ok(marker > 0, 'pledges.ts no longer marks a transfer uncertain before issuing it');
+  assert.ok(post > 0, 'pledges.ts no longer calls transferCredits');
+  assert.ok(marker < post, 'the uncertainty is recorded before the transfer that may cause it');
+
+  // And it must be narrowed on success, or every completed transfer stores confirmed-and-uncertain and
+  // the "Transferred via API" badge disappears from every pledge on the site.
+  const cleared = src.indexOf('pledge.transferUncertain = false;');
+  assert.ok(cleared > post, 'a confirmed transfer must clear the pessimistic marker');
 });

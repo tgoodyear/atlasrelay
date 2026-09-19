@@ -1,5 +1,5 @@
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal } from './pledging';
-import { Pledge, Project, User } from './store';
+import { Pledge, Project, User, donorMayCancelApiPledge } from './store';
 
 // Any '@' at all, not just a dotted domain: alice@localhost is still an address.
 const EMAIL_SHAPED = /@/;
@@ -63,6 +63,13 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
     maxCredits: maxCredits(p.creditsRequested),
     // Listing and stats key off confirmed credits alone, so a reservation cannot hide a project.
     open: p.status === 'open' && acceptsMorePledges(p.creditsRequested, confirmed),
+    // The owner has posted a write-up. A plain Boolean coercion and nothing else, deliberately:
+    // this function runs on the transfer path, where pledges.ts returns publicProject(updated)
+    // after the credits have already moved, so anything here that can throw turns a completed
+    // transfer into a 500 in the donor's browser. That is the failure the Atlas timeouts were
+    // retuned to prevent, and it would be careless to reintroduce it over a badge. No Date.parse,
+    // no new URL(), no truncation: the row is whatever storage holds and this stays total over it.
+    hasResults: Boolean(p.resultsPostedAt),
   };
 }
 
@@ -114,6 +121,11 @@ export function privatePledge(p: Pledge) {
     transactionUrl: p.transactionUrl,
     transactionId: p.transactionId,
     transferredAt: p.transferredAt,
+    // Whether this pledge's own donor may withdraw it. Derived here from the same predicate the update
+    // handler enforces, because the page cannot work it out for itself: the rule turns on inFlight and
+    // inFlightSince, and neither is published. Without it the project page offered a Cancel button that
+    // always came back 409, which is how the donor learned the rule.
+    donorMayCancel: p.method === 'manual' || donorMayCancelApiPledge(p),
   };
 }
 

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { fmtDate, type Project } from '../lib/api';
 import Progress from './Progress';
-import { StatusPill, TagPills } from './Pills';
+import { ResultsPill, StatusPill, TagPills } from './Pills';
 
 export default function ProjectCard({ project }: { project: Project }) {
   return (
@@ -9,7 +9,10 @@ export default function ProjectCard({ project }: { project: Project }) {
       <div className="card-body">
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'flex-start' }}>
           <h3>{project.title}</h3>
-          <StatusPill project={project} />
+          <div className="pills" style={{ flexShrink: 0 }}>
+            <StatusPill project={project} />
+            {project.hasResults && <ResultsPill />}
+          </div>
         </div>
         <div className="byline">
           {project.ownerName}
