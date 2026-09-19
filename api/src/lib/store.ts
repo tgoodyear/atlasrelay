@@ -479,7 +479,13 @@ export function pledgeUnresolved(p: Pledge): boolean {
  * while every API pledge written by current code is created with it true. Requiring true therefore admits
  * only rows this code wrote, which are the only ones whose empty marker means what it says.
  */
-export function donorMayCancelApiPledge(p: Pledge): boolean {
+export function donorMayCancelApiPledge(p: Pledge, asOf: number = Date.now()): boolean {
+  // The in-flight window is part of the rule, not a separate concern. pledges-update refuses any action on
+  // an in-flight pledge before it reaches the guard this predicate backs, so leaving it out here offered a
+  // Cancel button on exactly the rows the handler rejects -- a fresh API pledge, in the seconds between its
+  // row being written and the grace window lapsing. That is the mismatch this predicate was extracted to
+  // end, reappearing one condition further in.
+  if (pledgeInFlight(p, asOf)) return false;
   return p.status === 'pledged' && p.inFlight === true && !p.inFlightSince;
 }
 
