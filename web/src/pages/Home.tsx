@@ -39,7 +39,7 @@ export default function Home() {
             </div>
             <div className="stat-tile">
               <div className="value">{stats ? stats.openProjects : '—'}</div>
-              <div className="label">open projects · {stats ? stats.fundedProjects : '—'} funded</div>
+              <div className="label">open {stats?.openProjects === 1 ? 'project' : 'projects'} · {stats ? stats.fundedProjects : '—'} funded</div>
             </div>
             {/* Read against the funded count above it. The pair is the whole point: a site that
                 moves credits and never hears back is the thing the RIPE Atlas list keeps
@@ -47,7 +47,7 @@ export default function Home() {
                 while the second one is far behind the first. */}
             <div className="stat-tile">
               <div className="value">{stats ? stats.projectsWithResults : '—'}</div>
-              <div className="label">projects that posted results</div>
+              <div className="label">{stats?.projectsWithResults === 1 ? 'project' : 'projects'} that posted results</div>
             </div>
           </div>
         </div>
