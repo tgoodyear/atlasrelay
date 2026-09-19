@@ -2,7 +2,7 @@ import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
 import { describeErrorForLog, handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Project, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, now, patchProject, totals } from '../lib/store';
+import { Project, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, totals } from '../lib/store';
 import { MAX_OPEN_PROJECTS_PER_USER, PROJECT_POST_INTERVAL_MS, SurplusClose, capSettlement, surplusOpenProjects } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
@@ -95,6 +95,10 @@ app.http('projects-list', {
     if (status === 'open') projects = projects.filter((p) => p.open);
     else if (status === 'funded') projects = projects.filter((p) => p.funded);
     else if (status === 'closed') projects = projects.filter((p) => p.status === 'closed');
+    // Filtered on the derived flag rather than on the summary text, for the same reason the stats
+    // count it that way: whether a project reported is a fact about the row's history, not about
+    // how much text happens to be in it right now.
+    else if (status === 'results') projects = projects.filter((p) => p.hasResults);
     if (tag) projects = projects.filter((p) => (p.tags as string[]).includes(tag));
     if (q) projects = projects.filter((p) => `${p.title} ${p.summary} ${p.affiliation} ${p.ownerName}`.toLowerCase().includes(q));
     if (sort === 'need') projects.sort((a, b) => b.remaining - a.remaining);
@@ -142,7 +146,11 @@ function readProjectFields(body: Record<string, unknown>, required: boolean): Pa
   if (t !== undefined) out.tags = t;
   const affiliation = str(body, 'affiliation', { max: 120 });
   if (affiliation !== undefined) out.affiliation = affiliation;
-  for (const key of ['homepageUrl', 'repoUrl', 'paperUrl'] as const) {
+  // Half the length of description: this is what came out, not the proposal again, and the whole
+  // row is served in full on the anonymous listing, which has no select projection yet (#19).
+  const resultsSummary = str(body, 'resultsSummary', { max: 4000 });
+  if (resultsSummary !== undefined) out.resultsSummary = resultsSummary;
+  for (const key of ['homepageUrl', 'repoUrl', 'paperUrl', 'resultsUrl'] as const) {
     const v = httpsUrl(body, key);
     if (v !== undefined) out[key] = v;
   }
@@ -246,6 +254,12 @@ app.http('projects-create', {
       repoUrl: fields.repoUrl ?? '',
       paperUrl: fields.paperUrl ?? '',
       deadline: fields.deadline ?? '',
+      resultsSummary: fields.resultsSummary ?? '',
+      resultsUrl: fields.resultsUrl ?? '',
+      // The form does not offer these until the project exists, but the route accepts them, and a
+      // write-up rendering on the page while hasResults stayed false would put the project page
+      // and the listing filter into open disagreement. Same rule as the edit path, one call.
+      resultsPostedAt: nextResultsPostedAt('', fields, ts),
       moderationClosed: false,
       createdAt: ts,
       updatedAt: ts,
@@ -318,11 +332,20 @@ app.http('projects-update', {
       // settlement rather than a count here, for the same reason.
     }
 
+    // Stamped from the row this request already read, and only when it actually changes, so an
+    // ordinary edit does not rewrite a column it has nothing to say about. nextResultsPostedAt
+    // holds the write-once rule; see it for why two racing PATCHes need no conditional write here.
+    const resultsPostedAt = nextResultsPostedAt(project.resultsPostedAt, fields, now());
+
     // Merge rather than replace, and never send moderationClosed. An owner edit built on a row
     // read before an operator set the flag would otherwise write the takedown away, along with any
     // credit totals a pledge recompute changed in between. The check above stops a deliberate
     // reopen; this stops an accidental one.
-    const updated = await patchProject(id, { ...fields, ...(status ? { status } : {}) });
+    const updated = await patchProject(id, {
+      ...fields,
+      ...(status ? { status } : {}),
+      ...(resultsPostedAt !== project.resultsPostedAt ? { resultsPostedAt } : {}),
+    });
 
     // The flag can be set between the read above and this write, so re-check what actually landed
     // and put the project back if a takedown arrived while the edit was in flight.

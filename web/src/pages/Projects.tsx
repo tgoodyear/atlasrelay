@@ -40,6 +40,7 @@ export default function Projects() {
           <option value="open">Open</option>
           <option value="funded">Funded</option>
           <option value="closed">Closed</option>
+          <option value="results">With results</option>
           <option value="all">All</option>
         </select>
         <select value={sort} onChange={(e) => set('sort', e.target.value)} aria-label="Sort">

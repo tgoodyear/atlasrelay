@@ -41,6 +41,14 @@ export default function Home() {
               <div className="value">{stats ? stats.openProjects : '—'}</div>
               <div className="label">open projects · {stats ? stats.fundedProjects : '—'} funded</div>
             </div>
+            {/* Read against the funded count above it. The pair is the whole point: a site that
+                moves credits and never hears back is the thing the RIPE Atlas list keeps
+                complaining about, and the only way to say so is to publish both numbers, including
+                while the second one is far behind the first. */}
+            <div className="stat-tile">
+              <div className="value">{stats ? stats.projectsWithResults : '—'}</div>
+              <div className="label">projects that posted results</div>
+            </div>
           </div>
         </div>
       </section>

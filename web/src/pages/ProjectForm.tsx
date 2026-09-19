@@ -22,6 +22,8 @@ export default function ProjectForm() {
   const [repoUrl, setRepoUrl] = useState('');
   const [paperUrl, setPaperUrl] = useState('');
   const [deadline, setDeadline] = useState('');
+  const [resultsSummary, setResultsSummary] = useState('');
+  const [resultsUrl, setResultsUrl] = useState('');
   const [status, setStatus] = useState<'open' | 'closed'>('open');
   const [ready, setReady] = useState(!editing);
   const [saving, setSaving] = useState(false);
@@ -46,6 +48,8 @@ export default function ProjectForm() {
         setRepoUrl(project.repoUrl);
         setPaperUrl(project.paperUrl);
         setDeadline(project.deadline);
+        setResultsSummary(project.resultsSummary);
+        setResultsUrl(project.resultsUrl);
         setStatus(project.status);
         setReady(true);
       })
@@ -73,7 +77,10 @@ export default function ProjectForm() {
     e.preventDefault();
     setSaving(true);
     setError('');
-    const body = { title, summary, description, creditsRequested: credits, tags, affiliation, homepageUrl, repoUrl, paperUrl, deadline, ...(editing ? { status } : {}) };
+    // The results fields are sent only from the edit form, because that is the only place they are
+    // shown. Sending them empty on create would work -- the route stamps nothing for empty text --
+    // but a form should not post fields it never offered.
+    const body = { title, summary, description, creditsRequested: credits, tags, affiliation, homepageUrl, repoUrl, paperUrl, deadline, ...(editing ? { status, resultsSummary, resultsUrl } : {}) };
     try {
       const res = editing ? await api.updateProject(id!, body) : await api.createProject(body);
       navigate(`/projects/${res.project.id}`);
@@ -106,8 +113,8 @@ export default function ProjectForm() {
               htmlFor="credits"
               hint={
                 credits > 0
-                  ? `≈ ${pingsFor(credits)} ping results, or ${Math.floor(credits / 30).toLocaleString('en-US')} traceroutes. RIPE Atlas also caps how much any one account may spend per day, so a large request takes time to use; your own limit is shown on your credits page.`
-                  : 'Whole number. A ping result costs 3 credits, a traceroute 30. RIPE Atlas caps daily spending per account, so check your own limit before asking for a very large amount.'
+                  ? `About ${pingsFor(credits)} ping results, or ${Math.floor(credits / 30).toLocaleString('en-US')} traceroutes, at RIPE's base rates. What a measurement is billed comes from its own settings and can differ. RIPE Atlas also caps how much any one account may spend per day, so a large request takes time to use; your own limit is shown on your credits page.`
+                  : 'Whole number. At the base rates RIPE publishes, a ping result costs 3 credits and a traceroute 30, though what a measurement is billed depends on how it is set up. RIPE Atlas caps daily spending per account, so check your own limit before asking for a very large amount.'
               }
             >
               <input id="credits" type="number" min={1} max={1000000000} step={1} value={creditsRequested} onChange={(e) => setCreditsRequested(e.target.value)} required />
@@ -140,13 +147,27 @@ export default function ProjectForm() {
           <Field label="Paper or proposal" htmlFor="paper" hint="Optional. A preprint or proposal helps donors judge the work.">
             <input id="paper" type="url" value={paperUrl} onChange={(e) => setPaperUrl(e.target.value)} placeholder="https://" />
           </Field>
+          {/* Only when editing. A project being posted has nothing to report yet, and offering the
+              boxes at that point would invite people to describe what they intend to find. */}
           {editing && (
-            <Field label="Status" htmlFor="status" hint="Closed projects stop accepting pledges.">
-              <select id="status" value={status} onChange={(e) => setStatus(e.target.value as 'open' | 'closed')}>
-                <option value="open">Open</option>
-                <option value="closed">Closed</option>
-              </select>
-            </Field>
+            <>
+              <Field
+                label="Results"
+                htmlFor="results-summary"
+                hint={`${resultsSummary.length}/4000. What came of the work, for the donors who paid for it and for anyone deciding whether to. Plain text; blank lines make paragraphs. Leave it empty until you have something to say.`}
+              >
+                <textarea id="results-summary" maxLength={4000} value={resultsSummary} onChange={(e) => setResultsSummary(e.target.value)} style={{ minHeight: 120 }} />
+              </Field>
+              <Field label="Link to the results" htmlFor="results-url" hint="Optional. The RIPE Labs post, paper or dataset that came out. Different from the paper or proposal field above, which is what justified the ask.">
+                <input id="results-url" type="url" value={resultsUrl} onChange={(e) => setResultsUrl(e.target.value)} placeholder="https://" />
+              </Field>
+              <Field label="Status" htmlFor="status" hint="Closed projects stop accepting pledges.">
+                <select id="status" value={status} onChange={(e) => setStatus(e.target.value as 'open' | 'closed')}>
+                  <option value="open">Open</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </Field>
+            </>
           )}
           {error && <div className="alert alert-error">{error}</div>}
           <div className="form-actions">

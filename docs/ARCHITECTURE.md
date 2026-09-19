@@ -66,7 +66,13 @@ retain an identifier of an account that asked to be removed.
 | `status` | `open` \| `closed`. `funded` is derived and does not stop pledges. Whether a project is *listed* depends on confirmed credits alone, so a pending pledge can never hide it. A pending pledge reserves capacity for `PENDING_RESERVATION_DAYS` (14) and then stops counting, so an abandoned pledge releases what it held. |
 | `tags` | Subset of: ping, traceroute, dns, sslcert, http, ntp, ipv4, ipv6, anchors, other. |
 | `affiliation`, `homepageUrl`, `repoUrl`, `paperUrl`, `deadline` | Optional. |
+| `resultsSummary` (≤4000, plain text), `resultsUrl` | What came of the work, posted by the owner after the credits were spent. Kept separate from `paperUrl`, which is the proposal that justified the ask. Both public. |
+| `resultsPostedAt` | ISO, stamped the first time either of the two above goes non-empty and never cleared afterwards, so a write-up that is later edited away does not retract the fact that the researcher reported. `hasResults` is derived from it in `publicProject`, and the listing filter, the card pill and the home-page `projectsWithResults` count all read that one flag. Absent on rows written before the fields existed, which reads as empty. |
 | `createdAt`, `updatedAt` | |
+
+Whether a project reported back is deliberately not a `status` value. Whether it still wants
+credits and whether it published anything are orthogonal, and a closed project that reported is a
+different thing from a closed one that did not.
 
 ### Pledge (`pledges` table, PK `<projectId>`, RK `<id>`)
 
@@ -220,7 +226,7 @@ name, so `publicName()` reduces anything email-shaped to its local part before i
 | `GET /api/me` | user | Profile + client principal. Creates the user row on first call. |
 | `PUT /api/me` | user | Update `displayName`, `atlasEmail`, `affiliation`, `url`. |
 | `DELETE /api/me` | user | Delete the profile, including the stored RIPE NCC Access email. |
-| `GET /api/projects?status=open&tag=dns&q=` | public | List. Never includes emails. |
+| `GET /api/projects?status=open&tag=dns&q=` | public | List. `status` is `open`, `funded`, `closed`, `results` or `all`. Never includes emails. |
 | `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message). |
 | `POST /api/projects` | user (needs `atlasEmail`) | Create. 429 when the account posted less than a minute ago; 409 when the open-project cap closed this project again. |
 | `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. |

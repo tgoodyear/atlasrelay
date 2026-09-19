@@ -23,6 +23,13 @@ export interface Project {
   repoUrl: string;
   paperUrl: string;
   deadline: string;
+  /** What came of the work. paperUrl is the proposal that justified the ask; these are the result. */
+  resultsSummary: string;
+  resultsUrl: string;
+  /** When the owner first posted either of the two above. Never cleared once set. */
+  resultsPostedAt: string;
+  /** Derived server-side from resultsPostedAt. The pill, the filter and the count all read this. */
+  hasResults: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +88,7 @@ export interface Stats {
   creditsRequested: number;
   creditsTransferred: number;
   fundedProjects: number;
+  projectsWithResults: number;
 }
 
 export class ApiError extends Error {
@@ -181,7 +189,14 @@ export function fmtDate(iso: string): string {
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-/** Rough credit-to-measurement equivalents from the RIPE Atlas docs (3 credits per ping result). */
+/**
+ * Ping results a credit figure buys at the published base rate of 3 credits each.
+ *
+ * A base rate, not a price. RIPE bills per measurement from its own credits_per_result, which
+ * varies with how the measurement is set up: one-off pings have been observed at both 2 and 6.
+ * Every caller has to say so, because a number rendered bare reads as a quote, and overclaiming
+ * on the arithmetic is the same failure as overclaiming on what a transfer proved.
+ */
 export function pingsFor(credits: number): string {
   return fmtCompact(Math.floor(credits / 3));
 }

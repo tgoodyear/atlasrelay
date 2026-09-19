@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { privatePledge, publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
-import type { Pledge } from '../src/lib/store';
-import { projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
+import type { Pledge, Project } from '../src/lib/store';
+import { nextResultsPostedAt, projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
 import { bool } from '../src/lib/validate';
 import type { Tag } from '../src/lib/validate';
 
@@ -31,13 +31,21 @@ test('publicUser omits the sign-in handle entirely', () => {
   assert.equal(JSON.stringify(pub).includes('@'), false);
 });
 
+// One fixture, the same way the pledge factory below works. Every field of Project has to be
+// present for the type to be satisfied, so without this each test that cares about a single field
+// carries eight lines of scaffolding that say nothing, and a new field on Project means editing
+// all of them. Tests below override only what they are about.
+const project = (over: Partial<Project> = {}): Project => ({
+  id: 'j1', ownerId: 'o1', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
+  creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
+  affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
+  resultsSummary: '', resultsUrl: '', resultsPostedAt: '',
+  moderationClosed: false, createdAt: '', updatedAt: '',
+  ...over,
+});
+
 test('a project read with live totals releases an expired reservation', () => {
-  const p = {
-    id: 'p1', ownerId: 'o1', ownerName: 'Owner', title: 't', summary: 's', description: 'd',
-    creditsRequested: 1000, creditsConfirmed: 0, creditsPending: 100_000,
-    status: 'open' as const, tags: [], affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '',
-    deadline: '', moderationClosed: false, createdAt: '', updatedAt: '',
-  };
+  const p = project({ creditsRequested: 1000, creditsPending: 100_000 });
   // Cached counters say fully reserved, so nothing more can be pledged.
   assert.equal(publicProject(p).maxPledge, 0);
   // Expiry-aware totals from the read path release it.
@@ -68,12 +76,7 @@ test('a manual pledge is never an API transfer', () => {
 });
 
 test('an operator takedown flag is never published', () => {
-  const p = publicProject({
-    id: 'j1', ownerId: 'o1', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
-    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'closed', tags: [],
-    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
-    moderationClosed: true, createdAt: '', updatedAt: '',
-  });
+  const p = publicProject(project({ status: 'closed', moderationClosed: true }));
   assert.equal('moderationClosed' in p, false);
 });
 
@@ -90,13 +93,7 @@ test('a project patch stores tags the way the row reads them back', () => {
 });
 
 test('a project never publishes its storage row version', () => {
-  const p = publicProject({
-    id: 'j1', ownerId: 'o1', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
-    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
-    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
-    moderationClosed: false, etag: 'W/"datetime\'2026-09-18T04%3A00%3A00.0000000Z\'"',
-    createdAt: '', updatedAt: '',
-  });
+  const p = publicProject(project({ etag: 'W/"datetime\'2026-09-18T04%3A00%3A00.0000000Z\'"' }));
   assert.equal('etag' in p, false);
 });
 
@@ -119,12 +116,7 @@ test('a conditional project patch actually carries the row version', () => {
 test('an anonymous project carries no account identifier', () => {
   // The profile page tells people the account link is internal and that retained records show
   // only their chosen display name. That has to be true of the API, not just the wording.
-  const p = publicProject({
-    id: 'j1', ownerId: 'github|12345', ownerName: 'Alice', title: 't', summary: 's', description: 'd',
-    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
-    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
-    moderationClosed: false, createdAt: '', updatedAt: '',
-  });
+  const p = publicProject(project({ ownerId: 'github|12345' }));
   assert.equal('ownerId' in p, false);
   assert.equal(JSON.stringify(p).includes('github|12345'), false);
 });
@@ -201,4 +193,53 @@ test('an anonymous pledge still hides a sign-in address behind the name', () => 
   assert.equal(p.donorName, 'Anonymous');
   const named = publicPledge(pledge({ donorName: 'alice@example.org', anonymous: false }));
   assert.equal(named.donorName, 'alice');
+});
+
+test('a project says it has results only once the stamp is on the row', () => {
+  // hasResults is what the listing filter, the card pill and the home-page count all read, so the
+  // three of them agree only if they agree with this. Text alone is not enough: the stamp is the
+  // record that a report was made, and it is the only field of the three that is write-once.
+  assert.equal(publicProject(project()).hasResults, false);
+  assert.equal(publicProject(project({ resultsSummary: 'We measured 40 anchors.' })).hasResults, false);
+  assert.equal(publicProject(project({ resultsPostedAt: '2026-09-18T00:00:00.000Z' })).hasResults, true);
+  // Reported and then trimmed to nothing. The report still happened, and the date still says when.
+  assert.equal(publicProject(project({ resultsPostedAt: '2026-09-18T00:00:00.000Z', resultsSummary: '' })).hasResults, true);
+});
+
+test('publicProject survives a results row holding anything at all', () => {
+  // This function runs after the credits have moved: pledges.ts returns publicProject(updated) in
+  // the transfer response, so anything in here that can throw turns a completed transfer into a
+  // 500 in the donor's browser and invites them to send the same credits twice. Boolean coercion
+  // is total; a Date.parse or a new URL() on these three fields would not be. The row can hold
+  // whatever storage holds, including values no handler would ever write.
+  const nonsense = project({
+    resultsPostedAt: 'not a date at all',
+    resultsUrl: 'http://[',
+    resultsSummary: 'x'.repeat(10_000),
+  });
+  const p = publicProject(nonsense, { confirmed: 100, pending: 0 });
+  assert.equal(p.hasResults, true);
+  assert.equal(p.funded, true);
+});
+
+test('the results stamp records when the researcher reported, not when they last saved', () => {
+  // Both halves shipped wrong elsewhere in this codebase's history and both are one character
+  // away here. Restamping would turn the reporting date into the date of the most recent typo
+  // fix, which is the one number this feature exists to produce. Clearing on empty text would let
+  // a report be withdrawn leaving a funded project looking like it never reported at all.
+  const first = '2026-09-18T00:00:00.000Z';
+  const later = '2026-12-25T00:00:00.000Z';
+  assert.equal(nextResultsPostedAt('', { resultsSummary: 'We published on RIPE Labs.' }, first), first);
+  assert.equal(nextResultsPostedAt('', { resultsUrl: 'https://labs.ripe.net/x' }, first), first);
+  assert.equal(nextResultsPostedAt(first, { resultsSummary: 'We published on RIPE Labs, corrected.' }, later), first);
+  assert.equal(nextResultsPostedAt(first, { resultsSummary: '', resultsUrl: '' }, later), first);
+});
+
+test('an edit that says nothing about results does not stamp one', () => {
+  // readProjectFields returns only the keys the request actually sent, so a PATCH that changes a
+  // title arrives here with both fields undefined. Treating that as a report would mark every
+  // project on the site as having reported the next time its owner touched anything.
+  assert.equal(nextResultsPostedAt('', {}, '2026-09-18T00:00:00.000Z'), '');
+  // Sent, but sent empty. That is a project with no write-up, not a report of nothing.
+  assert.equal(nextResultsPostedAt('', { resultsSummary: '', resultsUrl: '' }, '2026-09-18T00:00:00.000Z'), '');
 });

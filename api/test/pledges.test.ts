@@ -202,13 +202,14 @@ test('the in-flight window is measured from the transfer, not from the row', () 
 });
 
 test('the home-page figures count what they claim to count', () => {
-  const p = (requested: number, confirmed: number, status = 'open') => ({
-    status, creditsRequested: requested, creditsConfirmed: confirmed,
+  const p = (requested: number, confirmed: number, status = 'open', resultsPostedAt = '') => ({
+    status, creditsRequested: requested, creditsConfirmed: confirmed, resultsPostedAt,
   });
 
   // Empty site.
   assert.deepEqual(siteStats([]), {
     projects: 0, openProjects: 0, creditsRequested: 0, creditsTransferred: 0, fundedProjects: 0,
+    projectsWithResults: 0,
   });
 
   const s = siteStats([
@@ -229,9 +230,27 @@ test('the home-page figures count what they claim to count', () => {
   assert.equal(s.projects, 4);
 });
 
+test('the home page counts a project as having reported from its stamp, not its text', () => {
+  // The figure exists to sit next to fundedProjects, so the gap between the two is visible. Two
+  // ways to get it wrong: counting only funded projects, which hides a partly funded project that
+  // did report, and counting the write-up text, which would quietly uncount a researcher who
+  // reported and later trimmed their summary away. resultsPostedAt is write-once for that reason.
+  const p = (requested: number, confirmed: number, status = 'open', resultsPostedAt = '') => ({
+    status, creditsRequested: requested, creditsConfirmed: confirmed, resultsPostedAt,
+  });
+  const s = siteStats([
+    p(1000, 1000, 'closed', '2026-09-18T00:00:00.000Z'), // funded, reported
+    p(1000, 1000),                                       // funded, never reported: the gap
+    p(1000, 200, 'open', '2026-09-18T00:00:00.000Z'),    // partly funded and still reported
+    p(1000, 0),                                          // nothing to report yet
+  ]);
+  assert.equal(s.projectsWithResults, 2);
+  assert.equal(s.fundedProjects, 2);
+});
+
 test('a project at its ceiling stops counting as open, the same way the listing treats it', () => {
   // acceptsMorePledges is what the listing uses, so the home page must not disagree with it.
-  const atCeiling = siteStats([{ status: 'open', creditsRequested: 100, creditsConfirmed: 100 * OVERFUND_MULTIPLIER }]);
+  const atCeiling = siteStats([{ status: 'open', creditsRequested: 100, creditsConfirmed: 100 * OVERFUND_MULTIPLIER, resultsPostedAt: '' }]);
   assert.equal(atCeiling.openProjects, 0, 'a project that can take no more is not an open project');
   assert.equal(atCeiling.projects, 1);
   assert.equal(atCeiling.fundedProjects, 1);
