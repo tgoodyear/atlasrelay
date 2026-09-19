@@ -405,6 +405,12 @@ export const DELETED_ACCOUNT_NAME = 'Anonymous';
  * close beside it: best effort, per row, reporting what it actually did.
  *
  * Returns what it managed, not what it intended, so the caller can say so.
+ *
+ * One thing it cannot guarantee, and the report should not be read as claiming: a pledge whose transfer is
+ * in flight while this runs is rewritten afterwards by its own request, from a whole-row snapshot taken
+ * before the scrub, which puts the name back. That window is seconds wide and needs the person to be
+ * deleting their profile while their own pledge is mid-transfer, and a later deletion pass would catch the
+ * row -- but the fix belongs with the post-transfer writes rather than here, and is tracked separately.
  */
 export async function anonymizeRetainedNames(userId: string): Promise<{ projects: number; pledges: number; failed: number }> {
   let projects = 0;
@@ -418,7 +424,13 @@ export async function anonymizeRetainedNames(userId: string): Promise<{ projects
     try {
       // A merge, and updatedAt is preserved: this is not the owner editing their project, and moving it
       // would tell every reader the project had just changed.
-      await patchProject(project.id, { ownerName: DELETED_ACCOUNT_NAME, updatedAt: project.updatedAt });
+      //
+      // Conditional on the version this scan read, because preserving updatedAt means writing a value from
+      // a snapshot. Unconditionally, a close or an owner edit landing between the scan and this write would
+      // have its timestamp rolled back to the older one and the project would read as older than its last
+      // real change. A 412 counts as unfinished rather than done, so the response says so and the next
+      // deletion attempt picks it up.
+      await patchProject(project.id, { ownerName: DELETED_ACCOUNT_NAME, updatedAt: project.updatedAt }, project.etag);
       projects += 1;
     } catch (err) {
       failed += 1;
