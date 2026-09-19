@@ -73,3 +73,22 @@ test('the pledge handler decides a transfer was issued before it issues one', ()
   assert.ok(post > 0, 'pledges.ts no longer calls transferCredits');
   assert.ok(flag < post, 'the transfer is issued before the handler stops promising nothing was sent');
 });
+
+test('the pledge handler records the uncertainty before it can be caused', () => {
+  // The record of "we do not know whether the credits moved" has to be written before the POST, not
+  // after. Written after, it can only exist if the handler survives the very failure it describes, and a
+  // process that dies between the POST and that write leaves the row saying `pledged` -- whose meaning is
+  // that nothing was sent. Ordering is the whole guarantee, exactly as it is for transferIssued, so assert
+  // it in the source the same way.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const marker = src.indexOf('pledge.transferUncertain = true;');
+  const post = src.indexOf('await transferCredits(');
+  assert.ok(marker > 0, 'pledges.ts no longer marks a transfer uncertain before issuing it');
+  assert.ok(post > 0, 'pledges.ts no longer calls transferCredits');
+  assert.ok(marker < post, 'the uncertainty is recorded before the transfer that may cause it');
+
+  // And it must be narrowed on success, or every completed transfer stores confirmed-and-uncertain and
+  // the "Transferred via API" badge disappears from every pledge on the site.
+  const cleared = src.indexOf('pledge.transferUncertain = false;');
+  assert.ok(cleared > post, 'a confirmed transfer must clear the pessimistic marker');
+});
