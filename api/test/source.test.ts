@@ -61,6 +61,19 @@ test('no other backslash escapes in source outside of string literals we control
   assert.deepEqual(offenders, [], `\n${offenders.join('\n')}\n`);
 });
 
+test('the post limiter takes its window before the project row is written', () => {
+  // Order is the enforcement. Taking the window after the write would make it a count read before
+  // a write dressed up as a row: a burst of concurrent posts would each write a project and only
+  // then discover they were too fast, which is the same defect the open-project cap has now been
+  // caught by twice and the reason the pledge claim is taken first.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'projects.ts'), 'utf8');
+  const window = src.indexOf('acquireProjectPostWindow(');
+  const write = src.indexOf('await createProject(');
+  assert.ok(window > 0, 'projects.ts no longer takes a posting window');
+  assert.ok(write > 0, 'projects.ts no longer creates project rows');
+  assert.ok(window < write, 'the posting window is taken before the project row is written');
+});
+
 test('the pledge handler decides a transfer was issued before it issues one', () => {
   // The flag gates a blanket "nothing was sent" onto every error the handler raises above it.
   // Setting it after the POST rather than before would extend that promise over the POST itself,
