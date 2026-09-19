@@ -31,3 +31,15 @@ test('tags dedupes and rejects unknown', () => {
   assert.deepEqual(tags({ tags: ['dns', 'dns', 'ping'] }), ['dns', 'ping']);
   assert.throws(() => tags({ tags: ['bogus'] }), HttpError);
 });
+
+test('a link field called httpsUrl actually requires https', () => {
+  // The function is named httpsUrl, its error says "must start with https://", and the project fields using
+  // it are documented as https-only. It accepted http as well, so all three disagreed and a project could
+  // carry an http homepage, repo, paper or results link against a contract that promised otherwise.
+  assert.equal(httpsUrl({ u: 'https://example.org/x' }, 'u'), 'https://example.org/x');
+  assert.throws(() => httpsUrl({ u: 'http://example.org/x' }, 'u'), /must start with https/);
+  // Anything that is not a URL at all is still its own error, and absent is still absent.
+  assert.throws(() => httpsUrl({ u: 'not a url' }, 'u'), /must be a valid URL/);
+  assert.equal(httpsUrl({}, 'u'), undefined);
+  assert.equal(httpsUrl({ u: '' }, 'u'), '');
+});
