@@ -1,7 +1,7 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
 import { describeErrorForLog, handle, json, readJson } from '../lib/http';
-import { deleteProjectPostWindow, deleteUser, ensureUser, listProjectsByOwner, patchProject, updateUser } from '../lib/store';
+import { anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listProjectsByOwner, patchProject, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { privateUser } from '../lib/views';
 
@@ -93,6 +93,22 @@ app.http('me-delete', {
       console.error('Profile deleted but its projects could not be swept:', err instanceof Error ? err.message : err);
       failed = -1;
     }
+
+    // Then take the name off what survives. Projects and pledges are kept on purpose -- donors and
+    // researchers rely on that record -- but the name copied onto them at creation is the profile, and
+    // deleting the profile should mean it goes. Names are snapshots: nothing joins these rows back to the
+    // users table, so removing that row on its own left the name on every card and every pledge line.
+    //
+    // After the close, not before. Closing is what stops a project taking credits nobody can receive, so it
+    // is the part worth spending the request's remaining time on first; a name is a slower harm than a
+    // pledge to a researcher who cannot be paid.
+    let named = { projects: 0, pledges: 0, failed: 0 };
+    try {
+      named = await anonymizeRetainedNames(p.userId);
+    } catch (err) {
+      console.error('Profile deleted but its retained names could not be anonymized:', err instanceof Error ? err.message : err);
+      named = { projects: 0, pledges: 0, failed: -1 };
+    }
     // The profile is gone either way, which is the promise that matters and the one the page
     // makes. Say so separately from whether every project got closed, rather than reporting a
     // clean result over a sweep that did not finish. A project left open cannot be pledged to,
@@ -102,7 +118,12 @@ app.http('me-delete', {
       deleted: true,
       projectsClosed: closed,
       projectsNotClosed: failed === -1 ? null : failed,
-      sweepComplete: failed === 0,
+      namesAnonymized: named.projects + named.pledges,
+      namesNotAnonymized: named.failed === -1 ? null : named.failed,
+      // One flag for the whole cleanup. A row that kept its name is as unfinished as a project that
+      // stayed open, and reporting a clean sweep over either would be the thing this field exists to
+      // stop. The profile itself is gone regardless, which is the promise `deleted` carries.
+      sweepComplete: failed === 0 && named.failed === 0,
     });
 
   }),

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { privatePledge, publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
 import type { Pledge, Project } from '../src/lib/store';
-import { nextResultsPostedAt, projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
+import { DELETED_ACCOUNT_NAME, nextResultsPostedAt, projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
 import { bool } from '../src/lib/validate';
 import type { Tag } from '../src/lib/validate';
 
@@ -193,6 +193,51 @@ test('an anonymous pledge still hides a sign-in address behind the name', () => 
   assert.equal(p.donorName, 'Anonymous');
   const named = publicPledge(pledge({ donorName: 'alice@example.org', anonymous: false }));
   assert.equal(named.donorName, 'alice');
+});
+
+test('a deleted account is anonymous, not pseudonymous, on every view', () => {
+  // Deleting a profile removes the users row and nothing else, so the display name copied onto every
+  // project and pledge at creation survives. Scrubbing it has one obvious wrong answer: emptying the
+  // field. publicName then falls back to user-<first 6 of the account id>, which is the same token on
+  // every row that person touched, so the name would be replaced by a cross-project identifier anyone
+  // can read. Storing the constant is what makes two deleted accounts indistinguishable.
+  const blanked = publicName('', '', 'abc123def456');
+  assert.equal(blanked, 'user-abc123');
+  assert.equal(publicName('', '', 'abc123def456'), blanked, 'the fallback is stable, which is the problem');
+
+  const one = publicName(DELETED_ACCOUNT_NAME, '', 'abc123def456');
+  const two = publicName(DELETED_ACCOUNT_NAME, '', 'zzz999zzz999');
+  assert.equal(one, 'Anonymous');
+  assert.equal(one, two, 'two deleted accounts must read identically');
+});
+
+test('a deleted donor is anonymous to the project owner too, not just the public', () => {
+  // privatePledge deliberately restores the real name through publicName, and ignores the `anonymous`
+  // flag entirely, so a design built on that flag would hide the name from the listing and leave it on
+  // screen for every researcher the person ever gave to. The name is stored as the constant instead,
+  // which both views carry unchanged.
+  const p = pledge({ donorName: DELETED_ACCOUNT_NAME, donorId: 'abc123def456', anonymous: false });
+  assert.equal(publicPledge(p).donorName, 'Anonymous');
+  assert.equal((privatePledge(p) as { donorName: string }).donorName, 'Anonymous');
+  assert.equal(JSON.stringify(privatePledge(p)).includes('user-abc123'), false);
+});
+
+test('deleted owners cannot be enumerated through the project search', () => {
+  // The public listing filters on the published owner name, so whatever replaces it is a query key on an
+  // unauthenticated endpoint. An id-derived token would let anyone ask ?q=user-abc123 and get back every
+  // project of one deleted account. A shared constant matches all of them and so identifies none.
+  const proj = (id: string, ownerId: string, ownerName: string) => publicProject({
+    id, ownerId, ownerName, title: 't', summary: 's', description: 'd',
+    creditsRequested: 100, creditsConfirmed: 0, creditsPending: 0, status: 'open', tags: [],
+    affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
+    moderationClosed: false, resultsSummary: '', resultsUrl: '', resultsPostedAt: '',
+    createdAt: '', updatedAt: '',
+  });
+  const a = proj('j1', 'abc123def456', DELETED_ACCOUNT_NAME);
+  const b = proj('j2', 'zzz999zzz999', DELETED_ACCOUNT_NAME);
+  assert.equal(a.ownerName, b.ownerName, 'the search term cannot distinguish two deleted owners');
+  // And the account id itself is still not published, so the payload does not reintroduce the linkage.
+  assert.equal('ownerId' in a, false);
 });
 
 test('a project says it has results only once the stamp is on the row', () => {

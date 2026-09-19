@@ -517,6 +517,94 @@ export async function listPledges(projectId: string): Promise<Pledge[]> {
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+/**
+ * The name a retained row carries once its owner has deleted their profile.
+ *
+ * A constant, and stored rather than derived. Emptying the name instead would be worse than leaving it:
+ * publicName falls back to `user-<first 6 of the account id>`, which is identical on every row the same
+ * person ever touched, so every project and pledge of theirs would become linkable by a token anyone can
+ * read. The public listing filters on the published owner name, so that token would also be a query key --
+ * `?q=user-abc123` would enumerate one deleted account's projects from an unauthenticated endpoint. A value
+ * shared by every deleted account cannot do either.
+ *
+ * It is stored rather than swapped in at read time because every read path would have to remember, and
+ * because the promise is that the name is gone, not hidden. Deliberately not the `anonymous` flag on a
+ * pledge: that records a choice its donor made while pledging, privatePledge deliberately shows the owner
+ * through it, and this is a different fact about a different person's account.
+ */
+export const DELETED_ACCOUNT_NAME = 'Anonymous';
+
+/**
+ * Replace the display name this account left on the rows that outlive it.
+ *
+ * Deleting the profile removes the users row and nothing else, so every project and pledge keeps the name
+ * that was copied onto it when it was written -- names are snapshots, and nothing joins these rows back to
+ * the users table. Scrubbing them is therefore a point-in-time rewrite, with the same shape as the project
+ * close beside it: best effort, per row, reporting what it actually did.
+ *
+ * Returns what it managed, not what it intended, so the caller can say so.
+ *
+ * One thing it cannot guarantee, and the report should not be read as claiming: a pledge whose transfer is
+ * in flight while this runs is rewritten afterwards by its own request, from a whole-row snapshot taken
+ * before the scrub, which puts the name back. That window is seconds wide and needs the person to be
+ * deleting their profile while their own pledge is mid-transfer, and a later deletion pass would catch the
+ * row -- but the fix belongs with the post-transfer writes rather than here, and is tracked separately.
+ */
+export async function anonymizeRetainedNames(userId: string): Promise<{ projects: number; pledges: number; failed: number }> {
+  let projects = 0;
+  let pledges = 0;
+  let failed = 0;
+
+  // Every project, not only the open ones the close sweep looks at. A closed project keeps its card and its
+  // page, so it keeps showing the name.
+  for (const project of await listProjectsByOwner(userId)) {
+    if (project.ownerName === DELETED_ACCOUNT_NAME) continue;
+    try {
+      // A merge, and updatedAt is preserved: this is not the owner editing their project, and moving it
+      // would tell every reader the project had just changed.
+      //
+      // Conditional on the version this scan read, because preserving updatedAt means writing a value from
+      // a snapshot. Unconditionally, a close or an owner edit landing between the scan and this write would
+      // have its timestamp rolled back to the older one and the project would read as older than its last
+      // real change. A 412 counts as unfinished rather than done, so the response says so and the next
+      // deletion attempt picks it up.
+      await patchProject(project.id, { ownerName: DELETED_ACCOUNT_NAME, updatedAt: project.updatedAt }, project.etag);
+      projects += 1;
+    } catch (err) {
+      failed += 1;
+      console.error(`Could not anonymize the owner name on project ${project.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Pledges are partitioned by project, so this is a cross-partition scan. It is the expensive half and the
+  // reason the caller treats the whole sweep as best effort.
+  for (const pledge of await listPledgesByDonor(userId)) {
+    if (pledge.donorName === DELETED_ACCOUNT_NAME) continue;
+    try {
+      await patchPledgeName(pledge.projectId, pledge.id, DELETED_ACCOUNT_NAME);
+      pledges += 1;
+    } catch (err) {
+      failed += 1;
+      console.error(`Could not anonymize the donor name on pledge ${pledge.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  return { projects, pledges, failed };
+}
+
+/**
+ * Merge just the donor name onto a pledge row.
+ *
+ * savePledge replaces the whole entity from a snapshot the caller holds, which is right where the caller is
+ * the request that owns the pledge and wrong here: this sweep runs against rows other requests are actively
+ * settling, and a replace would roll back a status written between the read and the write. A merge touches
+ * the one field being changed and leaves the rest of the row to whoever owns it.
+ */
+export async function patchPledgeName(projectId: string, id: string, donorName: string): Promise<void> {
+  const t = await table('pledges');
+  await t.updateEntity({ partitionKey: projectId, rowKey: id, donorName, updatedAt: now() } as TableEntity, 'Merge');
+}
+
 export async function listPledgesByDonor(donorId: string): Promise<Pledge[]> {
   const out: Pledge[] = [];
   for await (const e of (await table('pledges')).listEntities<Entity>({ queryOptions: { filter: odata`donorId eq ${donorId}` } })) {
