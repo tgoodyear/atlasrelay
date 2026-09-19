@@ -143,6 +143,14 @@ resource ciRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
         ]
         notActions: [
           'Microsoft.Web/staticSites/delete'
+          // Custom domains carry the certificate the live site is served on, and CI deploys
+          // app.bicep on every merge that touches infra/**. A binding written with the wrong
+          // validation method returns 200, does nothing, and is recoverable only by deleting and
+          // recreating it on a locked site (docs/RUNBOOK.md). infra/app.bicepparam leaves
+          // customDomain empty; this is what makes that a rule instead of a comment.
+          // The dev binding (infra/dev.bicepparam) is deployed by an Owner, not by this identity.
+          'Microsoft.Web/staticSites/customDomains/write'
+          'Microsoft.Web/staticSites/customDomains/delete'
           'Microsoft.Web/staticSites/createinvitation/action'
           'Microsoft.Web/staticSites/authproviders/users/write'
           'Microsoft.Web/staticSites/authproviders/users/delete'
