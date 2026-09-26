@@ -1,7 +1,7 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
 import { describeErrorForLog, handle, json, readJson } from '../lib/http';
-import { anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listProjectsByOwner, patchProject, updateUser } from '../lib/store';
+import { Project, anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listPledges, listProjectsByOwner, patchProject, pledgeRacedDeletion, projectMayHaveRacedDeletion, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { privateUser } from '../lib/views';
 
@@ -49,8 +49,8 @@ app.http('me-delete', {
     // moment a donor tries to give to them.
     // One project that will not close must not stop the rest. Aborting the sweep left every later
     // project open and still returned success, against a page that promises they are all closed.
-    const closeOpen = async (): Promise<{ closed: number; failed: number }> => {
-      const open = (await listProjectsByOwner(p.userId)).filter((x) => x.status === 'open');
+    const closeOpen = async (owned: Project[]): Promise<{ closed: number; failed: number }> => {
+      const open = owned.filter((x) => x.status === 'open');
       let closed = 0;
       let failed = 0;
       for (const project of open) {
@@ -65,10 +65,11 @@ app.http('me-delete', {
       return { closed, failed };
     };
 
-    // The profile goes first. Sweeping projects is unbounded serial work over a shared partition,
+    // The profile goes first. Sweeping projects is serial work that grows with the person's history,
     // and letting it run ahead of the delete means a person with many projects could have the
     // request time out with their RIPE address still stored, against a page that promises deletion
     // outright. Removing the row first makes the promise unconditional; the sweep is cleanup.
+    const deletedAt = Date.now();
     await deleteUser(p.userId);
 
     // The posting window goes with it. That row is keyed by account id, so keeping it would mean
@@ -85,12 +86,44 @@ app.http('me-delete', {
     // handler needs the owner's address to name a recipient, so the window is a clean failure
     // rather than a disclosure. Projects written after this sweep close themselves: creation and
     // reopening both re-check for the owner after writing.
+    let owned: Project[] | null = null;
+    try {
+      owned = await listProjectsByOwner(p.userId);
+    } catch (err) {
+      console.error('Profile deleted but its projects could not be listed:', describeErrorForLog(err));
+    }
+
+    // Before closing anything, find pledges that got to the address first (#20). A pledge in flight
+    // when the profile row went may already have read it, and nothing here can call a transfer back.
+    // The pledge handler stores its row before it reads the owner, and this runs after the owner is
+    // gone, so a pledge that read the address in time is stored by now and this sees it; one that
+    // reads after this point finds no address and sends nothing. What that buys is an honest answer:
+    // the response says a transfer or a disclosure was already under way, rather than promising the
+    // address is out of use while credits are on their way to it. Null when the check could not run,
+    // which the page reports as not knowing rather than as none.
+    let pledgesInFlight: number | null = null;
+    if (owned) {
+      try {
+        let n = 0;
+        for (const project of owned.filter((x) => projectMayHaveRacedDeletion(x, deletedAt))) {
+          n += (await listPledges(project.id)).filter((x) => pledgeRacedDeletion(x, deletedAt)).length;
+        }
+        pledgesInFlight = n;
+      } catch (err) {
+        console.error('Profile deleted but pledges in flight could not be checked:', describeErrorForLog(err));
+      }
+    }
+
     let closed = 0;
     let failed = 0;
-    try {
-      ({ closed, failed } = await closeOpen());
-    } catch (err) {
-      console.error('Profile deleted but its projects could not be swept:', err instanceof Error ? err.message : err);
+    if (owned) {
+      try {
+        ({ closed, failed } = await closeOpen(owned));
+      } catch (err) {
+        console.error('Profile deleted but its projects could not be swept:', err instanceof Error ? err.message : err);
+        failed = -1;
+      }
+    } else {
       failed = -1;
     }
 
@@ -120,6 +153,9 @@ app.http('me-delete', {
       projectsNotClosed: failed === -1 ? null : failed,
       namesAnonymized: named.projects + named.pledges,
       namesNotAnonymized: named.failed === -1 ? null : named.failed,
+      // Kept out of sweepComplete: that flag is about cleanup this request can finish or retry, and a
+      // transfer already sent to RIPE is neither. Zero is the only value the page may log out on.
+      pledgesInFlight,
       // One flag for the whole cleanup. A row that kept its name is as unfinished as a project that
       // stayed open, and reporting a clean sweep over either would be the thing this field exists to
       // stop. The profile itself is gone regardless, which is the promise `deleted` carries.

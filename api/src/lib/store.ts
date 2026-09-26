@@ -693,6 +693,39 @@ export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
 }
 
 /**
+ * Whether a pledge may have used its project owner's RIPE address around the moment that owner deleted
+ * their profile: an API transfer that may be sent to it, or a manual pledge whose donor may have been shown
+ * it. Profile deletion reports these rather than promising the address is out of use (#20).
+ *
+ * Both pledge paths store their row before reading the owner, and deletion removes the owner before it
+ * reads pledges, so any pledge that read the owner in time to use the address is already stored when
+ * deletion looks. What has to be decided is only which stored rows are recent enough to matter. The same
+ * grace as the in-flight window, measured from the moment each path committed to using the address: the
+ * transfer marker for an API pledge, creation for a manual one.
+ *
+ * An API row with no inFlightSince never reached the marker, so it never read the owner for a transfer.
+ * A cancelled row sent nothing, or was withdrawn before its address was returned.
+ */
+export function pledgeRacedDeletion(p: Pledge, deletedAt: number): boolean {
+  if (p.status === 'cancelled') return false;
+  const started = Date.parse(p.method === 'api' ? p.inFlightSince : p.createdAt);
+  if (!Number.isFinite(started)) return false;
+  return started >= deletedAt - CLAIM_ORPHAN_GRACE_MS;
+}
+
+/**
+ * Whether deletion has to look at a project's pledges for pledgeRacedDeletion. An open project, or one that
+ * changed inside the window: a pledge only starts on a project it read as open, and a project closed since
+ * then was written at the close. Everything else is closed and has been for longer than any pledge request
+ * can run, so it is skipped rather than read.
+ */
+export function projectMayHaveRacedDeletion(p: Project, deletedAt: number): boolean {
+  if (p.status === 'open') return true;
+  const changed = Date.parse(p.updatedAt);
+  return !Number.isFinite(changed) || changed >= deletedAt - CLAIM_ORPHAN_GRACE_MS;
+}
+
+/**
  * Whether a pledge is unresolved rather than merely pending: the transfer was issued, RIPE never gave a
  * usable answer, and nobody has established whether the credits moved.
  *

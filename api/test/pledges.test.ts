@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeErrorForLog, HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
-import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeUnresolved, pledgeWriteEntity, totals } from '../src/lib/store';
+import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeRacedDeletion, pledgeUnresolved, pledgeWriteEntity, projectMayHaveRacedDeletion, totals } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
-import type { Pledge } from '../src/lib/store';
+import type { Pledge, Project } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
@@ -480,4 +480,39 @@ test('a pledge write never carries the donor name, so it cannot undo the deletio
   assert.equal(e.transferUncertain, false);
   assert.equal(e.inFlight, false);
   assert.equal(e.transactionId, '');
+});
+
+test('profile deletion counts the pledges that may already have used the owner address (#20)', () => {
+  const deletedAt = Date.parse('2026-09-26T12:00:00.000Z');
+  const at = (secondsBefore: number) => new Date(deletedAt - secondsBefore * 1000).toISOString();
+  const base: Pledge = {
+    id: 'pl', projectId: 'pr', donorId: 'd', donorName: '', anonymous: false, amount: 1, method: 'api',
+    status: 'sent', transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: true,
+    inFlight: true, inFlightSince: at(5), message: '', createdAt: at(30), updatedAt: at(5),
+  };
+  // An API transfer marked just before the owner went: it may be sent to the address.
+  assert.equal(pledgeRacedDeletion(base, deletedAt), true);
+  // Also when it already finished: the credits went to the address around the same moment.
+  assert.equal(pledgeRacedDeletion({ ...base, status: 'confirmed', inFlight: false, transferUncertain: false }, deletedAt), true);
+  // Refused and withdrawn, so nothing was sent.
+  assert.equal(pledgeRacedDeletion({ ...base, status: 'cancelled' }, deletedAt), false);
+  // Never reached the marker, so it never read the owner for a transfer.
+  assert.equal(pledgeRacedDeletion({ ...base, status: 'pledged', inFlightSince: '', createdAt: at(1) }, deletedAt), false);
+  // Long settled: nothing to do with this deletion.
+  assert.equal(pledgeRacedDeletion({ ...base, inFlightSince: at(3600) }, deletedAt), false);
+  // A manual pledge counts from creation, which is when it goes on to read the owner and return the address.
+  const manual: Pledge = { ...base, method: 'manual', status: 'pledged', inFlight: false, inFlightSince: '', transferUncertain: false, createdAt: at(2) };
+  assert.equal(pledgeRacedDeletion(manual, deletedAt), true);
+  assert.equal(pledgeRacedDeletion({ ...manual, createdAt: at(3600) }, deletedAt), false);
+});
+
+test('profile deletion only reads pledges on projects a racing pledge could be on (#20)', () => {
+  const deletedAt = Date.parse('2026-09-26T12:00:00.000Z');
+  const p = { status: 'closed', updatedAt: '2026-09-01T00:00:00.000Z' } as Project;
+  assert.equal(projectMayHaveRacedDeletion({ ...p, status: 'open' }, deletedAt), true);
+  // Closed seconds ago, after a pledge may have read it as open.
+  assert.equal(projectMayHaveRacedDeletion({ ...p, updatedAt: '2026-09-26T11:59:50.000Z' }, deletedAt), true);
+  assert.equal(projectMayHaveRacedDeletion(p, deletedAt), false);
+  // A timestamp that cannot be read is looked at rather than skipped.
+  assert.equal(projectMayHaveRacedDeletion({ ...p, updatedAt: '' }, deletedAt), true);
 });

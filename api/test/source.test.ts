@@ -105,3 +105,18 @@ test('the pledge handler records the uncertainty before it can be caused', () =>
   const cleared = src.indexOf('pledge.transferUncertain = false;');
   assert.ok(cleared > post, 'a confirmed transfer must clear the pessimistic marker');
 });
+
+test('the pledge handler reads the owner after its marker is stored and before the transfer (#20)', () => {
+  // Profile deletion removes the owner and then looks for pledges already marked in flight on their
+  // projects. That only catches every race if the pledge side does the mirror image: write the marker,
+  // then read the owner. Read the owner first and a deletion landing between that read and the marker
+  // sees no marker, while this request goes on to send credits to the address it was told is gone.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const marker = src.indexOf('pledge.etag = (await savePledge(pledge, pledge.etag)).etag;');
+  const owner = src.indexOf('ownerNow = await getUser(');
+  const post = src.indexOf('await transferCredits(');
+  assert.ok(marker > 0, 'pledges.ts no longer writes the transfer marker');
+  assert.ok(owner > 0, 'pledges.ts no longer re-reads the owner before transferring');
+  assert.ok(marker < owner, 'the owner is read after the marker is stored');
+  assert.ok(owner < post, 'the owner is read before the transfer');
+});
