@@ -55,6 +55,15 @@ the conditional replace `PUT /api/me` uses and make a concurrent profile save re
 gone. `DELETE /api/me` removes it with the profile: it is keyed by account id, so keeping it would
 retain an identifier of an account that asked to be removed.
 
+### Owner index (`projects` table, PK `owner-<swa userId>`, RK `<project id>`)
+
+One small row per project an account has posted, written before the project row and never changed
+afterwards. It is how the open-project cap and `DELETE /api/me` find an owner's projects: a keyed
+partition read plus a point read per project, instead of a filter on `ownerId` over every project on
+the site. Membership only; status is always read from the project row, so a close or a takedown
+made directly in storage cannot leave the index disagreeing about the cap. Every other projects
+query filters on `PartitionKey eq 'project'`, so these rows never appear in the listing.
+
 ### Project (`projects` table, PK `project`, RK `<id>`)
 
 | Field | Notes |
@@ -182,8 +191,8 @@ that did not persist is reported as a warning on a pledge the owner can still co
   next create or reopen re-derives the surplus.
 - An account may post one project a minute. The cap above limits open projects, not rows, and it
   closes the surplus itself, so a loop of posts needs no close step to leave a permanent row per
-  request -- and every create, reopen and profile deletion counts an owner's open projects by
-  scanning the whole projects partition. The limit is held as a row, for the same reason the pledge
+  request. Owner lookups go through the owner index (below), so those rows slow only the account
+  that posted them, but every one is still served on the listing. The limit is held as a row, for the same reason the pledge
   claim is. It bounds the rate, not the total: nothing prunes closed projects, so a table already
   grown stays grown.
 - A donor may hold one live pledge per project. Without it, one account could reserve a project

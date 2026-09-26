@@ -204,6 +204,24 @@ this, because `infra/app.bicepparam` binds nothing.
 - **Trigger an infra run by hand**: `gh workflow run infra.yml`.
 - **Data export**: `az storage entity query --table-name projects ...` or use Azure
   Storage Explorer.
+- **Owner index rows**: the `projects` table holds two kinds of row. Projects are in partition
+  `project`; each owner also has a partition `owner-<user id>` with one small row per project they
+  posted, which is how the open-project cap and profile deletion find an owner's projects without
+  reading the whole table. Filter exports on `PartitionKey eq 'project'`. A project with no index
+  row is invisible to the cap and to deletion's close sweep. Projects written before the index
+  existed have none (production had no projects then; dev may), and this backfills them, safely
+  re-runnable:
+
+  ```bash
+  az storage entity query --table-name projects --account-name <storage account> --auth-mode key \
+    --filter "PartitionKey eq 'project'" --select RowKey ownerId createdAt -o json \
+    | jq -r '.items[] | "\(.ownerId) \(.RowKey) \(.createdAt)"' \
+    | while read -r owner id created; do
+        az storage entity insert --if-exists replace --table-name projects \
+          --account-name <storage account> --auth-mode key \
+          --entity PartitionKey="owner-$owner" RowKey="$id" createdAt="$created" -o none
+      done
+  ```
 - **Take a project down**: there is no admin console, so this is done against Table Storage.
   Closing a project stops it accepting credits and takes it off the listing, which is the whole
   remedy; it is reversible, so prefer it to deleting anything.

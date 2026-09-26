@@ -310,8 +310,35 @@ export async function getProject(id: string): Promise<Project | null> {
   return e ? toProject(e) : null;
 }
 
+/**
+ * Which projects an owner has, as a keyed partition beside the projects themselves (#19).
+ *
+ * The projects partition is a single constant key, so "this owner's projects" used to be a filter on
+ * ownerId over every row on the site. That query enforces the open-project cap and drives profile
+ * deletion, and closed projects are never pruned, so one account posting and closing in a loop made every
+ * other account's creates, reopens and deletions read more. Keyed by owner, what a lookup reads is that
+ * owner's own history and nobody else's, so the cost of posting a lot lands on the account doing it.
+ *
+ * Membership only, written once, never updated. ownerId never changes on a project, so there is nothing
+ * to keep in step: status is read from the project row itself, which is the only place it is written.
+ * A status copy here would be the derived state #19 warned about -- a close or an operator takedown made
+ * directly in storage that missed the index would leave it lying about the cap.
+ *
+ * Lives in the projects table under its own partition prefix, which every projects query already
+ * excludes because each one filters on PartitionKey. A separate table would need a Bicep change for the
+ * same effect.
+ */
+function ownerIndexPk(ownerId: string): string {
+  return `owner-${ownerId}`;
+}
+
 export async function createProject(p: Project): Promise<Project> {
-  await (await table('projects')).createEntity(fromProject(p));
+  const t = await table('projects');
+  // The index row first. A project row with no index entry is invisible to the cap and to deletion's
+  // close sweep; an index entry with no project row is skipped by every reader. So if the second write
+  // fails, the first must be the harmless one.
+  await t.upsertEntity({ partitionKey: ownerIndexPk(p.ownerId), rowKey: p.id, createdAt: p.createdAt }, 'Replace');
+  await t.createEntity(fromProject(p));
   return p;
 }
 
@@ -389,31 +416,9 @@ export function nextResultsPostedAt(
   return patch.resultsSummary || patch.resultsUrl ? at : '';
 }
 
-/**
- * The owner's open projects, for the cap.
- *
- * Still a scan. ownerId is not a key and the projects table has a single constant partition, so
- * the service reads every row to answer this, and that is issue #19's real subject. What the
- * status filter changes is only what comes back: closed projects are never pruned, so the previous
- * client-side filter carried an owner's entire history -- every closed row, each with a description
- * of up to 8000 characters -- across the wire on every create and every reopen, and that part grew
- * without bound. Filtering server-side leaves a result bounded by the cap itself. Stated plainly
- * rather than left to read as a fix for the scan: making the scan keyed needs a key structure
- * beside this table, which this is not.
- *
- * Safe against a row with no status column, which would read as open through toProject's default
- * and be hidden by this filter: createProject writes status on every row and patchProject only
- * ever merges, so no such row can exist.
- */
+/** The owner's open projects, for the cap. Read through the owner index; see listProjectsByOwner. */
 export async function listOpenProjectsByOwner(ownerId: string): Promise<Project[]> {
-  const open: ProjectStatus = 'open';
-  const out: Project[] = [];
-  for await (const e of (await table('projects')).listEntities<Entity>({
-    queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId} and status eq ${open}` },
-  })) {
-    out.push(toProject(e));
-  }
-  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return (await listProjectsByOwner(ownerId)).filter((p) => p.status === 'open');
 }
 
 /**
@@ -475,10 +480,29 @@ export async function deleteProjectPostWindow(userId: string): Promise<void> {
   }
 }
 
+/** Point reads in flight at once when resolving an owner's index. */
+const OWNER_READ_CONCURRENCY = 16;
+
+/**
+ * Every project an owner has posted, newest first: one keyed partition query for the ids, then a point
+ * read per project. Status comes from the project rows, so a close or a takedown is seen the moment it is
+ * written, however it was written.
+ *
+ * An index entry whose project row does not exist is skipped. createProject writes the entry first, so a
+ * create that failed halfway leaves exactly that, and it is not a project.
+ */
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
+  const ids: string[] = [];
+  for await (const e of (await table('projects')).listEntities<Entity>({
+    queryOptions: { filter: odata`PartitionKey eq ${ownerIndexPk(ownerId)}`, select: ['RowKey'] },
+  })) {
+    ids.push(e.rowKey);
+  }
   const out: Project[] = [];
-  for await (const e of (await table('projects')).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId}` } })) {
-    out.push(toProject(e));
+  for (let i = 0; i < ids.length; i += OWNER_READ_CONCURRENCY) {
+    const batch = await Promise.all(ids.slice(i, i + OWNER_READ_CONCURRENCY).map((id) => getProject(id)));
+    // ownerId is checked rather than trusted: the index is keyed by it, but the project row is the record.
+    for (const p of batch) if (p && p.ownerId === ownerId) out.push(p);
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
