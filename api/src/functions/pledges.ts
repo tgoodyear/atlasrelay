@@ -457,6 +457,12 @@ app.http('pledges-create', {
         pledge.transferredAt = new Date().toISOString();
         // The one write that matters: it is what makes `confirmed` durable.
         //
+        // Unconditional, and safe to be because savePledge merges and never sends donorName. The deletion
+        // sweep can scrub the donor's name while this transfer runs; a whole-row replace here used to
+        // write the name taken at the top of this handler back over the scrub (#33). Making it
+        // conditional instead would turn that scrub into a 412, then a retry on the same stale version,
+        // then a confirmed transfer reported as unrecorded -- a money-path failure to fix a cosmetic one.
+        //
         // No transaction lookup precedes it and none follows. RIPE does not index the transaction
         // until well after it accepts the transfer (measured live: absent immediately, present 40
         // to 70 seconds later), so a call here could only ever come back empty. The 201 is what
@@ -478,8 +484,8 @@ app.http('pledges-create', {
           // totals and releases the donor's slot, and the donor's next pledge would then send the
           // same credits a second time -- the exact failure everything else here exists to prevent.
           //
-          // Retrying the confirmation has none of that. It is the same size of write, since
-          // savePledge replaces the whole row either way, so it is no less likely to land; if it
+          // Retrying the confirmation has none of that. It is the same write, every field this
+          // request owns, so it is no less likely to land; if it
           // does, the row says what actually happened and the marker is cleared as a side effect.
           // If it does not, the stored row stays the pre-transfer marker, which carries no transfer
           // fields and no false confirmation, and the in-flight window releases it on its own.

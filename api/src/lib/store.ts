@@ -544,11 +544,9 @@ export const DELETED_ACCOUNT_NAME = 'Anonymous';
  *
  * Returns what it managed, not what it intended, so the caller can say so.
  *
- * One thing it cannot guarantee, and the report should not be read as claiming: a pledge whose transfer is
- * in flight while this runs is rewritten afterwards by its own request, from a whole-row snapshot taken
- * before the scrub, which puts the name back. That window is seconds wide and needs the person to be
- * deleting their profile while their own pledge is mid-transfer, and a later deletion pass would catch the
- * row -- but the fix belongs with the post-transfer writes rather than here, and is tracked separately.
+ * A pledge whose transfer is in flight while this runs is safe: its request goes on writing the row after
+ * the scrub, but savePledge never sends donorName (see pledgeWriteEntity), so those writes cannot put the
+ * name back.
  */
 export async function anonymizeRetainedNames(userId: string): Promise<{ projects: number; pledges: number; failed: number }> {
   let projects = 0;
@@ -593,12 +591,11 @@ export async function anonymizeRetainedNames(userId: string): Promise<{ projects
 }
 
 /**
- * Merge just the donor name onto a pledge row.
+ * Merge just the donor name onto a pledge row. The only writer of donorName after creation.
  *
- * savePledge replaces the whole entity from a snapshot the caller holds, which is right where the caller is
- * the request that owns the pledge and wrong here: this sweep runs against rows other requests are actively
- * settling, and a replace would roll back a status written between the read and the write. A merge touches
- * the one field being changed and leaves the rest of the row to whoever owns it.
+ * This sweep runs against rows other requests are actively settling, so it touches the one field it owns
+ * and leaves the rest of the row to whoever owns that. savePledge is the mirror image: it writes the rest
+ * and never the name.
  */
 export async function patchPledgeName(projectId: string, id: string, donorName: string): Promise<void> {
   const t = await table('pledges');
@@ -786,11 +783,30 @@ export async function createPledge(p: Pledge): Promise<Pledge> {
   return { ...p, etag: res.etag };
 }
 
+/**
+ * The row a pledge write sends: every field this request owns, and never donorName.
+ *
+ * Separated so the omission can be tested, because the whole fix is an absence. donorName is written
+ * once, by createPledge, and after that only by the deletion sweep through patchPledgeName. Every other
+ * write is a request settling a pledge it holds in memory, and that copy of the name was taken when the
+ * request started. Sending it back put the name on a row the sweep had just scrubbed (#33): the sweep
+ * counted the row as done, the profile page told the person their name was gone, and a transfer that
+ * finished seconds later wrote it back. A writer that never sends the field cannot lose that update.
+ *
+ * Paired with a merge rather than a replace, since a replace would clear the omitted column instead of
+ * leaving it alone. Nothing here depended on a replace clearing anything: every Pledge field is always
+ * present on the object, so each one is written explicitly, empty strings included.
+ */
+export function pledgeWriteEntity(p: Pledge): Record<string, unknown> {
+  const { donorName: _donorName, etag: _etag, ...owned } = p;
+  return { partitionKey: p.projectId, rowKey: p.id, ...owned };
+}
+
 export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   const updated = { ...p, updatedAt: now() };
-  const entity = { partitionKey: p.projectId, rowKey: p.id, ...updated };
+  const entity = pledgeWriteEntity(updated);
   const t = await table('pledges');
-  // With ifMatch this is a conditional replace: it fails with 412 if the row changed since the
+  // With ifMatch this is a conditional merge: it fails with 412 if the row changed since the
   // caller read it, which is how two people acting on the same pledge stop overwriting each other.
   //
   // The returned etag is the new row version, and callers that write the same pledge more than
@@ -805,8 +821,8 @@ export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   // is declared optional: the etag comes back populated, differs on every write, and the previous
   // one is rejected with 412 afterwards.
   const res = ifMatch
-    ? await t.updateEntity(entity as TableEntity, 'Replace', { etag: ifMatch })
-    : await t.upsertEntity(entity, 'Replace');
+    ? await t.updateEntity(entity as TableEntity, 'Merge', { etag: ifMatch })
+    : await t.upsertEntity(entity as TableEntity, 'Merge');
   return { ...updated, etag: res.etag };
 }
 

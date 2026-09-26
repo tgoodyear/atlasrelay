@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeErrorForLog, HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
-import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeUnresolved, totals } from '../src/lib/store';
+import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeUnresolved, pledgeWriteEntity, totals } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import type { Pledge } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
@@ -457,4 +457,27 @@ test('a pledge still in flight is not offered a Cancel button', () => {
   // Once the window has lapsed the row is settleable, and this is the case the exception exists for.
   const lapsed = Date.parse(fresh.createdAt) + 10 * 60 * 1000;
   assert.equal(donorMayCancelApiPledge(fresh, lapsed), true);
+});
+
+test('a pledge write never carries the donor name, so it cannot undo the deletion scrub (#33)', () => {
+  // The deletion sweep scrubs donorName with a one-field merge. A settlement write that sent the name
+  // taken at the start of its request would put it back, and the sweep has already reported the row
+  // done. The write is a merge, so leaving the field out leaves the scrubbed value alone.
+  const p: Pledge = {
+    id: 'pl1', projectId: 'pr1', donorId: 'd1', donorName: 'Ada', anonymous: false, amount: 10, method: 'api',
+    status: 'confirmed', transactionUrl: '', transactionId: '', transferredAt: '2026-09-26T00:00:00.000Z',
+    transferUncertain: false, inFlight: false, inFlightSince: '2026-09-26T00:00:00.000Z', message: '',
+    createdAt: '2026-09-26T00:00:00.000Z', updatedAt: '2026-09-26T00:00:00.000Z', etag: 'W/"x"',
+  };
+  const e = pledgeWriteEntity(p);
+  assert.equal('donorName' in e, false);
+  assert.equal('etag' in e, false);
+  assert.equal(e.partitionKey, 'pr1');
+  assert.equal(e.rowKey, 'pl1');
+  // Everything the settlement owns is still sent, including values that clear a field. A merge
+  // only leaves alone what is omitted, so an empty string has to be present to be written.
+  assert.equal(e.status, 'confirmed');
+  assert.equal(e.transferUncertain, false);
+  assert.equal(e.inFlight, false);
+  assert.equal(e.transactionId, '');
 });
