@@ -24,7 +24,7 @@ export default function Layout() {
         <div className="container">
           <Link to="/" className="brand" onClick={close}>
             <Logo />
-            Atlas Credit Exchange
+            Atlas Relay
           </Link>
           <button className="menu-toggle" aria-label="Menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             ☰
@@ -55,7 +55,7 @@ export default function Layout() {
       <footer className="site-footer">
         <div className="container">
           <span>
-            Atlas Credit Exchange is a community project and is not affiliated with or endorsed by the RIPE NCC.
+            Atlas Relay is a community project and is not affiliated with or endorsed by the RIPE NCC.
           </span>
           <span>
             <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">About RIPE Atlas credits</a>

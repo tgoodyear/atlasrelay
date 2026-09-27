@@ -1,4 +1,4 @@
-# Atlas Credit Exchange
+# Atlas Relay
 
 A lightweight platform for Internet research on [RIPE Atlas](https://atlas.ripe.net):
 researchers post a project that needs measurement credits; Atlas users with spare

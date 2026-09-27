@@ -5,7 +5,7 @@ export default function HowItWorks() {
     <div className="narrow">
       <div className="page-head">
         <h1>How it works</h1>
-        <p>Atlas Credit Exchange is a notice board with a confirmation loop. RIPE Atlas stays the ledger; we never hold credits or long-lived keys.</p>
+        <p>Atlas Relay is a donation board with a confirmation loop. Credits are gifts: nothing is bought or sold, and donors get nothing back. RIPE Atlas stays the ledger; we never hold credits or long-lived keys.</p>
       </div>
 
       <div className="stack">
@@ -37,7 +37,7 @@ export default function HowItWorks() {
             <li>Check whether <a href="https://atlas.ripe.net/docs/getting-started/built-in-measurements/" target="_blank" rel="noreferrer">built-in</a>, anchoring or existing public measurements already answer your question. Say so in your project description; donors appreciate it.</li>
             <li>Size the request and the deadline against your own daily spend limit, not just the total. On the default 1M credits/day a 30M-credit campaign takes at least 30 days of measuring, however fast the credits arrive. Check your own limit first, and say in the project what it is, because it is what decides your realistic timeline.</li>
             <li>Prefer recurring measurements over repeated one-offs (one-offs cost double), tag and describe them so others can reuse them, and avoid DNS queries for domains that are sensitive in some jurisdictions.</li>
-            <li>RIPE NCC also considers direct credit requests from researchers; contact the <a href="https://atlas.ripe.net/contact/" target="_blank" rel="noreferrer">RIPE Atlas team</a>. This exchange complements that route.</li>
+            <li>RIPE NCC also considers direct credit requests from researchers; contact the <a href="https://atlas.ripe.net/contact/" target="_blank" rel="noreferrer">RIPE Atlas team</a>. This site complements that route.</li>
           </ol>
           <p className="small muted" style={{ marginTop: '1rem', marginBottom: 0 }}>
             Source: Nosyk, Tashiro, Lone, Kisteleki, Duda and Korczyński, <a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer"><em>Day in the Life of RIPE Atlas: Operational Insights and Applications in Network Measurements</em></a>, arXiv:2511.22474, November 2025.
@@ -87,7 +87,7 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>How do I know the researcher is who they say they are?</summary>
-            <p>You don't, and nobody here checks. Posting needs a GitHub or Microsoft sign-in and a RIPE NCC Access email, and neither is verified against anything: the address is self-declared, and this site cannot confirm that a person is who they say they are or that the credits will be used as described. What you can see is the display name they chose, their affiliation, and any links they gave to homepages, papers or repositories. The sign-in handle is deliberately not published, so it is not something you can check either. Treat it like any community exchange: read the links, start small, and send only what you are willing to lose. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
+            <p>You don't, and nobody here checks. Posting needs a GitHub or Microsoft sign-in and a RIPE NCC Access email, and neither is verified against anything: the address is self-declared, and this site cannot confirm that a person is who they say they are or that the credits will be used as described. What you can see is the display name they chose, their affiliation, and any links they gave to homepages, papers or repositories. The sign-in handle is deliberately not published, so it is not something you can check either. Treat it like any crowdfunding page: read the links, start small, and send only what you are willing to lose. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
           </details>
           <details>
             <summary>Can a project receive more than it asked for?</summary>

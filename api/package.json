@@ -2,7 +2,7 @@
   "name": "api",
   "private": true,
   "version": "0.1.0",
-  "description": "Atlas Credit Exchange API (Azure Functions v4, managed by Static Web Apps)",
+  "description": "Atlas Relay API (Azure Functions v4, managed by Static Web Apps)",
   "main": "dist/bundle.js",
   "scripts": {
     "build": "tsc && node bundle.mjs",

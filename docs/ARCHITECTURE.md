@@ -1,8 +1,9 @@
-# Atlas Credit Exchange architecture
+# Atlas Relay architecture
 
-A small marketplace where RIPE Atlas users who need measurement credits post a
+A small donation board where RIPE Atlas users who need measurement credits post a
 project, and users who have spare credits send them. The platform never holds
-credits; RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
+credits and nobody pays or is paid: donors give credits and get nothing back.
+RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
 *proof*.
 
 ## Goals and constraints

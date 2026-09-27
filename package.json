@@ -2,7 +2,7 @@
   "name": "internetresearch",
   "private": true,
   "version": "0.1.0",
-  "description": "Atlas Credit Exchange \u2013 connect RIPE Atlas users who need measurement credits with users who have them",
+  "description": "Atlas Relay \u2013 connect RIPE Atlas users who need measurement credits with users who have them",
   "workspaces": [
     "web",
     "api"
