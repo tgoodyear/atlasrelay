@@ -4,6 +4,12 @@ This is a small community project. Issues and pull requests are welcome.
 
 ## Running it locally
 
+Install [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local#install-the-azure-functions-core-tools)
+so that `func` is on your PATH, for example `brew install azure/functions/azure-functions-core-tools@4`
+on macOS or `winget install Microsoft.Azure.FunctionsCoreTools` on Windows. It is not an npm
+dependency: the npm package unpacks its binary with extract-zip, which has an unpatched
+path-traversal advisory.
+
 ```bash
 npm install
 npm run dev
