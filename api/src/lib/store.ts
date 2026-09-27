@@ -164,13 +164,15 @@ let ensured: Promise<void> | null = null;
 export function ensureTables(): Promise<void> {
   if (!ensured) {
     ensured = (async () => {
-      for (const t of ['users', 'projects', 'pledges', 'claims'] as const) {
+      // In parallel: this runs on the first request every cold instance serves, so four sequential
+      // round trips were four waits added to the slowest request the site has.
+      await Promise.all((['users', 'projects', 'pledges', 'claims'] as const).map(async (t) => {
         try {
           await client(t).createTable();
         } catch (err) {
           if (!(err instanceof RestError && err.statusCode === 409)) throw err;
         }
-      }
+      }));
     })().catch((err) => {
       ensured = null;
       throw err;
