@@ -93,8 +93,26 @@ app.http('me-delete', {
       console.error('Profile deleted but its projects could not be listed:', describeErrorForLog(err));
     }
 
-    // Before closing anything, find pledges that got to the address first (#20). A pledge in flight
-    // when the profile row went may already have read it, and nothing here can call a transfer back.
+    let closed = 0;
+    let failed = 0;
+    if (owned) {
+      try {
+        ({ closed, failed } = await closeOpen(owned));
+      } catch (err) {
+        console.error('Profile deleted but its projects could not be swept:', err instanceof Error ? err.message : err);
+        failed = -1;
+      }
+    } else {
+      failed = -1;
+    }
+
+    // Then find pledges that got to the address first (#20). After the close, not before: closing is
+    // what stops new pledges, and this scan reads pledge rows, which are never pruned, so it is the
+    // slow part. It works from the snapshot taken before the close, which still says which projects
+    // were open.
+    //
+    // A pledge in flight when the profile row went may already have read the address, and nothing here
+    // can call a transfer back.
     // The pledge handler stores its row before it reads the owner, and this runs after the owner is
     // gone, so a pledge that read the address in time is stored by now and this sees it; one that
     // reads after this point finds no address and sends nothing. What that buys is an honest answer:
@@ -112,19 +130,6 @@ app.http('me-delete', {
       } catch (err) {
         console.error('Profile deleted but pledges in flight could not be checked:', describeErrorForLog(err));
       }
-    }
-
-    let closed = 0;
-    let failed = 0;
-    if (owned) {
-      try {
-        ({ closed, failed } = await closeOpen(owned));
-      } catch (err) {
-        console.error('Profile deleted but its projects could not be swept:', err instanceof Error ? err.message : err);
-        failed = -1;
-      }
-    } else {
-      failed = -1;
     }
 
     // Then take the name off what survives. Projects and pledges are kept on purpose -- donors and

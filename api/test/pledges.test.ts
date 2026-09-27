@@ -504,6 +504,8 @@ test('profile deletion counts the pledges that may already have used the owner a
   const manual: Pledge = { ...base, method: 'manual', status: 'pledged', inFlight: false, inFlightSince: '', transferUncertain: false, createdAt: at(2) };
   assert.equal(pledgeRacedDeletion(manual, deletedAt), true);
   assert.equal(pledgeRacedDeletion({ ...manual, createdAt: at(3600) }, deletedAt), false);
+  // A cancelled manual pledge still counts: the donor may have been shown the address and then cancelled.
+  assert.equal(pledgeRacedDeletion({ ...manual, status: 'cancelled' }, deletedAt), true);
 });
 
 test('profile deletion only reads pledges on projects a racing pledge could be on (#20)', () => {
@@ -513,6 +515,8 @@ test('profile deletion only reads pledges on projects a racing pledge could be o
   // Closed seconds ago, after a pledge may have read it as open.
   assert.equal(projectMayHaveRacedDeletion({ ...p, updatedAt: '2026-09-26T11:59:50.000Z' }, deletedAt), true);
   assert.equal(projectMayHaveRacedDeletion(p, deletedAt), false);
+  // Closed by an operator's hand-made merge a moment ago: updatedAt is old, the storage timestamp is not.
+  assert.equal(projectMayHaveRacedDeletion({ ...p, storedAt: '2026-09-26T11:59:55.000Z' }, deletedAt), true);
   // A timestamp that cannot be read is looked at rather than skipped.
   assert.equal(projectMayHaveRacedDeletion({ ...p, updatedAt: '' }, deletedAt), true);
 });

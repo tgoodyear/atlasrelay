@@ -84,6 +84,12 @@ export interface Project {
    * rebuilds the cache.
    */
   totalsDirty?: boolean;
+  /**
+   * Table Storage's own last-write time for the row. Unlike updatedAt it moves on every write,
+   * including an operator's takedown merged by hand and maintenance writes that deliberately keep
+   * updatedAt. Read only by profile deletion, to tell whether a project changed recently. Never published.
+   */
+  storedAt?: string;
 }
 
 export interface Pledge {
@@ -288,13 +294,15 @@ function toProject(e: Entity): Project {
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
     totalsDirty: e.totalsDirty === true,
+    storedAt: typeof e.timestamp === 'string' ? e.timestamp : undefined,
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
 }
 
 function fromProject(p: Project): Entity {
-  return { partitionKey: PROJECTS_PK, rowKey: p.id, ...p, tags: p.tags.join(',') };
+  const { storedAt: _storedAt, ...rest } = p;
+  return { partitionKey: PROJECTS_PK, rowKey: p.id, ...rest, tags: p.tags.join(',') };
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -704,10 +712,12 @@ export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
  * transfer marker for an API pledge, creation for a manual one.
  *
  * An API row with no inFlightSince never reached the marker, so it never read the owner for a transfer.
- * A cancelled row sent nothing, or was withdrawn before its address was returned.
+ * A cancelled API row sent nothing: it is cancelled only on a refusal or before the POST. A cancelled
+ * manual row proves nothing, because its donor can be shown the address and cancel a moment later, so
+ * recent manual rows count whatever their status.
  */
 export function pledgeRacedDeletion(p: Pledge, deletedAt: number): boolean {
-  if (p.status === 'cancelled') return false;
+  if (p.method === 'api' && p.status === 'cancelled') return false;
   const started = Date.parse(p.method === 'api' ? p.inFlightSince : p.createdAt);
   if (!Number.isFinite(started)) return false;
   return started >= deletedAt - CLAIM_ORPHAN_GRACE_MS;
@@ -718,10 +728,13 @@ export function pledgeRacedDeletion(p: Pledge, deletedAt: number): boolean {
  * changed inside the window: a pledge only starts on a project it read as open, and a project closed since
  * then was written at the close. Everything else is closed and has been for longer than any pledge request
  * can run, so it is skipped rather than read.
+ *
+ * Measured by the storage timestamp, not updatedAt. An operator's takedown is a hand-made merge that leaves
+ * updatedAt alone, so a project closed that way a second ago would otherwise read as long closed.
  */
 export function projectMayHaveRacedDeletion(p: Project, deletedAt: number): boolean {
   if (p.status === 'open') return true;
-  const changed = Date.parse(p.updatedAt);
+  const changed = Date.parse(p.storedAt || p.updatedAt);
   return !Number.isFinite(changed) || changed >= deletedAt - CLAIM_ORPHAN_GRACE_MS;
 }
 
