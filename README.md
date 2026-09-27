@@ -36,6 +36,9 @@ Licensed under the [MIT License](LICENSE).
 
 ## Quick start
 
+Needs Node 22 and [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local#install-the-azure-functions-core-tools)
+(`func`) on your PATH; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ```bash
 npm install
 npm run dev        # http://localhost:4280 (SWA emulator + API + Azurite)
