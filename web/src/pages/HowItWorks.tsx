@@ -83,11 +83,15 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>Can I send credits without my name being shown?</summary>
-            <p>Yes. Tick <strong>Do not show my name on this project</strong> on the pledge form and the pledge is listed as Anonymous. Every anonymous pledge shows the same name, so nothing ties your anonymous pledges to each other. The amount, message and date are still public, though, so a distinctive amount or an identifying message can still give you away. The researcher receiving the credits still sees your name, because they may need to match the pledge against their RIPE transaction log, and they are told it is not public. This site also keeps a record of who pledged.</p>
+            <p>Yes. Tick <strong>Do not show my name on this project</strong> on the pledge form and the pledge is listed as Anonymous. Every anonymous pledge shows the same name, so nothing ties your anonymous pledges to each other.</p>
+            <p>The amount, message and date are still public, though, so a distinctive amount or an identifying message can still give you away.</p>
+            <p>The researcher receiving the credits still sees your name, because they may need to match the pledge against their RIPE transaction log, and they are told it is not public. This site also keeps a record of who pledged.</p>
           </details>
           <details>
             <summary>How do I know the researcher is who they say they are?</summary>
-            <p>You don't, and nobody here checks. Posting needs a GitHub or Microsoft sign-in and a RIPE NCC Access email, and neither is verified against anything: the address is self-declared, and this site cannot confirm that a person is who they say they are or that the credits will be used as described. What you can see is the display name they chose, their affiliation, and any links they gave to homepages, papers or repositories. The sign-in handle is not published. Treat it like any crowdfunding page: read the links, start small, and send only what you are willing to lose. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
+            <p>You don't, and nobody here checks. Posting needs a GitHub or Microsoft sign-in and a RIPE NCC Access email. The email is self-declared, and this site cannot confirm who a person is or that the credits will be used as described.</p>
+            <p>What you can see is the display name they chose, their affiliation, and any links they gave to homepages, papers or repositories. The sign-in handle is not published. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account.</p>
+            <p>Treat it like any crowdfunding page: read the links, start small, and send only what you are willing to lose. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
           </details>
           <details>
             <summary>Can a project receive more than it asked for?</summary>
@@ -99,7 +103,8 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>How big is RIPE Atlas, and does anyone use the data?</summary>
-            <p>On a single day in February 2024 the platform had about 12,900 connected probes and 810 anchors in 178 countries and more than 4,000 networks, running 50,900 measurements that produced 1.3 billion results. Over a thousand scientific publications build on it, mostly with traceroute, DNS and ping measurements. Coverage is uneven: Germany and the United States together host about 28% of devices, 32 countries have a single device, and the authors call for more coverage in underrepresented regions (<a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>).</p>
+            <p>On a single day in February 2024 the platform had about 12,900 connected probes and 810 anchors in 178 countries and more than 4,000 networks, running 50,900 measurements that produced 1.3 billion results. Over a thousand scientific publications build on it, mostly with traceroute, DNS and ping measurements.</p>
+            <p>Coverage is uneven: Germany and the United States together host about 28% of devices, 32 countries have a single device, and the authors call for more coverage in underrepresented regions (<a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>).</p>
           </details>
         </div></div>
 
