@@ -75,8 +75,8 @@ receipt-matching is best-effort.
   site sets a strict CSP; third-party sites cannot use it. So a browser-side
   "click to transfer from our site" flow against the Atlas API is impossible.
 - **Error format**: `{ "error": { "status", "code", "detail", "title", "errors": [...] } }`.
-- **Privacy**: RIPE never shows user email addresses publicly. Our platform must
-  treat the RIPE NCC Access email as private data.
+- **Privacy**: RIPE never shows user email addresses publicly, so this site treats the
+  RIPE NCC Access email as private data.
 
 ## Can we federate identity with RIPE NCC Access?
 
@@ -106,8 +106,8 @@ Findings:
    transfer recipient identifier), but it would not let us move credits on their
    behalf. Transfers still need an API key or a manual step on atlas.ripe.net.
 
-Conclusion for v1: sign users in with GitHub or Microsoft (built into the Azure
-hosting platform at no cost), ask requesters for their RIPE NCC Access email, and make
+Conclusion for v1: sign users in with GitHub or Microsoft (built into Azure Static
+Web Apps), ask requesters for their RIPE NCC Access email, and make
 transfers happen either through a donor-supplied, single-use, transfer-scoped API key
 or manually on atlas.ripe.net. Design the code so a RIPE NCC Access OIDC provider can
 be plugged in later (Azure Static Web Apps Standard plan, custom OIDC provider) if
@@ -130,11 +130,10 @@ November 2025, https://arxiv.org/abs/2511.22474) analyses one full day of the pl
 - **Credits and quotas** (section 2.2): each measurement's cost is proportional to the
   load it places on probes; a user cannot run more than 100 measurements at once or use
   more than 1,000 probes per measurement. The paper gives the daily spend limit as 1M
-  credits, but that is **per account and not universal**: a production account checked on
-  2026-09-17 reported `max_daily_credits: 10000000`. The live value is in the
-  `max_daily_credits` field of `GET /api/v2/credits/`, so quote that rather than a
-  constant. The Atlas team considers exceptions case by case. Anchors earn ten times the
-  credits of probes.
+  credits, but the limit is set per account: one account checked in September 2026 reported
+  `max_daily_credits: 10000000`. The live value is in the `max_daily_credits` field of
+  `GET /api/v2/credits/`, so quote that rather than a constant. The Atlas team considers
+  exceptions case by case. Anchors earn ten times the credits of probes.
 - **Researcher access** (section 1): the platform "is open for anyone to launch custom
   measurements, provided a user possesses a sufficient amount of RIPE Atlas credits",
   and "if in need, researchers can request them by contacting the RIPE Atlas team
@@ -147,14 +146,13 @@ November 2025, https://arxiv.org/abs/2511.22474) analyses one full day of the pl
   find and reuse them (Measurement Bundles); assess ethics, including DNS queries for
   domains that are sensitive in some jurisdictions.
 
-Implications for the platform: the project form asks requesters whether existing
-measurements were considered and reminds them of the 1M credits/day quota when sizing
-a request and a deadline; the how-it-works page cites the paper and points to the
-direct-request route.
+How the site uses this: the project form asks requesters whether existing measurements
+were considered and to check their own daily limit before asking for a large amount; the
+How it works page cites the paper and points to the direct-request route.
 
 ## Things worth asking RIPE NCC
 
-- Whether they would issue an OIDC client for this platform (verified email claim).
+- Whether they would issue an OIDC client for this site (verified email claim).
 - The exact permission id for credit transfers, and whether a key can be limited to a
   maximum transfer amount or a target recipient (grants do support `target`, but the
   target types for credit permissions are not documented).

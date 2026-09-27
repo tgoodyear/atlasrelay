@@ -5,30 +5,28 @@
 Prerequisites: `az`, logged in as an Owner of the target subscription and with it
 selected (`az account set -s <id>`), or with `SUBSCRIPTION_ID` exported. If the tenant
 enforces MFA, use `az login --tenant <tenant-id>`. Also `gh` (logged in with `repo` and
-`workflow` scopes), `jq`, and Node 22.12+. Set `BUDGET_CONTACT_EMAIL` to the address that
-should receive Azure budget alerts.
+`workflow` scopes), `jq`, and Node 22.12+. Set `GITHUB_REPO` to the repository that will
+deploy (the script's default is this project's original name, not a fork), and export
+`BUDGET_CONTACT_EMAIL`, which the script requires.
 
 ```bash
-./scripts/bootstrap.sh
+GITHUB_REPO=<owner>/<repo> BUDGET_CONTACT_EMAIL=you@example.org ./scripts/bootstrap.sh
 ```
 
 The script is idempotent and creates nothing outside Bicep. It:
 
 1. Checks prerequisites (az, gh, jq, Owner role) and registers the resource providers
    the templates use.
-2. Reads the repository's GitHub OIDC subject prefix and the budget start date (existing
-   value if the budget already exists, else the current month).
+2. Reads the GitHub OIDC subject prefix of `GITHUB_REPO`.
 3. Runs `az deployment sub create` with `infra/main.bicep`: resource group, CI managed
    identity with its GitHub federated credential, least-privilege custom role, Log
-   Analytics + App Insights and the monthly budget (`platform.bicep`), storage account
+   Analytics and App Insights (`platform.bicep`), storage account
    and tables plus the static web app with its app settings (`app.bicep`), then the role
    assignment and delete locks (`rbac.bicep`). A failed first attempt is retried once
    after 45 s (custom-role replication lag).
 4. Waits for the role assignment to be visible, then sets GitHub secrets
    `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identifiers, not
-   credentials), the secret `BUDGET_CONTACT_EMAIL`, and the variable `AZURE_BOOTSTRAPPED`.
-   The contact address is a secret rather than a variable because repository variables are
-   world-readable once the repository is public.
+   credentials), `BUDGET_CONTACT_EMAIL`, and the variable `AZURE_BOOTSTRAPPED`.
 5. Prints the site hostname.
 
 Role assignments can take a few minutes to propagate; if the first workflow run fails
@@ -39,22 +37,23 @@ Then merge to `main` (or run the *Deploy* workflow manually) and the site goes l
 ## Local development
 
 ```bash
-npm install            # installs web + api workspaces and local tooling
+npm install            # installs the web and api workspaces and local tooling
 npm run dev            # Azurite + Functions host (:7071) + Vite (:5173) + SWA emulator (:4280)
 ```
 
 `npm run dev` copies `api/local.settings.json.example` to `api/local.settings.json` if it
 is missing; that file points `TABLES_CONNECTION_STRING` at Azurite. Open
 http://localhost:4280. The SWA emulator lets you "log in" as any username without a real
-GitHub account. Node 22.12 or newer is required (concurrently 10 needs it); newer local versions work
-with a warning from the Functions host.
+GitHub account. Node 22.12 or newer is required; newer major versions work with a warning
+from the Functions host. `func` comes from Azure Functions Core Tools v4, installed
+separately (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 ## Custom domain (atlasrelay.org)
 
 The public DNS zone is Azure DNS, declared in `infra/dns.bicep` and deployed by the
 Owner-only subscription deployment. Bicep is the only writer of the zone.
 
-1. At the registrar (Squarespace), replace the nameservers with the four the zone
+1. At the registrar, replace the nameservers with the four the zone
    reports: `az network dns zone show -n atlasrelay.org -g internetresearch --query nameServers -o tsv`.
 2. Wait for the delegation to appear in public DNS: `dig +short NS atlasrelay.org @1.1.1.1`.
 3. Bind the domain to the site: `./scripts/bind-custom-domain.sh`. It binds `www` by CNAME
@@ -98,24 +97,20 @@ az lock create --name no-delete --lock-type CanNotDelete --resource "$SITE" \
 
 Restore the lock in the same sitting. It is declared in `infra/rbac.bicep`, so a subscription
 deployment also restores it, but do not rely on that. The apex binding is untouched throughout.
+With the CNAME already published, the new binding reaches `Ready` immediately and the
+certificate is served within a minute.
 
-This was run against `www.atlasrelay.org` on 2026-09-17. Rebinding with `cname-delegation`
-returned `Ready` immediately, because the CNAME it validates against was already published, and
-the DigiCert certificate was serving within a minute. Both hostnames now answer 200 over TLS.
+### Apex routing
 
-The apex routes from a plain A record, and the zone ships one. DNS forbids a CNAME at the apex
-and an Azure DNS alias record cannot target a static site, so `infra/dns.bicep` declares an A
-record built from the site's `stableInboundIP`. The TXT token only validates the hostname; it
-does not route it, and Static Web Apps creates no record of its own. This paragraph said the
-reverse until 2026-09-18, which would send anyone debugging an apex outage to the service instead
-of to the zone, and might get the A record deleted as service-owned clutter. The binding script
-refuses to run unless all four nameservers are delegated, and fails loudly if a binding is
-rejected.
+DNS forbids a CNAME at the apex and an Azure DNS alias record cannot target a static site, so
+`infra/dns.bicep` declares an A record built from the site's `stableInboundIP`. The apex TXT
+token only validates the hostname; it does not route it, and Static Web Apps creates no record
+of its own. If the apex stops resolving, check this A record first. The binding script refuses
+to run unless all four nameservers are delegated, and fails if a binding is rejected.
 
-The zone already publishes a `www` CNAME to the site, and records stating the domain sends
-no mail (RFC 7505 null MX, `v=spf1 -all`, DMARC `p=reject`). Remove `rejectMail` if the
-domain ever needs to send email. Azure DNS costs about $0.50 per zone per month plus
-query charges.
+The zone also publishes a `www` CNAME to the site and records stating the domain sends no mail
+(RFC 7505 null MX, `v=spf1 -all`, DMARC `p=reject`). Remove `rejectMail` if the domain ever
+needs to send email.
 
 ## Dev environment
 
@@ -133,10 +128,9 @@ az deployment group create \
   --parameters infra/dev.bicepparam
 ```
 
-As an Owner, not as CI: the CI role denies `Microsoft.Web/staticSites/customDomains/write`, so
-the binding in this file would fail if a workflow ever deployed it. That is deliberate, and if
-CI is ever given the dev environment to deploy, the denial is the thing to reconsider, carefully
-enough that production stays out of reach.
+Run it as an Owner. The CI role denies `Microsoft.Web/staticSites/customDomains/write`, so the
+binding in this file would fail from a workflow. If CI is ever given the dev environment to
+deploy, that denial has to change in a way that keeps production's domains out of reach.
 
 The subdomain takes two resources in two different deployments at two different scopes:
 
@@ -155,7 +149,7 @@ az deployment group create -g internetresearch --template-file infra/app.bicep -
 # 2. read the new hostname, put it in devStaticWebAppDefaultHostname in infra/main.bicepparam,
 #    and re-run the subscription deployment so the CNAME follows it.
 az staticwebapp show -n swa-internetresearch-dev -g internetresearch --query defaultHostname -o tsv
-./scripts/bootstrap.sh
+GITHUB_REPO=<owner>/<repo> BUDGET_CONTACT_EMAIL=you@example.org ./scripts/bootstrap.sh
 # 3. deploy dev again. The binding now validates.
 az deployment group create -g internetresearch --template-file infra/app.bicep --parameters infra/dev.bicepparam
 ```
@@ -184,10 +178,6 @@ this, because `infra/app.bicepparam` binds nothing.
   Bicep wires `APPLICATIONINSIGHTS_CONNECTION_STRING` into the SWA settings; do not set
   app settings by hand, the next infra deploy replaces the whole map. Extra settings go
   in the `additionalAppSettings` parameter.
-- **Budget**: `internetresearch-monthly` emails at 50% and 80% of actual spend and at
-  100% of forecast against $120. It alerts only. The subscription (Visual Studio
-  Enterprise credit) has its spending limit On, which disables the subscription, and
-  therefore the site, if the monthly credit is exhausted. Expected spend is under $1.
 - **Rotate storage keys without downtime**: the API reads key `storageKeyIndex`
   (0 = key1). Set `storageKeyIndex = 1` in both `.bicepparam` files and merge (the
   Infrastructure workflow deploys), renew key1 (`az storage account keys renew --key
@@ -199,36 +189,18 @@ this, because `infra/app.bicepparam` binds nothing.
   (Bicep lint + parameter-drift check), merge (what-if, then deploy on `main`). Keep the
   shared values in `infra/main.bicepparam` identical; `scripts/check-params.sh` fails
   otherwise.
-- **Change platform infra** (resource group, identity, role, locks, monitoring, budget):
+- **Change platform infra** (resource group, identity, role, locks, monitoring):
   edit `infra/main.bicep` and its modules, then re-run `scripts/bootstrap.sh` as an Owner.
 - **Trigger an infra run by hand**: `gh workflow run infra.yml`.
 - **Data export**: `az storage entity query --table-name projects ...` or use Azure
   Storage Explorer.
 - **Owner index rows**: the `projects` table holds two kinds of row. Projects are in partition
-  `project`; each owner also has a partition `owner-<user id>` with one small row per project they
-  posted, which is how the open-project cap and profile deletion find an owner's projects without
-  reading the whole table. Filter exports on `PartitionKey eq 'project'`. Everything that asks
-  "which projects does this account own" reads the index, so a project with no index row is
-  missing from all of it: the owner's dashboard (`/api/my`), the open-project cap, and every part
-  of `DELETE /api/me` -- the close sweep, the name scrub (which then reports a complete sweep over
-  a project still carrying the name) and the in-flight pledge check. It stays on the public
-  listing and its own page. Projects written before the index existed have none (production had
-  no projects then; dev may), so run this once on any environment with older projects. It is safe
-  to re-run:
-
-  ```bash
-  az storage entity query --table-name projects --account-name <storage account> --auth-mode key \
-    --filter "PartitionKey eq 'project'" --select RowKey ownerId createdAt -o json \
-    | jq -r '.items[] | "\(.ownerId) \(.RowKey) \(.createdAt)"' \
-    | while read -r owner id created; do
-        az storage entity insert --if-exists replace --table-name projects \
-          --account-name <storage account> --auth-mode key \
-          --entity PartitionKey="owner-$owner" RowKey="$id" createdAt="$created" -o none
-      done
-  ```
+  `project`; each owner also has a partition `owner-<user id>` with one row per project they
+  posted, which the open-project cap, the owner's dashboard and profile deletion read instead of
+  scanning the table. Filter exports on `PartitionKey eq 'project'`.
 - **Take a project down**: there is no admin console, so this is done against Table Storage.
-  Closing a project stops it accepting credits and takes it off the listing, which is the whole
-  remedy; it is reversible, so prefer it to deleting anything.
+  Closing a project stops it accepting credits and takes it off the listing. It is reversible,
+  so prefer it to deleting anything.
 
   ```bash
   az storage entity merge --table-name projects --account-name <storage account> --auth-mode key \
@@ -236,9 +208,9 @@ this, because `infra/app.bicepparam` binds nothing.
               moderationClosed=true moderationClosed@odata.type=Edm.Boolean
   ```
 
-  Set `moderationClosed` as well as `status`, not instead of it. Closing alone is not a takedown:
-  the owner can reopen their own project from the edit form, and would. The flag is what tells the
-  API to refuse that, and only this command can clear it again (`moderationClosed=false`).
+  Set both `status` and `moderationClosed`. With `status` alone the owner can reopen the project
+  from the edit form; `moderationClosed` makes the API refuse that, and only this command can
+  clear it (`moderationClosed=false`).
 
   To remove the owner as well, delete their row from `users`, which also removes the stored RIPE
   NCC Access email. Find the id from the project's `ownerId`, then:
@@ -251,32 +223,30 @@ this, because `infra/app.bicepparam` binds nothing.
   ```
 
   Close every project they own first, using the command above: deleting the user alone would leave
-  projects advertised as pledgeable that nobody can actually pledge to, because the handler needs
+  projects advertised as pledgeable that nobody can pledge to, because the handler needs
   the owner's address to name a recipient. Their projects and pledges stay, carrying only a display
   name, because other people's records point at them. The internal account id stays on those rows,
-  so the same GitHub or Microsoft account signing in again is reconnected to that history rather
-  than starting clean; deletion is not a ban. Note what you did and why in the abuse issue; pledges
-  are the only audit trail there is.
-- **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and did not get an
-  answer it could act on, so the platform cannot say whether the credits moved. Three things reach
-  this state and they are worth telling apart: the request timed out, the connection failed, or
-  RIPE answered with a 5xx. Only the last means RIPE replied at all, and none of them says whether
-  the transfer was processed first. Only the requester can settle it, by confirming the pledge if
-  the credits arrived or cancelling it if they never did. The donor cannot: cancelling frees their
-  slot, and if the transfer did complete their next pledge would send the same credits again. Their
-  part is to check https://atlas.ripe.net/credits/transactions/ and tell the requester what they
-  find. Neither party needs an operator. If one is abandoned, the 14-day reservation expiry
-  releases the capacity on its own, which is intended. What is not is that the same expiry also
-  releases the donor's slot on a row still flagged uncertain, so the protection against sending
-  those credits twice lapses with nobody having settled anything: issue #22. To find them:
+  so the same GitHub or Microsoft account signing in again is reconnected to that history; deletion
+  is not a ban. Record what you did and why in the abuse issue, since there is no other audit
+  trail.
+- **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and got no usable
+  answer (a timeout, a network failure or a 5xx from RIPE), so the site cannot tell whether the
+  credits moved. Only the requester can settle it: confirm the pledge if the credits arrived,
+  cancel it if they did not. The donor cannot, because cancelling frees their slot and a new
+  pledge could send the same credits twice; they should check
+  https://atlas.ripe.net/credits/transactions/ and tell the requester. No operator action is
+  needed. Unlike other pending pledges, an uncertain one does not expire after 14 days: it keeps
+  its reserved credits and the donor's slot until the requester settles it. The flag stays set
+  after settlement, so filter on status as well. To list the unsettled ones:
 
   ```bash
-  az storage entity query --table-name pledges --filter "transferUncertain eq true" \
+  az storage entity query --table-name pledges \
+    --filter "transferUncertain eq true and (status eq 'pledged' or status eq 'sent')" \
     --account-name <storage account> --auth-mode key
   ```
 
-  Several at once means RIPE was unreachable or slow, not that anything here is broken.
-  Check for a matching spike of 502s in App Insights before changing anything.
+  Several at once usually means RIPE was unreachable or slow. Check App Insights for a matching
+  spike of 502s before changing anything.
 
 ## Adding an admin role later
 
