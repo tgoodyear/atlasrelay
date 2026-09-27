@@ -174,7 +174,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <input type="radio" name="method" checked={method === 'api'} disabled={submitting} onChange={() => setMethod('api')} />
                   <div>
                     <strong>Transfer now with an API key</strong>
-                    <span>Paste a key and we check your balance, then send the transfer. The pledge is confirmed as soon as RIPE accepts it, and the transaction appears in your RIPE log a minute or so later. The key is never stored.</span>
+                    <span>Paste a key and we check your balance, then send the transfer. The pledge is normally confirmed as soon as RIPE accepts it (if recording it fails, the researcher confirms it instead), and the transaction appears in your RIPE log a minute or so later. The key is never stored.</span>
                   </div>
                 </label>
                 <label>

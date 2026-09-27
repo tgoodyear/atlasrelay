@@ -11,9 +11,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Keys with no entry here are never typed by a person and keep their API name.
 const LABELS: Record<string, string> = {
   title: 'Title',
-  summary: 'Summary',
+  summary: 'One-paragraph summary',
   description: 'Full description',
   creditsRequested: 'Credits needed',
+  tags: 'Measurement types',
   deadline: 'Needed by',
   affiliation: 'Affiliation',
   homepageUrl: 'Project homepage',

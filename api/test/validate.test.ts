@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { email, httpsUrl, int, str, tags } from '../src/lib/validate';
+import { email, httpsUrl, int, isoDate, str, tags } from '../src/lib/validate';
 import { HttpError } from '../src/lib/http';
 
 test('str trims and enforces length', () => {
@@ -42,4 +42,16 @@ test('a link field called httpsUrl actually requires https', () => {
   assert.throws(() => httpsUrl({ u: 'not a url' }, 'u'), /must be a valid URL/);
   assert.equal(httpsUrl({}, 'u'), undefined);
   assert.equal(httpsUrl({ u: '' }, 'u'), '');
+});
+
+test('error messages name form fields by their visible labels', () => {
+  assert.throws(() => str({}, 'summary', { max: 280, required: true }), { message: 'One-paragraph summary is required' });
+  assert.throws(() => int({ creditsRequested: 0 }, 'creditsRequested', { min: 1, max: 10 }), { message: 'Credits needed must be between 1 and 10' });
+  assert.throws(() => tags({ tags: 'dns' }), { message: 'Measurement types must be an array' });
+  assert.throws(() => tags({ tags: ['a', 'b'] }), { message: 'unknown tag: a' });
+  assert.throws(() => email({ atlasEmail: 'nope' }, 'atlasEmail'), { message: 'RIPE NCC Access email must be a valid email address' });
+  assert.throws(() => httpsUrl({ homepageUrl: 'http://example.org' }, 'homepageUrl'), { message: 'Project homepage must start with https://' });
+  assert.throws(() => isoDate({ deadline: 'soon' }, 'deadline'), { message: 'Needed by must be YYYY-MM-DD' });
+  // A key no form offers keeps its API name.
+  assert.throws(() => str({ method: 5 }, 'method', { max: 32 }), { message: 'method must be a string' });
 });
