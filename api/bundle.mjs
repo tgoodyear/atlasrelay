@@ -7,9 +7,10 @@
 //
 // @azure/functions-core is not a real package. The Functions worker provides it at runtime, and
 // @azure/functions requires it to register handlers, so it has to stay external.
-import { build } from 'esbuild';
+import { context } from 'esbuild';
 
-await build({
+// --watch rebuilds on every change, for `npm run watch`; otherwise build once and exit.
+const ctx = await context({
   entryPoints: ['src/index.ts'],
   bundle: true,
   platform: 'node',
@@ -19,5 +20,12 @@ await build({
   outfile: 'dist/bundle.js',
   sourcemap: true,
   legalComments: 'none',
-  logLevel: 'warning',
+  logLevel: process.argv.includes('--watch') ? 'info' : 'warning',
 });
+
+if (process.argv.includes('--watch')) {
+  await ctx.watch();
+} else {
+  await ctx.rebuild();
+  await ctx.dispose();
+}

@@ -6,7 +6,7 @@
   "main": "dist/bundle.js",
   "scripts": {
     "build": "tsc && node bundle.mjs",
-    "watch": "tsc -w",
+    "watch": "concurrently -k -n tsc,bundle \"tsc -w --noEmit --preserveWatchOutput\" \"node bundle.mjs --watch\"",
     "test": "tsc --noEmit && node --test --import tsx test/validate.test.ts test/source.test.ts test/atlas.test.ts test/pledges.test.ts test/projects.test.ts test/views.test.ts",
     "start": "func start"
   },
