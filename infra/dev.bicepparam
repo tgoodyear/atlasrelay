@@ -21,7 +21,7 @@ param additionalAppSettings = {}
 // together if dev is ever torn down for good.
 param customDomain = 'dev.atlasrelay.org'
 param tags = {
-  project: 'atlas-credit-exchange'
-  repo: 'tgoodyear/internetresearch'
+  project: 'atlasrelay'
+  repo: 'tgoodyear/atlasrelay'
   environment: 'dev'
 }

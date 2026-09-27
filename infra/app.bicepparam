@@ -21,6 +21,6 @@ param additionalAppSettings = {}                     // (shared)
 // build when it is set, and the CI role in infra/main.bicep denies customDomains/write outright.
 param customDomain = ''
 param tags = {
-  project: 'atlas-credit-exchange'
-  repo: 'tgoodyear/internetresearch'
+  project: 'atlasrelay'
+  repo: 'tgoodyear/atlasrelay'
 }

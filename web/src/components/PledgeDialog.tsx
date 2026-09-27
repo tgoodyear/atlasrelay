@@ -245,7 +245,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 send only what you are willing to lose. Credits cannot be recalled once transferred.
                 {' '}
                 <a
-                  href={`https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&title=${encodeURIComponent(`Report a project: ${project.title}`)}&body=${encodeURIComponent(`Project: ${window.location.origin}/projects/${project.id}\n\nWhat is wrong with it:\n`)}`}
+                  href={`https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&title=${encodeURIComponent(`Report a project: ${project.title}`)}&body=${encodeURIComponent(`Project: ${window.location.origin}/projects/${project.id}\n\nWhat is wrong with it:\n`)}`}
                   target="_blank"
                   rel="noreferrer"
                 >

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time (idempotent) provisioning for Atlas Credit Exchange.
+# One-time (idempotent) provisioning for Atlas Relay.
 #
 #   ./scripts/bootstrap.sh
 #
@@ -16,7 +16,7 @@ SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-$(az account show --query id -o tsv 2>/dev/n
 [[ -n "$SUBSCRIPTION_ID" ]] || { echo "set SUBSCRIPTION_ID, or run: az login" >&2; exit 1; }
 RESOURCE_GROUP="${RESOURCE_GROUP:-internetresearch}"
 LOCATION="${LOCATION:-westus2}"
-GITHUB_REPO="${GITHUB_REPO:-tgoodyear/internetresearch}"
+GITHUB_REPO="${GITHUB_REPO:-tgoodyear/atlasrelay}"
 # Where Azure sends budget alerts. Must be given explicitly: deriving it from the Azure login
 # would quietly reintroduce the operator's personal address, which is what this avoids.
 [[ -n "${BUDGET_CONTACT_EMAIL:-}" ]] || {
