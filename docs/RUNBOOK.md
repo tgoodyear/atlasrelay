@@ -5,18 +5,19 @@
 Prerequisites: `az`, logged in as an Owner of the target subscription and with it
 selected (`az account set -s <id>`), or with `SUBSCRIPTION_ID` exported. If the tenant
 enforces MFA, use `az login --tenant <tenant-id>`. Also `gh` (logged in with `repo` and
-`workflow` scopes), `jq`, and Node 22.12+. The script also requires `BUDGET_CONTACT_EMAIL`
-to be exported.
+`workflow` scopes), `jq`, and Node 22.12+. Set `GITHUB_REPO` to the repository that will
+deploy (the script's default is this project's original name, not a fork), and export
+`BUDGET_CONTACT_EMAIL`, which the script requires.
 
 ```bash
-BUDGET_CONTACT_EMAIL=you@example.org ./scripts/bootstrap.sh
+GITHUB_REPO=<owner>/<repo> BUDGET_CONTACT_EMAIL=you@example.org ./scripts/bootstrap.sh
 ```
 
 The script is idempotent and creates nothing outside Bicep. It:
 
 1. Checks prerequisites (az, gh, jq, Owner role) and registers the resource providers
    the templates use.
-2. Reads the repository's GitHub OIDC subject prefix.
+2. Reads the GitHub OIDC subject prefix of `GITHUB_REPO`.
 3. Runs `az deployment sub create` with `infra/main.bicep`: resource group, CI managed
    identity with its GitHub federated credential, least-privilege custom role, Log
    Analytics and App Insights (`platform.bicep`), storage account
@@ -148,7 +149,7 @@ az deployment group create -g internetresearch --template-file infra/app.bicep -
 # 2. read the new hostname, put it in devStaticWebAppDefaultHostname in infra/main.bicepparam,
 #    and re-run the subscription deployment so the CNAME follows it.
 az staticwebapp show -n swa-internetresearch-dev -g internetresearch --query defaultHostname -o tsv
-./scripts/bootstrap.sh
+GITHUB_REPO=<owner>/<repo> BUDGET_CONTACT_EMAIL=you@example.org ./scripts/bootstrap.sh
 # 3. deploy dev again. The binding now validates.
 az deployment group create -g internetresearch --template-file infra/app.bicep --parameters infra/dev.bicepparam
 ```
@@ -234,12 +235,13 @@ this, because `infra/app.bicepparam` binds nothing.
   cancel it if they did not. The donor cannot, because cancelling frees their slot and a new
   pledge could send the same credits twice; they should check
   https://atlas.ripe.net/credits/transactions/ and tell the requester. No operator action is
-  needed. An abandoned one releases its reserved capacity after 14 days, but that also releases
-  the donor's slot while the outcome is still unknown
-  ([#22](https://github.com/tgoodyear/atlasrelay/issues/22)). To list them:
+  needed. Unlike other pending pledges, an uncertain one does not expire after 14 days: it keeps
+  its reserved credits and the donor's slot until the requester settles it. The flag stays set
+  after settlement, so filter on status as well. To list the unsettled ones:
 
   ```bash
-  az storage entity query --table-name pledges --filter "transferUncertain eq true" \
+  az storage entity query --table-name pledges \
+    --filter "transferUncertain eq true and (status eq 'pledged' or status eq 'sent')" \
     --account-name <storage account> --auth-mode key
   ```
 

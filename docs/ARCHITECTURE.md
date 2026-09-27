@@ -131,8 +131,8 @@ the partition after each change, so the project row never drifts.
      accepting the transfer, so it cannot be read back inside the request, and the
      donor's own credit log shows it a minute or so later. If RIPE never answers, the pledge is left at
      `sent` and flagged uncertain, keeps the donor's slot, and waits for the requester
-     to settle it, though only for the 14-day reservation window, after which the
-     slot is reclaimed even if nobody settled it ([#22](https://github.com/tgoodyear/atlasrelay/issues/22)).
+     to settle it. It is exempt from the 14-day reservation expiry, so its capacity and the
+     donor's slot stay held until the requester confirms or cancels it.
      The key lives only in the request scope, and the UI tells donors to delete or disable
      it afterwards.
    - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
@@ -150,8 +150,9 @@ Before either happens, the donor takes a slot in the `claims` table, one row per
 Reading the pledge list and then writing cannot enforce one live pledge per donor, because a
 request that reads before a rival writes sees nothing to conflict with and both proceed. Creating
 a single row, though, is atomic: exactly one caller creates a given key and the rest get a 409.
-A slot is reclaimable once its pledge has settled, and after the reservation window regardless, so
-a release that never ran cannot lock a donor out for good.
+A slot is reclaimable once its pledge has settled, or after the reservation window, so a release
+that never ran cannot lock a donor out for good. The exception is a pledge whose transfer outcome
+is unknown, which holds its slot until the requester settles it.
 
 Reserved capacity is still settled after the write, because it spans different donors and no one
 row can arbitrate between them. That is safe where a double transfer would not be: over-reserving
@@ -201,7 +202,8 @@ that did not persist is reported as a warning on a pledge the owner can still co
   described under [Ordering](#ordering-and-what-happens-when-a-transfer-fails).
 - No single pledge may reserve a project's whole ceiling, so one free account cannot block every
   other donor.
-- Reservations expire after 14 days, so the site heals without a background job.
+- Reservations expire after 14 days, so the site heals without a background job. Pledges whose
+  transfer outcome is unknown are the exception and wait for the requester.
 - Listing and statistics key off confirmed credits, so reservations never affect what is visible.
 
 ### Privacy
