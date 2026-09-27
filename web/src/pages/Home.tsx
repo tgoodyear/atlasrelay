@@ -18,10 +18,10 @@ export default function Home() {
       <section className="hero">
         <div className="container">
           <div>
-            <span className="eyebrow">For RIPE Atlas researchers</span>
-            <h1>Spare Atlas credits, meet the research that needs them.</h1>
+            <span className="eyebrow">For RIPE Atlas users and researchers</span>
+            <h1>Donate spare RIPE Atlas credits to measurement research</h1>
             <p className="lead">
-              Post the measurement project you are building and how many credits it needs. Atlas users with credits to spare send them straight to your RIPE account.
+              Researchers post the measurement project they are planning and the credits it needs. Atlas users with credits to spare donate them straight to the researcher's RIPE account.
             </p>
             <div className="actions">
               <Link to="/projects" className="btn btn-lg btn-amber">Browse projects</Link>
@@ -89,7 +89,7 @@ export default function Home() {
           </div></div>
           <div className="card"><div className="card-body">
             <h3><span className="num">3</span> Confirm and measure</h3>
-            <p className="muted">Credits land directly in your Atlas account. Confirm receipt, run your measurements, share your results.</p>
+            <p className="muted">Credits go straight to your Atlas account. Confirm manual transfers when they arrive, run your measurements, and post your results on the project page.</p>
           </div></div>
         </div>
       </section>

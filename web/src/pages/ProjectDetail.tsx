@@ -204,7 +204,7 @@ export default function ProjectDetail() {
                     published base rate, and what a measurement is actually billed comes from its
                     own credits_per_result, observed at both 2 and 6 for one-off pings. */}
                 {project.remaining > 0
-                  ? `${fmt(project.remaining)} credits to go, about ${pingsFor(project.remaining)} ping results at RIPE's base rate of 3 credits each. What a measurement really costs depends on how it is set up.`
+                  ? `${fmt(project.remaining)} credits to go, about ${pingsFor(project.remaining)} ping results at RIPE's base rate of 3 credits each. The actual cost depends on how each measurement is set up.`
                   : project.maxPledge > 0
                     ? `The goal is reached, and the project can still accept ${fmt(project.capacity)} more credits, up to 100× its request.`
                     : 'This project has reached its ceiling of 100× its request. Thank you, donors.'}

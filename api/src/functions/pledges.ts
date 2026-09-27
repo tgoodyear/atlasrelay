@@ -669,7 +669,7 @@ app.http('pledges-update', {
         'This transfer was sent to RIPE Atlas and we never got a usable answer, so only the project owner can close it. Check your transaction log, then tell them what you find.',
       );
     }
-    if (!ok) throw new HttpError(409, `Cannot move a ${pledge.status} pledge to ${status} as ${role}`);
+    if (!ok) throw new HttpError(409, `The ${role === 'owner' ? 'project owner' : 'donor'} cannot mark a ${pledge.status} pledge as ${status}. Reload to see where it stands.`);
 
     // The row exists before the credits move, so for a moment it is visible while its transfer is
     // still being attempted. Nobody may act on it in that window: confirming or cancelling frees

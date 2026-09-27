@@ -49,7 +49,7 @@ export default function Dashboard() {
         <Link className="btn btn-amber" to="/projects/new">Post a project</Link>
       </div>
 
-      {user && !user.hasAtlasEmail && <div className="alert alert-warn">You have not added a RIPE NCC Access email yet, so you cannot post projects. <Link to="/profile">Fix that in your profile.</Link></div>}
+      {user && !user.hasAtlasEmail && <div className="alert alert-warn">You have not added a RIPE NCC Access email yet, so you cannot post projects. <Link to="/profile">Add it in your profile.</Link></div>}
       {awaiting > 0 && <div className="alert alert-info">{awaiting} of your projects {awaiting === 1 ? 'has' : 'have'} pending pledges. Check <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">your Atlas credits</a> and confirm them on the project page.</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
