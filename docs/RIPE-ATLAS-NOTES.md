@@ -1,7 +1,7 @@
 # RIPE Atlas research notes
 
 Source: https://atlas.ripe.net/docs/ (read 2026-09-16). These notes capture only what
-matters for a credit-exchange platform. Verify against the live docs before relying
+matters for a credit donation site. Verify against the live docs before relying
 on any detail marked *unverified*.
 
 ## Credits in one paragraph
@@ -118,7 +118,7 @@ RIPE NCC issues a client; that would let us auto-verify the recipient email.
 "Day in the Life of RIPE Atlas: Operational Insights and Applications in Network
 Measurements" (Nosyk, Tashiro, Lone, Kisteleki, Duda, Korczyński; arXiv:2511.22474,
 November 2025, https://arxiv.org/abs/2511.22474) analyses one full day of the platform
-(21 February 2024). Facts from it that matter for this exchange:
+(21 February 2024). Facts from it that matter for this site:
 
 - **Scale**: about 12.9K connected probes and 810 anchors in 178 countries and 4K+
   ASes; 50.9K active measurements produced 1.3 billion results (1.1 TB) in 24 hours.
@@ -138,7 +138,7 @@ November 2025, https://arxiv.org/abs/2511.22474) analyses one full day of the pl
 - **Researcher access** (section 1): the platform "is open for anyone to launch custom
   measurements, provided a user possesses a sufficient amount of RIPE Atlas credits",
   and "if in need, researchers can request them by contacting the RIPE Atlas team
-  directly". This exchange complements that route.
+  directly". This site complements that route.
 - **Research impact** (section 3): over a thousand publications use Atlas; 79 papers at
   top venues between 2019 and 2023 were analysed, dominated by traceroute, DNS and ping.
 - **Guidance for new campaigns** (section 6): check whether built-in, anchoring or

@@ -1,6 +1,6 @@
 # Security
 
-Atlas Credit Exchange handles two things that deserve care: the RIPE NCC Access
+Atlas Relay handles two things that deserve care: the RIPE NCC Access
 email addresses researchers add to their profiles, and the RIPE Atlas API keys
 donors paste when they transfer credits through the site.
 
