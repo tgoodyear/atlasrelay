@@ -219,11 +219,10 @@ app.http('projects-create', {
     // rejected draft does not spend it.
     //
     // The cap below limits open projects, not rows, and it closes the surplus itself, so a loop of
-    // POSTs needs no close step to leave a permanent row per request. Nothing prunes those rows,
-    // and every create, reopen and profile deletion scans the whole projects partition to count an
-    // owner's open projects, so one account could grow the work every other account's writes do.
-    // This is a rate, not a total: it does not shrink a table already grown, and pruning closed
-    // projects is still the only thing that would.
+    // POSTs needs no close step to leave a permanent row per request. Nothing prunes those rows.
+    // Owner lookups are keyed, so they only slow down the account that posted them, but every row
+    // is still served on the anonymous listing. This is a rate, not a total: it does not shrink a
+    // table already grown, and pruning closed projects is still the only thing that would.
     //
     // Held as a row rather than checked as a count, for the reason the pledge claim spells out and
     // this very cap had to learn twice: a burst of concurrent posts all read the old stamp before

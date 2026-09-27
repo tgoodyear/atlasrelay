@@ -14,13 +14,13 @@ export const MAX_OPEN_PROJECTS_PER_USER = 3;
  *
  * The cap above limits open projects, not rows, and nothing prunes a closed one. The cap's own
  * settlement closes the surplus for the poster, so a loop of POSTs needs no close step: each
- * request leaves a permanent row, and every later create, reopen and profile deletion reads the
- * whole projects partition to answer "how many open projects does this account have".
+ * request leaves a permanent row. Owner lookups are keyed now (see listProjectsByOwner), so those
+ * rows only slow the account that wrote them, but they still grow the anonymous listing.
  *
  * A minute is chosen against what the two sides cost. A project description is written by a
  * person, so two posts from one account inside a minute is a machine; an honest researcher filling
  * their three slots in one sitting waits two minutes in total. It bounds the rate at which one
- * account can grow that scan. It does not bound the total -- only pruning closed rows does that,
+ * account can grow the table. It does not bound the total -- only pruning closed rows does that,
  * and nothing here prunes.
  */
 export const PROJECT_POST_INTERVAL_MS = 60_000;

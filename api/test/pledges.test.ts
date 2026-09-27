@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeErrorForLog, HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
-import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeUnresolved, totals } from '../src/lib/store';
+import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeRacedDeletion, pledgeUnresolved, pledgeWriteEntity, projectMayHaveRacedDeletion, storageTimestamp, totals } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
-import type { Pledge } from '../src/lib/store';
+import type { Pledge, Project } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
@@ -457,4 +457,73 @@ test('a pledge still in flight is not offered a Cancel button', () => {
   // Once the window has lapsed the row is settleable, and this is the case the exception exists for.
   const lapsed = Date.parse(fresh.createdAt) + 10 * 60 * 1000;
   assert.equal(donorMayCancelApiPledge(fresh, lapsed), true);
+});
+
+test('a pledge write never carries the donor name, so it cannot undo the deletion scrub (#33)', () => {
+  // The deletion sweep scrubs donorName with a one-field merge. A settlement write that sent the name
+  // taken at the start of its request would put it back, and the sweep has already reported the row
+  // done. The write is a merge, so leaving the field out leaves the scrubbed value alone.
+  const p: Pledge = {
+    id: 'pl1', projectId: 'pr1', donorId: 'd1', donorName: 'Ada', anonymous: false, amount: 10, method: 'api',
+    status: 'confirmed', transactionUrl: '', transactionId: '', transferredAt: '2026-09-26T00:00:00.000Z',
+    transferUncertain: false, inFlight: false, inFlightSince: '2026-09-26T00:00:00.000Z', message: '',
+    createdAt: '2026-09-26T00:00:00.000Z', updatedAt: '2026-09-26T00:00:00.000Z', etag: 'W/"x"',
+  };
+  const e = pledgeWriteEntity(p);
+  assert.equal('donorName' in e, false);
+  assert.equal('etag' in e, false);
+  assert.equal(e.partitionKey, 'pr1');
+  assert.equal(e.rowKey, 'pl1');
+  // Everything the settlement owns is still sent, including values that clear a field. A merge
+  // only leaves alone what is omitted, so an empty string has to be present to be written.
+  assert.equal(e.status, 'confirmed');
+  assert.equal(e.transferUncertain, false);
+  assert.equal(e.inFlight, false);
+  assert.equal(e.transactionId, '');
+});
+
+test('profile deletion counts the pledges that may already have used the owner address (#20)', () => {
+  const deletedAt = Date.parse('2026-09-26T12:00:00.000Z');
+  const at = (secondsBefore: number) => new Date(deletedAt - secondsBefore * 1000).toISOString();
+  const base: Pledge = {
+    id: 'pl', projectId: 'pr', donorId: 'd', donorName: '', anonymous: false, amount: 1, method: 'api',
+    status: 'sent', transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: true,
+    inFlight: true, inFlightSince: at(5), message: '', createdAt: at(30), updatedAt: at(5),
+  };
+  // An API transfer marked just before the owner went: it may be sent to the address.
+  assert.equal(pledgeRacedDeletion(base, deletedAt), true);
+  // Also when it already finished: the credits went to the address around the same moment.
+  assert.equal(pledgeRacedDeletion({ ...base, status: 'confirmed', inFlight: false, transferUncertain: false }, deletedAt), true);
+  // Refused and withdrawn, so nothing was sent.
+  assert.equal(pledgeRacedDeletion({ ...base, status: 'cancelled' }, deletedAt), false);
+  // Never reached the marker, so it never read the owner for a transfer.
+  assert.equal(pledgeRacedDeletion({ ...base, status: 'pledged', inFlightSince: '', createdAt: at(1) }, deletedAt), false);
+  // Long settled: nothing to do with this deletion.
+  assert.equal(pledgeRacedDeletion({ ...base, inFlightSince: at(3600) }, deletedAt), false);
+  // A manual pledge counts from creation, which is when it goes on to read the owner and return the address.
+  const manual: Pledge = { ...base, method: 'manual', status: 'pledged', inFlight: false, inFlightSince: '', transferUncertain: false, createdAt: at(2) };
+  assert.equal(pledgeRacedDeletion(manual, deletedAt), true);
+  assert.equal(pledgeRacedDeletion({ ...manual, createdAt: at(3600) }, deletedAt), false);
+  // A cancelled manual pledge still counts: the donor may have been shown the address and then cancelled.
+  assert.equal(pledgeRacedDeletion({ ...manual, status: 'cancelled' }, deletedAt), true);
+});
+
+test('profile deletion only reads pledges on projects a racing pledge could be on (#20)', () => {
+  const deletedAt = Date.parse('2026-09-26T12:00:00.000Z');
+  const p = { status: 'closed', updatedAt: '2026-09-01T00:00:00.000Z' } as Project;
+  assert.equal(projectMayHaveRacedDeletion({ ...p, status: 'open' }, deletedAt), true);
+  // Closed seconds ago, after a pledge may have read it as open.
+  assert.equal(projectMayHaveRacedDeletion({ ...p, updatedAt: '2026-09-26T11:59:50.000Z' }, deletedAt), true);
+  assert.equal(projectMayHaveRacedDeletion(p, deletedAt), false);
+  // Closed by an operator's hand-made merge a moment ago: updatedAt is old, the storage timestamp is not.
+  assert.equal(projectMayHaveRacedDeletion({ ...p, storedAt: '2026-09-26T11:59:55.000Z' }, deletedAt), true);
+  // A timestamp that cannot be read is looked at rather than skipped.
+  assert.equal(projectMayHaveRacedDeletion({ ...p, updatedAt: '' }, deletedAt), true);
+});
+
+test('the storage timestamp is kept whether the SDK returns a string or a Date', () => {
+  assert.equal(storageTimestamp('2026-09-26T11:59:55.1234567Z'), '2026-09-26T11:59:55.1234567Z');
+  assert.equal(storageTimestamp(new Date('2026-09-26T11:59:55.000Z')), '2026-09-26T11:59:55.000Z');
+  assert.equal(storageTimestamp(new Date('nonsense')), undefined);
+  assert.equal(storageTimestamp(undefined), undefined);
 });

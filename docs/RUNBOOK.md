@@ -204,6 +204,28 @@ this, because `infra/app.bicepparam` binds nothing.
 - **Trigger an infra run by hand**: `gh workflow run infra.yml`.
 - **Data export**: `az storage entity query --table-name projects ...` or use Azure
   Storage Explorer.
+- **Owner index rows**: the `projects` table holds two kinds of row. Projects are in partition
+  `project`; each owner also has a partition `owner-<user id>` with one small row per project they
+  posted, which is how the open-project cap and profile deletion find an owner's projects without
+  reading the whole table. Filter exports on `PartitionKey eq 'project'`. Everything that asks
+  "which projects does this account own" reads the index, so a project with no index row is
+  missing from all of it: the owner's dashboard (`/api/my`), the open-project cap, and every part
+  of `DELETE /api/me` -- the close sweep, the name scrub (which then reports a complete sweep over
+  a project still carrying the name) and the in-flight pledge check. It stays on the public
+  listing and its own page. Projects written before the index existed have none (production had
+  no projects then; dev may), so run this once on any environment with older projects. It is safe
+  to re-run:
+
+  ```bash
+  az storage entity query --table-name projects --account-name <storage account> --auth-mode key \
+    --filter "PartitionKey eq 'project'" --select RowKey ownerId createdAt -o json \
+    | jq -r '.items[] | "\(.ownerId) \(.RowKey) \(.createdAt)"' \
+    | while read -r owner id created; do
+        az storage entity insert --if-exists replace --table-name projects \
+          --account-name <storage account> --auth-mode key \
+          --entity PartitionKey="owner-$owner" RowKey="$id" createdAt="$created" -o none
+      done
+  ```
 - **Take a project down**: there is no admin console, so this is done against Table Storage.
   Closing a project stops it accepting credits and takes it off the listing, which is the whole
   remedy; it is reversible, so prefer it to deleting anything.

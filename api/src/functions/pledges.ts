@@ -125,8 +125,8 @@ app.http('pledges-create', {
       // Set by rollback when it could not withdraw the row because somebody else had already acted
       // on it. Reachable from every path that rolls back, not only the manual one: until
       // inFlightSince is stored, pledgeInFlight measures from createdAt, so a setup slow enough to
-      // outlast that window leaves an API row actionable while the capacity settlement, the balance
-      // check and the owner re-read are still running.
+      // outlast that window leaves an API row actionable while the capacity settlement and the
+      // balance check are still running.
       let rollbackFoundConflict = false;
       const rollback = async (err: HttpError): Promise<HttpError> => {
         // Establish a version first when there is none. Only createPledge can leave us here: every other
@@ -303,23 +303,6 @@ app.http('pledges-create', {
             ? 'Your balance was not checked first; the key appears to lack the "Get information about your credits" permission.'
             : 'Your balance could not be checked first because RIPE Atlas did not answer the balance request.';
         }
-        // Re-read the owner immediately before sending. The snapshot at the top of this handler is
-        // minutes old by now, and a concurrent DELETE /api/me can have completed in between and been
-        // told the address was removed. Transferring to a cached address after that would move
-        // credits to an account the person has asked us to forget.
-        let ownerNow: Awaited<ReturnType<typeof getUser>>;
-        try {
-          ownerNow = await getUser(project.ownerId);
-        } catch (ownerErr) {
-          // A storage failure here is not the owner being gone, but either way no transfer has been
-          // made, so the row and the slot must not be left behind holding the donor out.
-          console.error('Could not re-read the project owner before transferring:', ownerErr instanceof Error ? ownerErr.message : ownerErr);
-          throw await rollback(new HttpError(503, 'We could not confirm where to send the credits just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
-        }
-        if (!ownerNow?.atlasEmail) {
-          throw await rollback(new HttpError(409, 'The project owner is no longer available, so nothing was sent.', NOT_SENT));
-        }
-
         const startedAt = Date.now();
         // Start the in-flight window here, not at row creation. Everything above this line, the
         // claim, the write and the balance check, happens first, and anchoring the window to
@@ -351,7 +334,7 @@ app.http('pledges-create', {
           // Conditional on the row still being the one this request created. Until inFlightSince is
           // stored, pledgeInFlight measures the window from createdAt, so a setup slow enough to
           // outlast it makes this row actionable: the owner or the donor can settle it while the
-          // balance check and the owner re-read above are still running. An unconditional replace
+          // balance check above is still running. An unconditional write
           // would put their settlement back to in-flight and then transfer against it.
           //
           // It also keeps the version current, which the rollback below depends on. Holding the
@@ -394,6 +377,29 @@ app.http('pledges-create', {
           if (fresh?.etag) pledge.etag = fresh.etag;
           throw await rollback(new HttpError(503, 'We could not start the transfer safely just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
         }
+        // Re-read the owner immediately before sending, and only after the marker above is stored.
+        //
+        // The snapshot at the top of this handler is seconds old by now, and a concurrent DELETE /api/me
+        // can have completed in between and been told the address was removed. Re-reading narrows that
+        // window but cannot close it alone: deletion can still land between this read and the POST
+        // (#20). The order closes it. This request writes its marker and then reads the owner; deletion
+        // removes the owner and then reads the pledges on the owner's projects. Whichever goes second
+        // sees the other: either this read finds the owner gone and nothing is sent, or deletion finds
+        // this marker and tells the person a transfer was already under way, instead of promising the
+        // address is out of use while credits are on their way to it.
+        let ownerNow: Awaited<ReturnType<typeof getUser>>;
+        try {
+          ownerNow = await getUser(project.ownerId);
+        } catch (ownerErr) {
+          // A storage failure here is not the owner being gone, but either way no transfer has been
+          // made, so the row and the slot must not be left behind holding the donor out.
+          console.error('Could not re-read the project owner before transferring:', ownerErr instanceof Error ? ownerErr.message : ownerErr);
+          throw await rollback(new HttpError(503, 'We could not confirm where to send the credits just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
+        }
+        if (!ownerNow?.atlasEmail) {
+          throw await rollback(new HttpError(409, 'The project owner is no longer available, so nothing was sent.', NOT_SENT));
+        }
+
         // Set before the call, not after. The moment the POST is issued the outcome stops
         // being ours to assert, so every error from here on is left to say what it actually
         // knows instead of inheriting a blanket "nothing was sent".
@@ -457,6 +463,12 @@ app.http('pledges-create', {
         pledge.transferredAt = new Date().toISOString();
         // The one write that matters: it is what makes `confirmed` durable.
         //
+        // Unconditional, and safe to be because savePledge merges and never sends donorName. The deletion
+        // sweep can scrub the donor's name while this transfer runs; a whole-row replace here used to
+        // write the name taken at the top of this handler back over the scrub (#33). Making it
+        // conditional instead would turn that scrub into a 412, then a retry on the same stale version,
+        // then a confirmed transfer reported as unrecorded -- a money-path failure to fix a cosmetic one.
+        //
         // No transaction lookup precedes it and none follows. RIPE does not index the transaction
         // until well after it accepts the transfer (measured live: absent immediately, present 40
         // to 70 seconds later), so a call here could only ever come back empty. The 201 is what
@@ -478,8 +490,8 @@ app.http('pledges-create', {
           // totals and releases the donor's slot, and the donor's next pledge would then send the
           // same credits a second time -- the exact failure everything else here exists to prevent.
           //
-          // Retrying the confirmation has none of that. It is the same size of write, since
-          // savePledge replaces the whole row either way, so it is no less likely to land; if it
+          // Retrying the confirmation has none of that. It is the same write, every field this
+          // request owns, so it is no less likely to land; if it
           // does, the row says what actually happened and the marker is cleared as a side effect.
           // If it does not, the stored row stays the pre-transfer marker, which carries no transfer
           // fields and no false confirmation, and the in-flight window releases it on its own.

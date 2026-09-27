@@ -101,7 +101,8 @@ export default function Profile() {
             that carries whatever name you choose then. Any project of yours still open is closed,
             because nobody can pledge to a project whose owner has no address to receive the credits.
             Credits already transferred stay transferred, and RIPE Atlas keeps its own record of them,
-            which nothing here can remove.
+            which nothing here can remove. The same goes for a pledge already under way when you
+            delete, and this page will tell you if there was one.
           </p>
           <button
             className="btn btn-danger"
@@ -112,10 +113,27 @@ export default function Profile() {
               setDeleting(true);
               try {
                 const res = await api.deleteMe();
+                // A pledge can be past the point of no return when the profile goes: a transfer
+                // already sent to RIPE, or a donor already shown the address. Nothing can undo
+                // either, so the most the page can do is say so before logging out, rather than
+                // leave the person believing their address is out of use.
+                const inFlight = res.pledgesInFlight;
+                const inFlightNote =
+                  inFlight === null
+                    ? 'We could not check whether anyone was pledging to your projects while you deleted your profile. If a pledge was under way, its credits may still reach your RIPE NCC Access account, or its donor may have been shown your RIPE NCC Access email.'
+                    : inFlight > 0
+                      ? `${inFlight === 1 ? 'A pledge to your projects was' : `${inFlight} pledges to your projects were`} under way while you deleted your profile. Credits already sent may still reach your RIPE NCC Access account, and a donor pledging by hand may already have been shown your RIPE NCC Access email.`
+                      : '';
                 // The profile is gone either way, which is the promise that matters. But the copy
                 // above also says every open project is closed, and the sweep can fail partway, so
                 // logging out silently would leave someone believing something untrue about what
                 // is still listed under their name.
+                //
+                // Every path still logs out. Staying signed in on this page left the old form live,
+                // and saving it would recreate the profile and put the RIPE address back -- undoing
+                // the deletion the notice is about. So the notice is a blocking alert shown before
+                // the redirect rather than a message left on the page.
+                const notes: string[] = [];
                 if (!res.sweepComplete) {
                   const n = res.projectsNotClosed;
                   const named = res.namesNotAnonymized;
@@ -138,11 +156,11 @@ export default function Profile() {
                         : 'Some of your projects or pledges may still show your display name.',
                     );
                   }
-                  setError(
-                    `Your profile and RIPE NCC Access email have been deleted. ${parts.join(' ')} Please report this so it can be finished by hand.`,
-                  );
-                  setDeleting(false);
-                  return;
+                  notes.push(`${parts.join(' ')} Please report this so it can be finished by hand.`);
+                }
+                if (inFlightNote) notes.push(inFlightNote);
+                if (notes.length > 0) {
+                  alert(`Your profile and RIPE NCC Access email have been deleted. ${notes.join(' ')}`);
                 }
                 window.location.href = '/.auth/logout?post_logout_redirect_uri=/';
               } catch (err) {

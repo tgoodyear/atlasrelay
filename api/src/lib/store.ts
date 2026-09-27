@@ -84,6 +84,12 @@ export interface Project {
    * rebuilds the cache.
    */
   totalsDirty?: boolean;
+  /**
+   * Table Storage's own last-write time for the row. Unlike updatedAt it moves on every write,
+   * including an operator's takedown merged by hand and maintenance writes that deliberately keep
+   * updatedAt. Read only by profile deletion, to tell whether a project changed recently. Never published.
+   */
+  storedAt?: string;
 }
 
 export interface Pledge {
@@ -260,6 +266,17 @@ export async function updateUser(id: string, patch: Partial<Pick<User, 'displayN
 
 // ---------- projects ----------
 
+/**
+ * The row's system Timestamp as an ISO string. Against Azurite the SDK hands it back as a string;
+ * accept a Date as well, since the SDK's typing allows either and a value silently dropped here
+ * would make profile deletion fall back to updatedAt, which an operator's hand-made close leaves old.
+ */
+export function storageTimestamp(v: unknown): string | undefined {
+  if (typeof v === 'string' && v) return v;
+  if (v instanceof Date && Number.isFinite(v.getTime())) return v.toISOString();
+  return undefined;
+}
+
 function toProject(e: Entity): Project {
   return {
     id: e.rowKey,
@@ -288,13 +305,15 @@ function toProject(e: Entity): Project {
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
     totalsDirty: e.totalsDirty === true,
+    storedAt: storageTimestamp(e.timestamp),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
 }
 
 function fromProject(p: Project): Entity {
-  return { partitionKey: PROJECTS_PK, rowKey: p.id, ...p, tags: p.tags.join(',') };
+  const { storedAt: _storedAt, ...rest } = p;
+  return { partitionKey: PROJECTS_PK, rowKey: p.id, ...rest, tags: p.tags.join(',') };
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -310,8 +329,35 @@ export async function getProject(id: string): Promise<Project | null> {
   return e ? toProject(e) : null;
 }
 
+/**
+ * Which projects an owner has, as a keyed partition beside the projects themselves (#19).
+ *
+ * The projects partition is a single constant key, so "this owner's projects" used to be a filter on
+ * ownerId over every row on the site. That query enforces the open-project cap and drives profile
+ * deletion, and closed projects are never pruned, so one account posting and closing in a loop made every
+ * other account's creates, reopens and deletions read more. Keyed by owner, what a lookup reads is that
+ * owner's own history and nobody else's, so the cost of posting a lot lands on the account doing it.
+ *
+ * Membership only, written once, never updated. ownerId never changes on a project, so there is nothing
+ * to keep in step: status is read from the project row itself, which is the only place it is written.
+ * A status copy here would be the derived state #19 warned about -- a close or an operator takedown made
+ * directly in storage that missed the index would leave it lying about the cap.
+ *
+ * Lives in the projects table under its own partition prefix, which every projects query already
+ * excludes because each one filters on PartitionKey. A separate table would need a Bicep change for the
+ * same effect.
+ */
+function ownerIndexPk(ownerId: string): string {
+  return `owner-${ownerId}`;
+}
+
 export async function createProject(p: Project): Promise<Project> {
-  await (await table('projects')).createEntity(fromProject(p));
+  const t = await table('projects');
+  // The index row first. A project row with no index entry is invisible to the cap and to deletion's
+  // close sweep; an index entry with no project row is skipped by every reader. So if the second write
+  // fails, the first must be the harmless one.
+  await t.upsertEntity({ partitionKey: ownerIndexPk(p.ownerId), rowKey: p.id, createdAt: p.createdAt }, 'Replace');
+  await t.createEntity(fromProject(p));
   return p;
 }
 
@@ -389,31 +435,9 @@ export function nextResultsPostedAt(
   return patch.resultsSummary || patch.resultsUrl ? at : '';
 }
 
-/**
- * The owner's open projects, for the cap.
- *
- * Still a scan. ownerId is not a key and the projects table has a single constant partition, so
- * the service reads every row to answer this, and that is issue #19's real subject. What the
- * status filter changes is only what comes back: closed projects are never pruned, so the previous
- * client-side filter carried an owner's entire history -- every closed row, each with a description
- * of up to 8000 characters -- across the wire on every create and every reopen, and that part grew
- * without bound. Filtering server-side leaves a result bounded by the cap itself. Stated plainly
- * rather than left to read as a fix for the scan: making the scan keyed needs a key structure
- * beside this table, which this is not.
- *
- * Safe against a row with no status column, which would read as open through toProject's default
- * and be hidden by this filter: createProject writes status on every row and patchProject only
- * ever merges, so no such row can exist.
- */
+/** The owner's open projects, for the cap. Read through the owner index; see listProjectsByOwner. */
 export async function listOpenProjectsByOwner(ownerId: string): Promise<Project[]> {
-  const open: ProjectStatus = 'open';
-  const out: Project[] = [];
-  for await (const e of (await table('projects')).listEntities<Entity>({
-    queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId} and status eq ${open}` },
-  })) {
-    out.push(toProject(e));
-  }
-  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return (await listProjectsByOwner(ownerId)).filter((p) => p.status === 'open');
 }
 
 /**
@@ -475,10 +499,29 @@ export async function deleteProjectPostWindow(userId: string): Promise<void> {
   }
 }
 
+/** Point reads in flight at once when resolving an owner's index. */
+const OWNER_READ_CONCURRENCY = 16;
+
+/**
+ * Every project an owner has posted, newest first: one keyed partition query for the ids, then a point
+ * read per project. Status comes from the project rows, so a close or a takedown is seen the moment it is
+ * written, however it was written.
+ *
+ * An index entry whose project row does not exist is skipped. createProject writes the entry first, so a
+ * create that failed halfway leaves exactly that, and it is not a project.
+ */
 export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
+  const ids: string[] = [];
+  for await (const e of (await table('projects')).listEntities<Entity>({
+    queryOptions: { filter: odata`PartitionKey eq ${ownerIndexPk(ownerId)}`, select: ['RowKey'] },
+  })) {
+    ids.push(e.rowKey);
+  }
   const out: Project[] = [];
-  for await (const e of (await table('projects')).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${PROJECTS_PK} and ownerId eq ${ownerId}` } })) {
-    out.push(toProject(e));
+  for (let i = 0; i < ids.length; i += OWNER_READ_CONCURRENCY) {
+    const batch = await Promise.all(ids.slice(i, i + OWNER_READ_CONCURRENCY).map((id) => getProject(id)));
+    // ownerId is checked rather than trusted: the index is keyed by it, but the project row is the record.
+    for (const p of batch) if (p && p.ownerId === ownerId) out.push(p);
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
@@ -544,11 +587,9 @@ export const DELETED_ACCOUNT_NAME = 'Anonymous';
  *
  * Returns what it managed, not what it intended, so the caller can say so.
  *
- * One thing it cannot guarantee, and the report should not be read as claiming: a pledge whose transfer is
- * in flight while this runs is rewritten afterwards by its own request, from a whole-row snapshot taken
- * before the scrub, which puts the name back. That window is seconds wide and needs the person to be
- * deleting their profile while their own pledge is mid-transfer, and a later deletion pass would catch the
- * row -- but the fix belongs with the post-transfer writes rather than here, and is tracked separately.
+ * A pledge whose transfer is in flight while this runs is safe: its request goes on writing the row after
+ * the scrub, but savePledge never sends donorName (see pledgeWriteEntity), so those writes cannot put the
+ * name back.
  */
 export async function anonymizeRetainedNames(userId: string): Promise<{ projects: number; pledges: number; failed: number }> {
   let projects = 0;
@@ -593,12 +634,11 @@ export async function anonymizeRetainedNames(userId: string): Promise<{ projects
 }
 
 /**
- * Merge just the donor name onto a pledge row.
+ * Merge just the donor name onto a pledge row. The only writer of donorName after creation.
  *
- * savePledge replaces the whole entity from a snapshot the caller holds, which is right where the caller is
- * the request that owns the pledge and wrong here: this sweep runs against rows other requests are actively
- * settling, and a replace would roll back a status written between the read and the write. A merge touches
- * the one field being changed and leaves the rest of the row to whoever owns it.
+ * This sweep runs against rows other requests are actively settling, so it touches the one field it owns
+ * and leaves the rest of the row to whoever owns that. savePledge is the mirror image: it writes the rest
+ * and never the name.
  */
 export async function patchPledgeName(projectId: string, id: string, donorName: string): Promise<void> {
   const t = await table('pledges');
@@ -669,6 +709,44 @@ export function pledgeInFlight(p: Pledge, asOf: number = Date.now()): boolean {
   const since = Date.parse(p.inFlightSince || p.createdAt);
   if (!Number.isFinite(since)) return true;
   return asOf - since <= CLAIM_ORPHAN_GRACE_MS;
+}
+
+/**
+ * Whether a pledge may have used its project owner's RIPE address around the moment that owner deleted
+ * their profile: an API transfer that may be sent to it, or a manual pledge whose donor may have been shown
+ * it. Profile deletion reports these rather than promising the address is out of use (#20).
+ *
+ * Both pledge paths store their row before reading the owner, and deletion removes the owner before it
+ * reads pledges, so any pledge that read the owner in time to use the address is already stored when
+ * deletion looks. What has to be decided is only which stored rows are recent enough to matter. The same
+ * grace as the in-flight window, measured from the moment each path committed to using the address: the
+ * transfer marker for an API pledge, creation for a manual one.
+ *
+ * An API row with no inFlightSince never reached the marker, so it never read the owner for a transfer.
+ * A cancelled API row sent nothing: it is cancelled only on a refusal or before the POST. A cancelled
+ * manual row proves nothing, because its donor can be shown the address and cancel a moment later, so
+ * recent manual rows count whatever their status.
+ */
+export function pledgeRacedDeletion(p: Pledge, deletedAt: number): boolean {
+  if (p.method === 'api' && p.status === 'cancelled') return false;
+  const started = Date.parse(p.method === 'api' ? p.inFlightSince : p.createdAt);
+  if (!Number.isFinite(started)) return false;
+  return started >= deletedAt - CLAIM_ORPHAN_GRACE_MS;
+}
+
+/**
+ * Whether deletion has to look at a project's pledges for pledgeRacedDeletion. An open project, or one that
+ * changed inside the window: a pledge only starts on a project it read as open, and a project closed since
+ * then was written at the close. Everything else is closed and has been for longer than any pledge request
+ * can run, so it is skipped rather than read.
+ *
+ * Measured by the storage timestamp, not updatedAt. An operator's takedown is a hand-made merge that leaves
+ * updatedAt alone, so a project closed that way a second ago would otherwise read as long closed.
+ */
+export function projectMayHaveRacedDeletion(p: Project, deletedAt: number): boolean {
+  if (p.status === 'open') return true;
+  const changed = Date.parse(p.storedAt || p.updatedAt);
+  return !Number.isFinite(changed) || changed >= deletedAt - CLAIM_ORPHAN_GRACE_MS;
 }
 
 /**
@@ -786,11 +864,30 @@ export async function createPledge(p: Pledge): Promise<Pledge> {
   return { ...p, etag: res.etag };
 }
 
+/**
+ * The row a pledge write sends: every field this request owns, and never donorName.
+ *
+ * Separated so the omission can be tested, because the whole fix is an absence. donorName is written
+ * once, by createPledge, and after that only by the deletion sweep through patchPledgeName. Every other
+ * write is a request settling a pledge it holds in memory, and that copy of the name was taken when the
+ * request started. Sending it back put the name on a row the sweep had just scrubbed (#33): the sweep
+ * counted the row as done, the profile page told the person their name was gone, and a transfer that
+ * finished seconds later wrote it back. A writer that never sends the field cannot lose that update.
+ *
+ * Paired with a merge rather than a replace, since a replace would clear the omitted column instead of
+ * leaving it alone. Nothing here depended on a replace clearing anything: every Pledge field is always
+ * present on the object, so each one is written explicitly, empty strings included.
+ */
+export function pledgeWriteEntity(p: Pledge): Record<string, unknown> {
+  const { donorName: _donorName, etag: _etag, ...owned } = p;
+  return { partitionKey: p.projectId, rowKey: p.id, ...owned };
+}
+
 export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   const updated = { ...p, updatedAt: now() };
-  const entity = { partitionKey: p.projectId, rowKey: p.id, ...updated };
+  const entity = pledgeWriteEntity(updated);
   const t = await table('pledges');
-  // With ifMatch this is a conditional replace: it fails with 412 if the row changed since the
+  // With ifMatch this is a conditional merge: it fails with 412 if the row changed since the
   // caller read it, which is how two people acting on the same pledge stop overwriting each other.
   //
   // The returned etag is the new row version, and callers that write the same pledge more than
@@ -805,8 +902,8 @@ export async function savePledge(p: Pledge, ifMatch?: string): Promise<Pledge> {
   // is declared optional: the etag comes back populated, differs on every write, and the previous
   // one is rejected with 412 afterwards.
   const res = ifMatch
-    ? await t.updateEntity(entity as TableEntity, 'Replace', { etag: ifMatch })
-    : await t.upsertEntity(entity, 'Replace');
+    ? await t.updateEntity(entity as TableEntity, 'Merge', { etag: ifMatch })
+    : await t.upsertEntity(entity as TableEntity, 'Merge');
   return { ...updated, etag: res.etag };
 }
 
