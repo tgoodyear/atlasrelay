@@ -120,13 +120,14 @@ the partition after each change, so the project row never drifts.
      attempted for every key, RIPE refuses it, and the transfer proceeds with a warning
      that the balance could not be checked. So a pasted key makes at most two RIPE
      requests, and sometimes one: a balance that comes back below the amount stops the
-     request there, with nothing sent. The pledge row is written **before** the transfer, then the function
-     calls `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
-     and `transferredAt` records when we saw RIPE accept it. If that write fails the
-     handler retries it and, failing that, re-reads the row, so a write whose response
-     was merely lost still ends up reported as confirmed. Only a failure that left
-     the row unchanged leaves it `pledged`; the response then says so rather than
-     claiming otherwise, and the requester confirms it once the credits arrive.
+     request there, with nothing sent. The pledge row is written **before** the transfer and
+     marked `sent` and uncertain, then the function calls `POST /credits/transfers/` exactly
+     once. On 201 the pledge becomes `confirmed` and `transferredAt` records when we saw
+     RIPE accept it. If that write fails the handler retries it and, failing that, re-reads
+     the row, so a write whose response was merely lost still ends up reported as
+     confirmed. If the confirmation never persists, the row stays `sent` and uncertain,
+     the response warns the donor not to send again, and the requester confirms it once
+     the credits arrive.
      No transaction reference is attached: RIPE indexes the transaction well after
      accepting the transfer, so it cannot be read back inside the request, and the
      donor's own credit log shows it a minute or so later. If RIPE never answers, the pledge is left at
