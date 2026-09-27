@@ -266,6 +266,17 @@ export async function updateUser(id: string, patch: Partial<Pick<User, 'displayN
 
 // ---------- projects ----------
 
+/**
+ * The row's system Timestamp as an ISO string. Against Azurite the SDK hands it back as a string;
+ * accept a Date as well, since the SDK's typing allows either and a value silently dropped here
+ * would make profile deletion fall back to updatedAt, which an operator's hand-made close leaves old.
+ */
+export function storageTimestamp(v: unknown): string | undefined {
+  if (typeof v === 'string' && v) return v;
+  if (v instanceof Date && Number.isFinite(v.getTime())) return v.toISOString();
+  return undefined;
+}
+
 function toProject(e: Entity): Project {
   return {
     id: e.rowKey,
@@ -294,7 +305,7 @@ function toProject(e: Entity): Project {
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
     totalsDirty: e.totalsDirty === true,
-    storedAt: typeof e.timestamp === 'string' ? e.timestamp : undefined,
+    storedAt: storageTimestamp(e.timestamp),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };

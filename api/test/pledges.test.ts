@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeErrorForLog, HttpError, markNotSent, NOT_SENT } from '../src/lib/http';
-import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeRacedDeletion, pledgeUnresolved, pledgeWriteEntity, projectMayHaveRacedDeletion, totals } from '../src/lib/store';
+import { activePledgesBy, claimIsReclaimable, donorMayCancelApiPledge, pledgeExpired, pledgeInFlight, pledgeRacedDeletion, pledgeUnresolved, pledgeWriteEntity, projectMayHaveRacedDeletion, storageTimestamp, totals } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import type { Pledge, Project } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
@@ -519,4 +519,11 @@ test('profile deletion only reads pledges on projects a racing pledge could be o
   assert.equal(projectMayHaveRacedDeletion({ ...p, storedAt: '2026-09-26T11:59:55.000Z' }, deletedAt), true);
   // A timestamp that cannot be read is looked at rather than skipped.
   assert.equal(projectMayHaveRacedDeletion({ ...p, updatedAt: '' }, deletedAt), true);
+});
+
+test('the storage timestamp is kept whether the SDK returns a string or a Date', () => {
+  assert.equal(storageTimestamp('2026-09-26T11:59:55.1234567Z'), '2026-09-26T11:59:55.1234567Z');
+  assert.equal(storageTimestamp(new Date('2026-09-26T11:59:55.000Z')), '2026-09-26T11:59:55.000Z');
+  assert.equal(storageTimestamp(new Date('nonsense')), undefined);
+  assert.equal(storageTimestamp(undefined), undefined);
 });

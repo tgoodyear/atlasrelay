@@ -128,11 +128,12 @@ export default function Profile() {
                 // above also says every open project is closed, and the sweep can fail partway, so
                 // logging out silently would leave someone believing something untrue about what
                 // is still listed under their name.
-                if (res.sweepComplete && inFlightNote) {
-                  setError(`Your profile and RIPE NCC Access email have been deleted. ${inFlightNote}`);
-                  setDeleting(false);
-                  return;
-                }
+                //
+                // Every path still logs out. Staying signed in on this page left the old form live,
+                // and saving it would recreate the profile and put the RIPE address back -- undoing
+                // the deletion the notice is about. So the notice is a blocking alert shown before
+                // the redirect rather than a message left on the page.
+                const notes: string[] = [];
                 if (!res.sweepComplete) {
                   const n = res.projectsNotClosed;
                   const named = res.namesNotAnonymized;
@@ -155,11 +156,11 @@ export default function Profile() {
                         : 'Some of your projects or pledges may still show your display name.',
                     );
                   }
-                  setError(
-                    `Your profile and RIPE NCC Access email have been deleted. ${parts.join(' ')} Please report this so it can be finished by hand.${inFlightNote ? ` ${inFlightNote}` : ''}`,
-                  );
-                  setDeleting(false);
-                  return;
+                  notes.push(`${parts.join(' ')} Please report this so it can be finished by hand.`);
+                }
+                if (inFlightNote) notes.push(inFlightNote);
+                if (notes.length > 0) {
+                  alert(`Your profile and RIPE NCC Access email have been deleted. ${notes.join(' ')}`);
                 }
                 window.location.href = '/.auth/logout?post_logout_redirect_uri=/';
               } catch (err) {
