@@ -240,7 +240,7 @@ export default function ProjectDetail() {
               <p className="small muted" style={{ marginTop: '1rem', marginBottom: 0 }}>
                 Nobody vets the projects posted here.{' '}
                 <a
-                  href={`https://github.com/tgoodyear/internetresearch/issues/new?labels=abuse&title=${encodeURIComponent(`Report a project: ${project.title}`)}&body=${encodeURIComponent(`Project: ${window.location.href}\n\nWhat is wrong with it:\n`)}`}
+                  href={`https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&title=${encodeURIComponent(`Report a project: ${project.title}`)}&body=${encodeURIComponent(`Project: ${window.location.href}\n\nWhat is wrong with it:\n`)}`}
                   target="_blank"
                   rel="noreferrer"
                 >

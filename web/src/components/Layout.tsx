@@ -60,7 +60,7 @@ export default function Layout() {
           <span>
             <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">About RIPE Atlas credits</a>
             {' · '}
-            <a href="https://github.com/tgoodyear/internetresearch" target="_blank" rel="noreferrer">Source</a>
+            <a href="https://github.com/tgoodyear/atlasrelay" target="_blank" rel="noreferrer">Source</a>
           </span>
         </div>
       </footer>

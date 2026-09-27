@@ -21,7 +21,7 @@ param devStaticWebAppDefaultHostname = 'icy-bay-08401271e.1.azurestaticapps.net'
 param dnsApexTxtValues = [
   '_rkdd5nw27suei8qugfsuaq79khba6z0'
 ]
-param githubRepo = 'tgoodyear/internetresearch'
+param githubRepo = 'tgoodyear/atlasrelay'
 param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX')
 param enablePullRequestFederation = false
 param budgetAmount = 120

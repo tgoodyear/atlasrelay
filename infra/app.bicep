@@ -1,4 +1,4 @@
-// Atlas Credit Exchange – application resources (resource-group scope).
+// Atlas Relay – application resources (resource-group scope).
 // Deployed by main.bicep (bootstrap) and by the Infrastructure workflow on every merge to main
 // with the CI identity, whose custom role covers only deployments, static sites and storage.
 // Monitoring and the budget live in platform.bicep (Owner-only) and are referenced here read-only.

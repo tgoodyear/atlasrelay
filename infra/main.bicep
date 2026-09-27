@@ -1,4 +1,4 @@
-// Atlas Credit Exchange – subscription-scoped entry point, run once by a subscription Owner
+// Atlas Relay – subscription-scoped entry point, run once by a subscription Owner
 // (scripts/bootstrap.sh). Everything Azure is declared here or in the modules below:
 //
 //   identity.bicep  CI managed identity + GitHub federated credential(s)          (Owner-only)
@@ -40,7 +40,7 @@ param swaLocation string = 'westus2'
 param swaSku string = 'Free'
 
 @description('GitHub repository (owner/name); used for tags and documentation')
-param githubRepo string = 'tgoodyear/internetresearch'
+param githubRepo string = 'tgoodyear/atlasrelay'
 
 @description('''OIDC subject prefix GitHub issues for this repository. Repositories created after
 2026-07-15 use the immutable form "repo:OWNER@OWNER-ID/REPO@REPO-ID"; older ones use "repo:OWNER/REPO".
@@ -100,7 +100,7 @@ param budgetStartDate string
 
 @description('Tags applied to every resource')
 param tags object = {
-  project: 'atlas-credit-exchange'
+  project: 'atlasrelay'
   repo: githubRepo
 }
 
@@ -126,6 +126,8 @@ module identity 'identity.bicep' = {
 
 // Least-privilege role for CI: only what deploying app.bicep needs, inside this group.
 // No identity, RBAC, locks, monitoring or budget write access; no key regeneration or deletes.
+// The name seed and roleName keep the project's original name on purpose: changing the seed would
+// create a second role, and the display name only changes when bootstrap runs.
 resource ciRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(subscription().id, rg.id, 'atlas-credit-exchange-ci-deployer')
   properties: {
