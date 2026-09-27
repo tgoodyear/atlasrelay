@@ -53,7 +53,7 @@ export default function Profile() {
     <div className="narrow">
       <div className="page-head">
         <h1>Your profile</h1>
-        <p>Signed in via {principal.identityProvider === 'aad' ? 'Microsoft' : principal.identityProvider} as <strong>{principal.userDetails || user?.displayName || 'you'}</strong>.</p>
+        <p>Signed in with {principal.identityProvider === 'aad' ? 'Microsoft' : 'GitHub'} as <strong>{principal.userDetails || user?.displayName || 'you'}</strong>.</p>
       </div>
       {next && !user?.hasAtlasEmail && <div className="alert alert-info">Add your RIPE NCC Access email first, then you can post a project.</div>}
       <form className="card" onSubmit={submit}>
@@ -66,7 +66,7 @@ export default function Profile() {
             htmlFor="atlasEmail"
             hint={
               <>
-                The email of the account you use at atlas.ripe.net. Donors transfer credits to this address. It is never shown on public pages, and it is revealed to a signed-in donor at the moment they start a manual pledge to one of your projects, so that they can send the credits. You see each of those donors by name on the project. Only add an address you are willing to share with donors on that basis.
+                The email of your atlas.ripe.net account, where donors send credits. It never appears on public pages. A signed-in donor sees it when they start a manual pledge to one of your projects, and you see that donor's name on the project.
               </>
             }
           >
@@ -92,17 +92,13 @@ export default function Profile() {
         <div className="card-body">
           <h2>Delete your profile</h2>
           <p className="muted">
-            This removes your profile, including your RIPE NCC Access email. Projects you posted and
-            pledges you made stay on the site, because donors and researchers rely on that record, but
-            your display name is taken off them and they read as Anonymous from then on, to everyone
-            including the researchers you gave to. They do still carry the internal account identifier
-            they were created under, so signing in again with the same GitHub or Microsoft account
-            reconnects you to that history rather than starting you fresh, and anything you post after
-            that carries whatever name you choose then. Any project of yours still open is closed,
-            because nobody can pledge to a project whose owner has no address to receive the credits.
-            Credits already transferred stay transferred, and RIPE Atlas keeps its own record of them,
-            which nothing here can remove. The same goes for a pledge already under way when you
-            delete, and this page will tell you if there was one.
+            This removes your profile and your RIPE NCC Access email, and closes any of your projects
+            that are still open, since nobody can send credits without that address. Projects you
+            posted and pledges you made stay on the site with your name removed, and show as Anonymous
+            to everyone. They keep an internal account id, so signing in again with the same GitHub or
+            Microsoft account reconnects you to them. Credits already transferred stay transferred, and
+            RIPE Atlas keeps its own record of them. If a pledge was under way when you delete, this
+            page will tell you.
           </p>
           <button
             className="btn btn-danger"

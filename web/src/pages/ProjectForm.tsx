@@ -62,7 +62,7 @@ export default function ProjectForm() {
     return (
       <div className="narrow" style={{ marginTop: '3rem' }}>
         <div className="card"><div className="card-body">
-          <h2>One thing first</h2>
+          <h2>Add your RIPE NCC Access email</h2>
           <p>Donors send credits to your RIPE NCC Access email, so we need it before you can post. It stays private.</p>
           <Link className="btn" to="/profile?next=/projects/new">Add my RIPE email</Link>
         </div></div>
@@ -154,7 +154,7 @@ export default function ProjectForm() {
               <Field
                 label="Results"
                 htmlFor="results-summary"
-                hint={`${resultsSummary.length}/4000. What came of the work, for the donors who paid for it and for anyone deciding whether to. Plain text; blank lines make paragraphs. Leave it empty until you have something to say.`}
+                hint={`${resultsSummary.length}/4000. What came of the work, for the donors who gave credits and for anyone deciding whether to. Plain text; blank lines make paragraphs. Leave it empty until you have something to say.`}
               >
                 <textarea id="results-summary" maxLength={4000} value={resultsSummary} onChange={(e) => setResultsSummary(e.target.value)} style={{ minHeight: 120 }} />
               </Field>

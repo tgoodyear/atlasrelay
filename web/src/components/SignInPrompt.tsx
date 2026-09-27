@@ -11,7 +11,7 @@ export default function SignInPrompt({ reason, returnTo }: { reason: string; ret
           <a className="btn btn-ms" href={loginUrl('aad', returnTo)}>Continue with Microsoft</a>
         </div>
         <p className="small muted" style={{ marginTop: '1.25rem' }}>
-          We only use your account to identify you on this site. Your RIPE Atlas credentials never pass through us.
+          Your GitHub or Microsoft account is used only to identify you here. This site never asks for your RIPE Atlas password.
         </p>
       </div>
     </div>

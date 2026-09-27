@@ -174,7 +174,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <input type="radio" name="method" checked={method === 'api'} disabled={submitting} onChange={() => setMethod('api')} />
                   <div>
                     <strong>Transfer now with an API key</strong>
-                    <span>We check your balance and send the transfer with a key you paste. RIPE accepting the transfer is the record; the transaction appears in your own RIPE log a minute or so later. The key is never stored.</span>
+                    <span>Paste a key and we check your balance, then send the transfer. The pledge is normally confirmed as soon as RIPE accepts it (if recording it fails, the researcher confirms it instead), and the transaction appears in your RIPE log a minute or so later. The key is never stored.</span>
                   </div>
                 </label>
                 <label>
@@ -228,21 +228,18 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                   <span>Do not show my name on this project</span>
                 </label>
                 <p className="small muted" id="anon-note">
-                  The pledge is listed as Anonymous, with the amount and any message still shown.
-                  The researcher receiving the credits still sees your name: they confirm manual
-                  transfers themselves, and may need to match any pledge against their own RIPE
-                  records, which name the sending account. The amount, the message and the date stay
-                  public and can be compared with other pledges, so leave anything identifying out
-                  of the message. This site keeps a record of who pledged either way, so it hides
-                  your name from other visitors rather than making the pledge anonymous.
+                  The pledge is listed as Anonymous, but the amount, message and date stay public
+                  and can be compared with other pledges, so leave anything identifying out of the
+                  message. The researcher still sees your name, because they may need to match the
+                  pledge against their RIPE records, and this site keeps a record of who pledged.
                 </p>
               </div>
 
               <p className="small muted" style={{ marginTop: '1rem' }}>
-                Nobody checks that a request is genuine. Posting needs a sign-in and a RIPE NCC
-                Access email, both self-declared, and this site cannot verify that a person is who
-                they say they are or that the credits will be used as described. Read the project's links, start with a small amount, and
-                send only what you are willing to lose. Credits cannot be recalled once transferred.
+                Nobody checks that a project is genuine. This site cannot verify who posted it or
+                how the credits will be used. Read the project's links, start with a small amount,
+                and send only what you are willing to lose. Credits cannot be recalled once
+                transferred.
                 {' '}
                 <a
                   href={`https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&title=${encodeURIComponent(`Report a project: ${project.title}`)}&body=${encodeURIComponent(`Project: ${window.location.origin}/projects/${project.id}\n\nWhat is wrong with it:\n`)}`}
@@ -314,7 +311,7 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                     </>
                   ) : (
                     <>
-                      If it is there, the transfer worked -- but it was never recorded here, so no
+                      If it is there, the transfer worked, but it was never recorded here, so no
                       pledge exists on this site for the researcher to confirm.
                     </>
                   )}

@@ -5,16 +5,16 @@ export default function HowItWorks() {
     <div className="narrow">
       <div className="page-head">
         <h1>How it works</h1>
-        <p>Atlas Relay is a donation board with a confirmation loop. Credits are gifts: nothing is bought or sold, and donors get nothing back. RIPE Atlas stays the ledger; we never hold credits or long-lived keys.</p>
+        <p>Atlas Relay is a donation board for RIPE Atlas credits. Nothing is bought or sold, and donors get nothing back. Credits move directly between RIPE Atlas accounts, and this site never holds credits or long-lived keys.</p>
       </div>
 
       <div className="stack">
         <div className="card"><div className="card-body">
           <h2>If you need credits</h2>
           <ol className="steps">
-            <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. That email is where donors send credits. It never appears on a public page, and a signed-in donor sees it when they start a manual pledge to your project, so that they can send the transfer. You see each of those donors by name.</li>
+            <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. Donors send credits to that email. It never appears on a public page; a signed-in donor sees it when they start a manual pledge to your project, and you see that donor's name.</li>
             <li>Post a project: what you are measuring, why it matters, how many credits you need, and by when. Rough guide from the <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">RIPE Atlas docs</a>: a ping result costs 3 credits, DNS 10 to 20, traceroute 30, one-off measurements double.</li>
-            <li>When a donor sends credits manually, they appear in your <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">Atlas credits page</a>. Confirm the pledge on your dashboard. API-driven transfers are confirmed automatically.</li>
+            <li>When a donor sends credits manually, they appear in your <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">Atlas credits page</a>. Confirm the pledge on your dashboard. API transfers are normally confirmed automatically; if recording one fails, it waits on your dashboard for you to confirm.</li>
             <li>Close the project when you are done and, ideally, link your results so donors see what they enabled.</li>
           </ol>
         </div></div>
@@ -23,7 +23,7 @@ export default function HowItWorks() {
           <h2>If you have credits to share</h2>
           <ol className="steps">
             <li>Open a project and click <strong>Send credits</strong>. Choose an amount; you can't exceed what the project still needs.</li>
-            <li><strong>Transfer through the API.</strong> Create a key at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with two permissions and no others: <strong>Transfer credits to another user</strong>, which sends the credits, and <strong>Get information about your credits</strong>, which lets us check your balance first, so the commonest reason a transfer fails is caught before anything moves. Give it a short validity window. Paste it in, and we call <code>POST /api/v2/credits/transfers/</code> exactly once, then discard the key. RIPE accepting that call is what confirms the credits moved, and it is the only thing we record it by: RIPE does not index the transaction until well after it accepts the transfer, so there is no reference to attach while your request is still running. Delete the key afterwards. A key with only the transfer permission still works. We still ask for the balance, RIPE refuses that request, and the transfer goes ahead with a note that we could not check it first.</li>
+            <li><strong>Transfer through the API.</strong> Create a key at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with two permissions and no others: <strong>Transfer credits to another user</strong>, and <strong>Get information about your credits</strong>, which lets us check your balance before sending. Give it a short validity window. Paste it in and we send the transfer once, then discard the key. Once RIPE accepts the transfer the pledge is normally confirmed straight away; if recording it fails, the researcher confirms it instead. Delete the key afterwards. A key with only the transfer permission also works; the transfer goes ahead with a note that we could not check your balance.</li>
             <li><strong>Or transfer by hand.</strong> We show you the recipient email and amount with a link to <a href="https://atlas.ripe.net/credits/transfer/" target="_blank" rel="noreferrer">the Atlas transfer page</a>. Mark the pledge as sent; the researcher confirms receipt.</li>
           </ol>
         </div></div>
@@ -75,19 +75,23 @@ export default function HowItWorks() {
           <h2>Questions</h2>
           <details>
             <summary>Why do I need to sign in with GitHub or Microsoft rather than RIPE NCC Access?</summary>
-            <p>RIPE NCC Access is a standard OpenID Connect provider, but RIPE NCC does not currently issue client registrations to third-party sites, so we cannot federate with it. GitHub and Microsoft sign-in are built into our hosting platform at no cost. If RIPE NCC makes a client available we will add it, which would also let us verify recipient emails automatically.</p>
+            <p>RIPE NCC does not currently let third-party sites use RIPE NCC Access for sign-in. If that changes we will add it, which would also let us verify recipient emails automatically.</p>
           </details>
           <details>
             <summary>Is my RIPE Atlas API key stored?</summary>
-            <p>No. A key you paste is used for at most two requests inside a single API call: a balance check, then the transfer. If RIPE reports a balance below the amount we stop there, so the key is used once and nothing is sent. A balance check that fails rather than answers does not stop it: a transfer-only key has that request refused, and the transfer still goes ahead with a warning, and it is never written to storage or logs. Use a key scoped to credit transfers only and delete it afterwards.</p>
+            <p>No. A key you paste is used for at most two requests to RIPE, a balance check and then the transfer, and is never written to storage or logs. If RIPE reports a balance below the amount, nothing is sent. Give the key only the two permissions described above, and delete it afterwards.</p>
           </details>
           <details>
             <summary>Can I send credits without my name being shown?</summary>
-            <p>Yes. Tick <strong>Do not show my name on this project</strong> on the pledge form and the pledge is listed as Anonymous, with the amount and any message still shown. Every anonymous pledge carries the same name, so nothing derived from your account is published that would tie one of yours to another. That is not the same as being untraceable: the amount, the message and the date are still public and can be compared, so a distinctive amount or a message that identifies you still will. The researcher receiving the credits still sees your name: they confirm manual transfers themselves, and may want to match any pledge against their own RIPE transaction log, which names the sending account. Their view tells them the name is not public. Your message is public either way, so leave anything identifying out of it. This hides your name from other visitors. It does not make the pledge anonymous to the researcher or to whoever runs this site.</p>
+            <p>Yes. Tick <strong>Do not show my name on this project</strong> on the pledge form and the pledge is listed as Anonymous. Every anonymous pledge shows the same name, so nothing ties your anonymous pledges to each other.</p>
+            <p>The amount, message and date are still public, though, so a distinctive amount or an identifying message can still give you away.</p>
+            <p>The researcher receiving the credits still sees your name, because they may need to match the pledge against their RIPE transaction log, and they are told it is not public. This site also keeps a record of who pledged.</p>
           </details>
           <details>
             <summary>How do I know the researcher is who they say they are?</summary>
-            <p>You don't, and nobody here checks. Posting needs a GitHub or Microsoft sign-in and a RIPE NCC Access email, and neither is verified against anything: the address is self-declared, and this site cannot confirm that a person is who they say they are or that the credits will be used as described. What you can see is the display name they chose, their affiliation, and any links they gave to homepages, papers or repositories. The sign-in handle is deliberately not published, so it is not something you can check either. Treat it like any crowdfunding page: read the links, start small, and send only what you are willing to lose. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
+            <p>You don't, and nobody here checks. Posting needs a GitHub or Microsoft sign-in and a RIPE NCC Access email. The email is self-declared, and this site cannot confirm who a person is or that the credits will be used as described.</p>
+            <p>What you can see is the display name they chose, their affiliation, and any links they gave to homepages, papers or repositories. The sign-in handle is not published. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account.</p>
+            <p>Treat it like any crowdfunding page: read the links, start small, and send only what you are willing to lose. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
           </details>
           <details>
             <summary>Can a project receive more than it asked for?</summary>
@@ -99,7 +103,8 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>How big is RIPE Atlas, and does anyone use the data?</summary>
-            <p>On a single day in February 2024 the platform had about 12,900 connected probes and 810 anchors in 178 countries and more than 4,000 networks, running 50,900 measurements that produced 1.3 billion results. Over a thousand scientific publications build on it, mostly with traceroute, DNS and ping measurements. Coverage is uneven. Germany and the United States together host about 28% of devices, 32 countries have a single device, and projects that measure from underrepresented regions are especially valuable (<a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>).</p>
+            <p>On a single day in February 2024 the platform had about 12,900 connected probes and 810 anchors in 178 countries and more than 4,000 networks, running 50,900 measurements that produced 1.3 billion results. Over a thousand scientific publications build on it, mostly with traceroute, DNS and ping measurements.</p>
+            <p>Coverage is uneven: Germany and the United States together host about 28% of devices, 32 countries have a single device, and the authors call for more coverage in underrepresented regions (<a href="https://arxiv.org/abs/2511.22474" target="_blank" rel="noreferrer">Nosyk et al., 2025</a>).</p>
           </details>
         </div></div>
 
