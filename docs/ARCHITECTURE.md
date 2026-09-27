@@ -1,17 +1,16 @@
 # Atlas Relay architecture
 
 A small donation board where RIPE Atlas users who need measurement credits post a
-project, and users who have spare credits send them. The platform never holds
-credits and nobody pays or is paid: donors give credits and get nothing back.
-RIPE Atlas remains the ledger. We hold the *ask*, the *pledge*, and the
-*proof*.
+project, and users who have spare credits send them. Donors give credits and get nothing
+back. The site never holds credits; RIPE Atlas remains the ledger, and the site stores
+the project, the pledge and its confirmation.
 
 ## Goals and constraints
 
 | Goal | Decision |
 | --- | --- |
-| Attractive, simple UI | Single-page React app, four core screens, no dashboards to learn. |
-| Lowest cost, serverless | Azure Static Web Apps (Free) + managed Azure Functions + Azure Table Storage + App Insights inside its free allowance. Expected bill: under $1/month. A $120/month budget sends alerts; the subscription's spending limit (On) is the hard stop. |
+| Simple UI | Single-page React app with a handful of screens. |
+| Serverless | Azure Static Web Apps (Free) + managed Azure Functions + Azure Table Storage + App Insights. |
 | CI/CD from GitHub | Two GitHub Actions workflows: app deploy (build and test on PRs, deploy on push to `main`) and infra (lint on PRs, what-if and deploy on `main`). Both log in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub. |
 | Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth. RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); the design leaves a slot for it. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
@@ -80,7 +79,7 @@ query filters on `PartitionKey eq 'project'`, so these rows never appear in the 
 | `resultsPostedAt` | ISO, stamped the first time either of the two above goes non-empty and never cleared afterwards, so a write-up that is later edited away does not retract the fact that the researcher reported. `hasResults` is derived from it in `publicProject`, and the listing filter, the card pill and the home-page `projectsWithResults` count all read that one flag. Absent on rows written before the fields existed, which reads as empty. |
 | `createdAt`, `updatedAt` | |
 
-Whether a project reported back is deliberately not a `status` value. Whether it still wants
+Whether a project reported back is not a `status` value. Whether it still wants
 credits and whether it published anything are orthogonal, and a closed project that reported is a
 different thing from a closed one that did not.
 
@@ -125,16 +124,17 @@ the partition after each change, so the project row never drifts.
      calls `POST /credits/transfers/` exactly once. On 201 the pledge becomes `confirmed`
      and `transferredAt` records when we saw RIPE accept it. If that write fails the
      handler retries it and, failing that, re-reads the row, so a write whose response
-     was merely lost still ends up reported as confirmed. Only a failure that genuinely
-     left the row unchanged leaves it `pledged`; the response then says so rather than
+     was merely lost still ends up reported as confirmed. Only a failure that left
+     the row unchanged leaves it `pledged`; the response then says so rather than
      claiming otherwise, and the requester confirms it once the credits arrive.
      No transaction reference is attached: RIPE indexes the transaction well after
      accepting the transfer, so it cannot be read back inside the request, and the
      donor's own credit log shows it a minute or so later. If RIPE never answers, the pledge is left at
      `sent` and flagged uncertain, keeps the donor's slot, and waits for the requester
-     to settle it -- though only for the 14-day reservation window, after which the
-     slot is reclaimed with nobody having settled anything, which is [#22](https://github.com/tgoodyear/internetresearch/issues/22). The key lives only in the request scope, and the UI tells donors to
-     delete or disable it afterwards.
+     to settle it, though only for the 14-day reservation window, after which the
+     slot is reclaimed even if nobody settled it ([#22](https://github.com/tgoodyear/atlasrelay/issues/22)).
+     The key lives only in the request scope, and the UI tells donors to delete or disable
+     it afterwards.
    - **I'll transfer on atlas.ripe.net**: we show the recipient email and amount with
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
      donor marks it `sent`; the requester marks it `confirmed`.
@@ -157,7 +157,7 @@ Reserved capacity is still settled after the write, because it spans different d
 row can arbitrate between them. That is safe where a double transfer would not be: over-reserving
 only holds pending credits, it is re-checked at confirm time, and it expires.
 
-What happens next depends on a single question: did RIPE answer?
+What happens next depends on whether RIPE answered.
 
 | Outcome | What we know | What the platform does |
 | --- | --- | --- |
@@ -193,16 +193,12 @@ that did not persist is reported as a warning on a pledge the owner can still co
 - An account may post one project a minute. The cap above limits open projects, not rows, and it
   closes the surplus itself, so a loop of posts needs no close step to leave a permanent row per
   request. Owner lookups go through the owner index (below), so those rows slow only the account
-  that posted them, but every one is still served on the listing. The limit is held as a row, for the same reason the pledge
-  claim is. It bounds the rate, not the total: nothing prunes closed projects, so a table already
+  that posted them, but every one is still served on the listing. The limit is held as a row, for
+  the same reason the pledge claim is. It bounds the rate, not the total: nothing prunes closed projects, so a table already
   grown stays grown.
 - A donor may hold one live pledge per project. Without it, one account could reserve a project
-  repeatedly and re-read the owner's contact address at will. The limit is held by a row in the
-  `claims` table, one per (project, donor), taken before anything else happens. Reading the pledge
-  list and then writing cannot enforce it, because a request that reads before a rival writes sees
-  nothing to conflict with and both proceed; creating a single row is atomic, so exactly one
-  request wins. A slot is reclaimable once its pledge has settled, and after the reservation window
-  regardless, so a release that never ran cannot lock a donor out for good.
+  repeatedly and re-read the owner's contact address at will. The limit is the `claims` row
+  described under [Ordering](#ordering-and-what-happens-when-a-transfer-fails).
 - No single pledge may reserve a project's whole ceiling, so one free account cannot block every
   other donor.
 - Reservations expire after 14 days, so the site heals without a background job.
@@ -224,8 +220,8 @@ name, so `publicName()` reduces anything email-shaped to its local part before i
 - Requester identity is a GitHub/Microsoft account plus a self-declared RIPE email.
   We cannot verify the email against RIPE without federation. Mitigations: the email is
   only shown to committed donors; API transfers fail loudly if the email is not a RIPE
-  NCC Access account (RIPE returns 4xx); projects display owner handle and creation
-  date; abuse can be handled by closing projects (admin role is a later addition).
+  NCC Access account (RIPE returns 4xx); projects display the owner's display name and
+  creation date; abuse is handled by closing projects (see the runbook).
 - Donor keys: single request, never persisted, never logged. The function also refuses
   to proceed if the key would be echoed in any error path.
 
@@ -256,26 +252,25 @@ the SPA shows its own sign-in prompt.
 
 ## Azure resources (every one declared in Bicep)
 
-| Resource | Bicep | SKU | Est. cost |
-| --- | --- | --- | --- |
-| Resource group `internetresearch` (westus2) | `infra/main.bicep` | | $0 |
-| Static Web App `swa-internetresearch` + `appsettings` | `infra/app.bicep` | Free | $0 (100 GB bandwidth/mo, 2 custom domains; staging environments disabled) |
-| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS | ≈ $0.05/mo at expected volumes |
-| Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go | $0 inside the 5 GB/month free allowance |
-| Consumption budget `internetresearch-monthly` | `infra/platform.bicep` | $120, alerts at 50% and 80% actual, 100% forecast | $0 |
-| User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | | $0 |
-| Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write deployments, the static site and storage only, minus site deletion/invitations/user roles/token reset and storage deletion/key regeneration | `infra/main.bicep` | | $0 |
-| Role assignment of that role to the CI identity; `CanNotDelete` locks on the storage account and the static site | `infra/rbac.bicep` | | $0 |
-| Public DNS zone `atlasrelay.org` with a `www` CNAME to the site and mail-rejection records | `infra/dns.bicep` | Azure DNS | ≈ $0.50/mo plus query charges |
+| Resource | Bicep | SKU |
+| --- | --- | --- |
+| Resource group `internetresearch` (westus2) | `infra/main.bicep` | |
+| Static Web App `swa-internetresearch` + `appsettings` (staging environments disabled) | `infra/app.bicep` | Free |
+| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS |
+| Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go |
+| User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | |
+| Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write deployments, the static site and storage only, minus site deletion/invitations/user roles/token reset and storage deletion/key regeneration | `infra/main.bicep` | |
+| Role assignment of that role to the CI identity; `CanNotDelete` locks on the storage account and the static site | `infra/rbac.bicep` | |
+| Public DNS zone `atlasrelay.org` with a `www` CNAME to the site and mail-rejection records | `infra/dns.bicep` | Azure DNS |
 
 `main.bicep` is subscription-scoped and is run once by a subscription Owner via
 `scripts/bootstrap.sh`. It creates the group, the CI identity, the custom role, the
-monitoring and budget resources, the role assignment and the locks, and deploys
-`app.bicep`. `app.bicep` is what CI deploys on every infra change; it needs nothing
-beyond the custom role, so a compromised workflow run cannot change RBAC, re-federate the
-identity, remove a lock, delete the site or data, regenerate storage keys, raise the log
-cap, or silence the budget. (It can still read storage keys through `listKeys`, which the
-API itself needs, and it could move the site to the Standard SKU, about $9/month.)
+monitoring resources, the role assignment and the locks, and deploys `app.bicep`.
+`app.bicep` is what CI deploys on every infra change; it needs nothing beyond the custom
+role, so a compromised workflow run cannot change RBAC, re-federate the identity, remove a
+lock, delete the site or data, regenerate storage keys, or raise the log cap. It can still
+read storage keys through `listKeys`, which the API itself needs, and it could change the
+site's SKU.
 
 `main.bicepparam` (bootstrap) and `app.bicepparam` (CI) both feed `app.bicep`;
 `scripts/check-params.sh` fails lint if a shared value drifts, so neither path undoes
@@ -295,8 +290,8 @@ production tables with a CI identity, so PRs only build, test and lint. Previews
 re-enabled later by setting `enablePullRequestFederation` and
 `stagingEnvironmentPolicy: Enabled`.
 
-Upgrade path that stays well inside budget: SWA Standard ($9/mo) for custom OIDC
-(RIPE NCC Access), an SLA and PR preview environments.
+Upgrade path: SWA Standard for custom OIDC (RIPE NCC Access), an SLA and PR preview
+environments.
 
 ## Repository layout
 
@@ -304,7 +299,7 @@ Upgrade path that stays well inside budget: SWA Standard ($9/mo) for custom OIDC
 web/      Vite + React + TypeScript SPA; public/staticwebapp.config.json
 api/      Azure Functions v4 (Node 22, TypeScript)
 infra/    main.bicep (subscription scope) → identity.bicep, rbac.bicep, app.bicep (+ .bicepparam)
-scripts/  bootstrap.sh (one-time provisioning + GitHub secret wiring), budget-start-date.sh
+scripts/  bootstrap.sh (one-time provisioning + GitHub secret wiring) and its helpers
 .github/workflows/deploy.yml   build + test on PRs; build + deploy app & API on main
 .github/workflows/infra.yml    Bicep lint on PRs; what-if + deploy app.bicep on main (OIDC login)
 docs/     this spec, RIPE research notes, runbook
@@ -333,7 +328,7 @@ docs/     this spec, RIPE research notes, runbook
   the tree that ships is the tree that was tested.
 - `scripts/bootstrap.sh`: preflight checks, resource-provider registration, reads the
   GitHub OIDC subject prefix (validated against the repository's immutable-subject
-  setting) and the budget start date, runs `az deployment sub create` with
+  setting), runs `az deployment sub create` with
   `infra/main.bicep` (one retry for custom-role replication lag), waits for the role
   assignment, and stores the identity's client id, tenant id and subscription id as
   GitHub secrets plus the `AZURE_BOOTSTRAPPED` variable. Nothing else is created
