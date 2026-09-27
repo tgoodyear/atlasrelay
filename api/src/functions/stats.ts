@@ -12,7 +12,9 @@ app.http('stats', {
     // These figures move only when someone posts a project or a pledge is confirmed, which is
     // rare, and they are decorative rather than load-bearing: nothing decides anything on them.
     // stale-while-revalidate lets a repeat visitor render instantly from cache while the refresh
-    // happens behind them, so only the first view in five minutes waits on the function.
-    return json({ stats }, 200, { 'cache-control': 'public, max-age=300, stale-while-revalidate=3600' });
+    // happens behind them, so only the first view in five minutes waits on the function. A day of
+    // staleness is fine for figures this slow-moving, and it covers the gaps between visits that
+    // an hour did not: on a site this quiet, the function is usually cold when anyone arrives.
+    return json({ stats }, 200, { 'cache-control': 'public, max-age=300, stale-while-revalidate=86400' });
   }),
 });

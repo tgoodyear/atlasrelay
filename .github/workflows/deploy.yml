@@ -63,19 +63,21 @@ jobs:
       - name: Build API
         run: npm run build -w api
 
-      # npm workspaces hoist the API's runtime dependencies to the repo root, and the SWA action
-      # uploads api_location verbatim (skip_api_build). Stage a self-contained folder whose
-      # node_modules is exactly the lockfile-pinned production tree of the api workspace.
+      # The SWA action uploads api_location verbatim (skip_api_build). The API is bundled into one
+      # file (api/bundle.mjs), so the artifact is that file, host.json and package.json, with no
+      # node_modules: a cold host reading three thousand small files off a network share was most
+      # of the wait on a first visit.
       - name: Stage API artifact
         run: |
-          rm -rf api-deploy && mkdir api-deploy
-          cp -r api/dist api/host.json api/package.json api-deploy/
-          npm ci -w api --omit=dev --ignore-scripts
-          cp -R node_modules api-deploy/node_modules
-          rm -rf api-deploy/node_modules/api api-deploy/node_modules/web api-deploy/node_modules/.bin api-deploy/node_modules/.package-lock.json
-          test -d api-deploy/node_modules/@azure/functions && test -d api-deploy/node_modules/@azure/data-tables
-          test ! -d api-deploy/node_modules/react
-          cd api-deploy && node -e "process.env.TABLES_CONNECTION_STRING='x'; require('./dist/src/index.js'); console.log('API entry point loads')"
+          rm -rf api-deploy && mkdir -p api-deploy/dist
+          cp api/dist/bundle.js api/host.json api/package.json api-deploy/
+          mv api-deploy/bundle.js api-deploy/dist/bundle.js
+          test "$(node -p "require('./api-deploy/package.json').main")" = dist/bundle.js
+          test ! -d api-deploy/node_modules
+          # @azure/functions-core is supplied by the Functions worker and is the one import left
+          # outside the bundle; @azure/functions runs without it here, so a plain load proves
+          # everything else resolved into the file.
+          cd api-deploy && node -e "process.env.TABLES_CONNECTION_STRING='x'; require('./dist/bundle.js'); console.log('API bundle loads without node_modules')"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
