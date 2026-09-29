@@ -156,7 +156,7 @@ export const api = {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
     return request<{ projects: Project[] }>(`/api/projects${qs ? `?${qs}` : ''}`);
   },
-  project: (id: string) => request<{ project: Project; owner: PublicUser | null; pledges: Pledge[]; viewer: { isOwner: boolean; userId: string } | null }>(`/api/projects/${id}`),
+  project: (id: string) => request<{ project: Project; owner: PublicUser | null; pledges: Pledge[]; viewer: { isOwner: boolean; userId: string } | null; page: { title: string; description: string } }>(`/api/projects/${id}`),
   createProject: (body: unknown) => request<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   updateProject: (id: string, body: unknown) => request<{ project: Project }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   me: () => request<{ user: User }>('/api/me'),

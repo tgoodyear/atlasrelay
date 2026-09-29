@@ -5,7 +5,8 @@ import { isId, newId } from '../lib/ids';
 import { Project, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, totals } from '../lib/store';
 import { MAX_OPEN_PROJECTS_PER_USER, PROJECT_POST_INTERVAL_MS, SurplusClose, capSettlement, surplusOpenProjects } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
-import { publicPledge, publicProject, publicUser } from '../lib/views';
+import { isPublicProject, publicPledge, publicProject, publicUser } from '../lib/views';
+import { projectHead } from '../lib/projectHtml';
 import { logError } from '../lib/telemetry';
 
 /**
@@ -92,7 +93,8 @@ app.http('projects-list', {
         p.etag,
       ).catch(() => undefined);
     }));
-    let projects = rows.map((p) => publicProject(p, live.get(p.id)));
+    // A project an operator took down is off every listing, as it is off the sitemap and its page.
+    let projects = rows.filter(isPublicProject).map((p) => publicProject(p, live.get(p.id)));
     if (status === 'open') projects = projects.filter((p) => p.open);
     else if (status === 'funded') projects = projects.filter((p) => p.funded);
     else if (status === 'closed') projects = projects.filter((p) => p.status === 'closed');
@@ -118,9 +120,11 @@ app.http('projects-get', {
     const id = req.params.id;
     if (!isId(id)) throw new HttpError(404, 'Not found');
     const project = await getProject(id);
-    if (!project) throw new HttpError(404, 'Not found');
-    const [owner, pledges] = await Promise.all([getUser(project.ownerId), listPledges(id)]);
     const principal = getPrincipal(req);
+    // A project an operator took down answers 404 like its page does, except to its owner, who can
+    // still open it and settle its pledges.
+    if (!project || (!isPublicProject(project) && principal?.userId !== project.ownerId)) throw new HttpError(404, 'Not found');
+    const [owner, pledges] = await Promise.all([getUser(project.ownerId), listPledges(id)]);
     // The pledges are already loaded here, so use expiry-aware totals rather than the cached
     // counters: a lapsed reservation is released on reads too, not only after the next write.
     const live = totals(pledges);
@@ -129,6 +133,8 @@ app.http('projects-get', {
       owner: owner ? publicUser(owner) : null,
       pledges: pledges.filter((p) => p.status !== 'cancelled').map(publicPledge),
       viewer: principal ? { isOwner: principal.userId === project.ownerId, userId: principal.userId } : null,
+      // The title and description the server-rendered page carries, so the app sets the same head.
+      page: projectHead(project),
     });
   }),
 });

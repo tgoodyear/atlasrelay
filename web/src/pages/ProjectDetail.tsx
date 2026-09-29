@@ -13,10 +13,12 @@ export default function ProjectDetail() {
   const { id = '' } = useParams();
   const { principal } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
+  const [page, setPage] = useState<{ title: string; description: string } | null>(null);
   const [owner, setOwner] = useState<PublicUser | null>(null);
   const [pledges, setPledges] = useState<Pledge[]>([]);
   const [isOwner, setIsOwner] = useState(false);
   const [error, setError] = useState('');
+  const [notFound, setNotFound] = useState(false);
   const [showPledge, setShowPledge] = useState(false);
   const [busy, setBusy] = useState('');
 
@@ -24,6 +26,7 @@ export default function ProjectDetail() {
     try {
       const r = await api.project(id);
       setProject(r.project);
+      setPage(r.page);
       setOwner(r.owner);
       setIsOwner(Boolean(r.viewer?.isOwner));
       if (r.viewer) {
@@ -37,7 +40,9 @@ export default function ProjectDetail() {
       }
       setPledges(r.pledges);
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 404 ? 'Project not found' : (e as Error).message);
+      const missing = e instanceof ApiError && e.status === 404;
+      setNotFound(missing);
+      setError(missing ? 'Project not found' : (e as Error).message);
     }
   }, [id]);
 
@@ -46,13 +51,16 @@ export default function ProjectDetail() {
   }, [load]);
 
   // Error first, matching the render below: a failed reload can leave the previous project set,
-  // and the error view must not keep that project's canonical URL.
+  // and the error view must not keep that project's canonical URL. The project's head is the one
+  // the server rendered into the page (api/src/lib/projectHtml.ts), and a missing project gets the
+  // head of the 404 page the server sent, so loading the app changes neither. Until the project
+  // loads the head is left as the server sent it.
   usePageMeta(
     error
-      ? { title: error, noindex: true }
-      : project
-        ? { title: project.title, description: project.summary, path: `/projects/${project.id}` }
-        : META.project,
+      ? notFound ? META.notFound : { title: error, noindex: true }
+      : project && page
+        ? { title: page.title, description: page.description, path: `/projects/${project.id}` }
+        : null,
   );
 
   if (error) return <div className="narrow"><div className="empty" style={{ marginTop: '3rem' }}><h1>{error}</h1><p><Link to="/projects">All projects</Link></p></div></div>;

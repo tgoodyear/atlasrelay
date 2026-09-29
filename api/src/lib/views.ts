@@ -20,7 +20,17 @@ export function publicName(displayName: string, handle: string, id: string): str
   return `user-${(id || '').slice(0, 6)}`;
 }
 
-/** Public shape of a project. Never includes the owner's email. */
+/**
+ * Whether anyone may see a project: every project except one an operator took down
+ * (moderationClosed, see docs/RUNBOOK.md). The sitemap, the listing, GET /api/projects/{id} and the
+ * server-rendered project page all use this one rule, so a page the sitemap leaves out also answers
+ * 404, and the app never shows a project whose page says it does not exist. The project API still
+ * answers the owner, who can see what was taken down and settle its pledges.
+ */
+export function isPublicProject(p: Pick<Project, 'moderationClosed'>): boolean {
+  return !p.moderationClosed;
+}
+
 /**
  * Public shape of a project. Pass live totals when they are already to hand (a single-project
  * read loads the pledges anyway), so that expired reservations are reflected on reads too.

@@ -7,6 +7,7 @@ import './functions/my';
 import './functions/stats';
 import './functions/atlas';
 import './functions/sitemap';
+import './functions/projectPage';
 
 app.setup({ enableHttpStream: false });
 

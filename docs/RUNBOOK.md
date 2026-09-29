@@ -304,8 +304,10 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and re-run th
   posted, which the open-project cap, the owner's dashboard and profile deletion read instead of
   scanning the table. Filter exports on `PartitionKey eq 'project'`.
 - **Take a project down**: there is no admin console, so this is done against Table Storage.
-  Closing a project stops it accepting credits and takes it off the listing. It is reversible,
-  so prefer it to deleting anything.
+  Closing a project stops it accepting credits. Setting `moderationClosed` as well takes it off
+  every listing and the sitemap, and its page and `GET /api/projects/<id>` answer 404 to
+  everyone except the owner. It is reversible, so prefer it to deleting anything. Browsers and
+  proxies may keep the old page for up to a minute.
 
   ```bash
   az storage entity merge --table-name projects --account-name <storage account> --auth-mode key \
@@ -357,22 +359,37 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and re-run th
 
 - **Pages and status codes**: the build writes one HTML file per kind of page from
   `web/index.html` (`web/src/lib/pages.ts`, run from `web/vite.config.ts`): `index.html` for the
-  home page, `shell/projects.html`, `shell/how-it-works.html`, `shell/project.html` for every
-  project page, `shell/app.html` for the pages behind sign-in, and `404.html`. Each has its own
-  title and description, and a line of text inside `#root` for clients that do not run
-  JavaScript. The home, projects and how-it-works files carry a canonical URL. The project shell
-  has none, because the app adds each project's own, and the sign-in and not-found files carry
-  `noindex` instead. `staticwebapp.config.json` rewrites each route to its file. There is no
-  navigation fallback, so any other path gets `404.html` with a 404 status. Adding a route to
-  `web/src/App.tsx` means adding a rule for it too; `web/test/seo.test.ts` fails until you do.
-- **Project pages**: every path under `/projects/` returns 200 with the project shell, because
-  the routing rules cannot tell a real project id from a wrong one. When the API says the project
-  does not exist, the page adds `noindex` and shows "Project not found".
-  The edit form at `/projects/<id>/edit` shares that shell. A route rule cannot match a segment
-  after a wildcard, so `robots.txt` disallows `/projects/*/edit` instead, and the page adds
-  `noindex` itself.
-- **Trailing slashes**: `/projects/`, `/projects/new/`, `/how-it-works/`, `/dashboard/` and
-  `/profile/` redirect with a 301 to the same path without the slash.
+  home page, `shell/projects.html`, `shell/how-it-works.html`, `shell/project.html` (the
+  template for project pages), `shell/app.html` for the pages behind sign-in, and `404.html`.
+  Each has its own title and description, and a line of text inside `#root` for clients that do
+  not run JavaScript. The home, projects and how-it-works files carry a canonical URL, and the
+  sign-in and not-found files carry `noindex` instead. `staticwebapp.config.json` rewrites each
+  route to its file. There is no navigation fallback, so any other path gets `404.html` with a
+  404 status. Adding a route to `web/src/App.tsx` means adding a rule for it too;
+  `web/test/seo.test.ts` fails until you do.
+- **Project pages**: `/projects/*` (after the rules for `/projects` and `/projects/new`) is
+  rewritten to the `project-page` function, which reads the id from the `x-ms-original-url`
+  header and answers:
+
+  | Request | Status | Page | `cache-control` |
+  | --- | --- | --- | --- |
+  | `/projects/<id>`, project exists and is not taken down | 200 | Project shell with the project's title, summary, canonical URL and `og:url` | `public, max-age=60` |
+  | `/projects/<id>/edit` with a well-formed id | 200 | Project shell with the edit form's title and `noindex` | `public, max-age=60` |
+  | Unknown id, taken-down project, malformed id, any other path | 404 | `404.html`, `noindex` | `public, max-age=60` |
+  | Storage failed, or the header was missing | 200 | `shell/project.html` with `noindex` | `no-store` |
+
+  The function starts from `shell/project.html` and `404.html` as the same build wrote them:
+  `api/bundle.mjs` embeds both in the API bundle, so the web app has to be built before the API
+  (`npm run build` does this). SWA does not add `globalHeaders` to function responses, so the
+  function sets the CSP and the other security headers itself; `api/test/projectPage.test.ts`
+  fails if they drift from the config. The last row logs `Project page: could not read the
+  project` or a `project-page` event with `outcome: no-original-url`. Either one on every request
+  means the page heads are generic but the site still works. `robots.txt` still disallows
+  `/projects/*/edit`.
+- **Trailing slashes**: the docs say `trailingSlash: "never"` redirects `/how-it-works/` to
+  `/how-it-works` with a 301. In production it does not: SWA answers the path with the slash
+  with the same page and a 200, and the canonical tag names the path without it. The project page
+  function does the same for `/projects/<id>/`.
 - **Sitemap**: `/sitemap.xml` is rewritten to `GET /api/sitemap`, which lists the home page, the
   project list, the how-it-works page and every project an operator has not taken down
   (`moderationClosed`). Responses may be cached for an hour. If storage fails it answers 503.

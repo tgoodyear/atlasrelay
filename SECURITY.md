@@ -29,8 +29,9 @@ naming the project publicly would make things worse, use private vulnerability r
 instead.
 
 There is one maintainer, so expect a response in days rather than hours. A fraudulent project
-is closed by the site, which stops it accepting credits and removes it from the listing; the
-owner cannot reopen it. The owner's profile and stored email can be deleted too, but that is
+is closed by the site, which stops it accepting credits and removes it from the listing and
+the sitemap. Its page then answers "not found" to everyone except the owner, and the owner cannot
+reopen it. The owner's profile and stored email can be deleted too, but that is
 not a ban: signing in again with the same account creates a new profile linked to the old
 projects and pledges.
 

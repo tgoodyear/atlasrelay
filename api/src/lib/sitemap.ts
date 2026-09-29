@@ -1,11 +1,13 @@
 import { isId } from './ids';
+import { SITE_ORIGIN } from './site';
 import type { Project } from './store';
+import { isPublicProject } from './views';
 
 /**
  * The canonical origin every sitemap URL is written against. It has to match SITE_ORIGIN in
  * web/src/lib/pages.ts, which sets the canonical tags; test/sitemap.test.ts checks that it does.
  */
-export const SITE_ORIGIN = 'https://www.atlasrelay.org';
+export { SITE_ORIGIN };
 
 /** Pages that exist whatever is in storage. Pages behind sign-in are left out. */
 export const STATIC_PATHS = ['/', '/projects', '/how-it-works'];
@@ -21,8 +23,9 @@ export interface SitemapEntry {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
 
 /**
- * Every project page anyone can open, apart from projects an operator took down. A closed project
- * stays in: its page is still public and is where a researcher's results are posted.
+ * Every project page anyone can open: isPublicProject leaves out projects an operator took down,
+ * which is the same rule the project API and the server-rendered project page apply. A closed
+ * project stays in: its page is still public and is where a researcher's results are posted.
  *
  * Capped at MAX_URLS so the file stays valid. listProjects returns the newest first, so any cut
  * drops the oldest projects. Splitting into several files behind a sitemap index can wait until
@@ -33,7 +36,7 @@ export function sitemapEntries(projects: Pick<Project, 'id' | 'moderationClosed'
   for (const p of projects) {
     // The id goes into a URL, so anything that is not a well-formed id is skipped rather than
     // escaped. Every id this API writes passes.
-    if (p.moderationClosed || !isId(p.id)) continue;
+    if (!isPublicProject(p) || !isId(p.id)) continue;
     const lastmod = ISO_DATE.exec(p.updatedAt)?.[0];
     entries.push({ loc: `${SITE_ORIGIN}/projects/${p.id}`, ...(lastmod ? { lastmod } : {}) });
   }

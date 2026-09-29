@@ -2,7 +2,7 @@
 
 A small donation board where RIPE Atlas users who need measurement credits post a
 project, and users who have spare credits send them. Donors give credits and get nothing
-back. The site never holds credits; RIPE Atlas remains the ledger, and the site stores
+back. Transfers happen in RIPE Atlas and the site never holds credits; the site stores
 the project, the pledge and its confirmation.
 
 ## Goals and constraints
@@ -240,8 +240,8 @@ and anything shaped like an API key or email address are removed before it is se
 | `GET /api/me` | user | Profile + client principal. Creates the user row on first call. |
 | `PUT /api/me` | user | Update `displayName`, `atlasEmail`, `affiliation`, `url`. |
 | `DELETE /api/me` | user | Delete the profile, including the stored RIPE NCC Access email. |
-| `GET /api/projects?status=open&tag=dns&q=` | public | List. `status` is `open`, `funded`, `closed`, `results` or `all`. Never includes emails. |
-| `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message). |
+| `GET /api/projects?status=open&tag=dns&q=` | public | List. `status` is `open`, `funded`, `closed`, `results` or `all`. Never includes emails or projects an operator took down. |
+| `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message), and `page`, the title and description the project page's head carries. 404 for a project an operator took down, except to its owner. |
 | `POST /api/projects` | user (needs `atlasEmail`) | Create. 429 when the account posted less than a minute ago; 409 when the open-project cap closed this project again. |
 | `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. |
 | `GET /api/projects/{id}/pledges` | owner or donor | Owner: all pledges. Donor: own. |
@@ -251,6 +251,7 @@ and anything shaped like an API key or email address are removed before it is se
 | `GET /api/stats` | public | Totals for the home page. |
 | `POST /api/atlas/balance` | user | `{apiKey}` → `{current_balance,...}` from RIPE. Never stored. |
 | `GET /api/sitemap` | public | Sitemap XML of the public pages and every project not taken down. Served at `/sitemap.xml` by a rewrite in `staticwebapp.config.json`. |
+| `GET /api/project-page` | public | HTML for `/projects/{id}` and `/projects/{id}/edit`, reached by a rewrite of `/projects/*`. See [Pages and routing](#pages-and-routing). |
 
 Authorization is enforced twice: `staticwebapp.config.json` route rules require the
 `authenticated` role on mutating routes, and every function re-checks the decoded
@@ -258,6 +259,49 @@ Authorization is enforced twice: `staticwebapp.config.json` route rules require 
 at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code only
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
 the SPA shows its own sign-in prompt.
+
+## Pages and routing
+
+`web/public/staticwebapp.config.json` maps every page URL to a file or a function. The first
+matching rule wins, and there is no navigation fallback.
+
+| Path | Served by | Status |
+| --- | --- | --- |
+| `/` | `index.html` | 200 |
+| `/projects` | `shell/projects.html` | 200 |
+| `/projects/new`, `/dashboard`, `/profile` | `shell/app.html` (noindex) | 200 |
+| `/projects/*` | `project-page` function | 200 or 404, see below |
+| `/how-it-works` | `shell/how-it-works.html` | 200 |
+| `/sitemap.xml` | `sitemap` function | 200, or 503 when storage fails |
+| anything else | `404.html` (noindex) | 404 |
+
+The build writes the `shell/*.html` files and `404.html` from `web/index.html`, each with its own
+head (`web/src/lib/pages.ts`). A static file cannot name a project, so project pages come from a
+function:
+
+1. A browser, crawler or link preview fetcher asks for `/projects/{id}`.
+2. SWA rewrites the request to `/api/project-page`. A rewrite cannot carry the id, so the
+   function reads it from `x-ms-original-url`, which SWA sets to the URL that was asked for.
+3. The function accepts only `/projects/{id}` and `/projects/{id}/edit` where the id is 12 to
+   32 lowercase letters and digits. Anything else is a 404 without a storage read.
+4. It reads the project row. A missing project, or one an operator took down, is a 404 with
+   `404.html`. The rule is `isPublicProject` in `api/src/lib/views.ts`, which the sitemap, the
+   listing and `GET /api/projects/{id}` also use.
+5. For a public project it returns `shell/project.html` with the project's title and summary in
+   `<title>`, the meta description, the Open Graph and Twitter tags, and the text inside
+   `#root`, plus a canonical URL and `og:url` on `https://www.atlasrelay.org`. Every value is
+   HTML-escaped, and descriptions are cut to 200 characters.
+6. The browser loads the app from the same page. `GET /api/projects/{id}` returns the same title
+   and description as `page`, and the app sets them with `usePageMeta`, so the head does not
+   change when the app loads.
+
+The function starts from `shell/project.html` and `404.html` as the same build wrote them.
+`api/bundle.mjs` embeds both files in the API bundle, so the page always names the script and
+style files deployed with it, and serving a page needs no extra request. The deploy workflow
+fails if the bundle does not name the built script file. Storage errors, and a request without
+`x-ms-original-url`, get the plain project shell with `noindex` and `no-store`, so the app still
+loads and fetches the project itself. SWA does not apply `globalHeaders` to function responses,
+so the function sets the same security headers itself.
 
 ## Azure resources (every one declared in Bicep)
 

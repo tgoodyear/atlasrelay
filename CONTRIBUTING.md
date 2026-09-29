@@ -23,7 +23,7 @@ as any username without a real account.
 
 ```bash
 npm test          # API typecheck and unit tests, web typecheck
-npm run build     # API emit and the Vite build
+npm run build     # the Vite build, then the API bundle, which embeds two of the built pages
 ```
 
 Infrastructure lives in `infra/*.bicep`. Changes to `app.bicep` deploy through

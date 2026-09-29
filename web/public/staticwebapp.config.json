@@ -78,7 +78,7 @@
     },
     {
       "route": "/projects/*",
-      "rewrite": "/shell/project.html"
+      "rewrite": "/api/project-page"
     },
     {
       "route": "/how-it-works",
