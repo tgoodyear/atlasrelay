@@ -16,12 +16,14 @@ let logs = AppTraces
     | summarize Count = count(), First = min(TimeGenerated), Latest = max(TimeGenerated)
         by Function = tostring(Properties.Category), Message = Text, Error = tostring(e.error)
     | extend Source = "log", Status = "";
-// Fuzzy, so the query still runs on a workspace where AppExceptions has never had a row.
+// Fuzzy, with the summarize inside the leg, so the query still runs on a workspace where
+// AppExceptions has no rows yet (its columns do not resolve until then).
 let exceptions = union isfuzzy=true
-        (AppExceptions | where AppRoleName != "web"),
-        (datatable(TimeGenerated: datetime, ItemCount: long, OperationName: string, ProblemId: string, ExceptionType: string)[])
-    | summarize Count = sum(ItemCount), First = min(TimeGenerated), Latest = max(TimeGenerated)
-        by Function = OperationName, Error = ExceptionType, Message = ProblemId
+        (AppExceptions
+            | where AppRoleName != "web"
+            | summarize Count = sum(ItemCount), First = min(TimeGenerated), Latest = max(TimeGenerated)
+                by Function = OperationName, Error = ExceptionType, Message = ProblemId),
+        (datatable(Count: long, First: datetime, Latest: datetime, Function: string, Error: string, Message: string)[])
     | extend Source = "exception", Status = "";
 union requests, logs, exceptions
 | project Latest, First, Source, Count, Function, Status, Message, Error
