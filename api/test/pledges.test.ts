@@ -314,9 +314,9 @@ test('an unknown error is described for the log without its message', () => {
   // threw it may have folded the request body into free text, and on the pledge route that body
   // carries the donor's key. This shipped the other way round twice -- a comment saying the message
   // must not be published, with console.error(err.message) directly under it.
-  const leaky = new Error('request failed: {"apiKey":"84c9393b-a2a2-4be5-8bfe-761f357ff9f0"}');
+  const leaky = new Error('request failed: {"apiKey":"00000000-0000-4000-8000-00000000dead"}');
   const described = describeErrorForLog(leaky);
-  assert.equal(/apiKey|84c9393b|request failed/.test(described), false);
+  assert.equal(/apiKey|00000000-0000-4000-8000-00000000dead|request failed/.test(described), false);
   assert.equal(described, 'Error');
 
   // Azure storage errors are what actually reach these paths, and their fixed identifiers survive,
@@ -330,7 +330,7 @@ test('an unknown error is described for the log without its message', () => {
   // Something thrown that is not an Error at all must not be stringified either: a thrown object
   // could be the parsed request body itself.
   assert.equal(describeErrorForLog({ apiKey: 'secret' }), 'object');
-  assert.equal(describeErrorForLog('84c9393b-a2a2-4be5-8bfe-761f357ff9f0'), 'string');
+  assert.equal(describeErrorForLog('00000000-0000-4000-8000-00000000dead'), 'string');
 });
 
 // ── Unresolved transfers (issue #22) ────────────────────────────────────────────────────────────
