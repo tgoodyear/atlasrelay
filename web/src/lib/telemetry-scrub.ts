@@ -22,9 +22,21 @@ export function stripQuery(url: string): string {
   return url.replace(/[?#].*$/s, '');
 }
 
+// Browser pathnames stay percent-encoded, so "/someone%40example.org" or a key with "%2D"
+// separators would slip past the patterns above. Decode single-byte escapes (up to three rounds,
+// for double encoding) before matching. Multi-byte escapes are left as they are: none of the
+// characters the patterns look for need one.
+function decodeEscapes(text: string): string {
+  let out = text;
+  for (let i = 0; i < 3 && /%[0-7][0-9a-f]/i.test(out); i++) {
+    out = out.replace(/%([0-7][0-9a-f])/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  }
+  return out;
+}
+
 /** Replace keys, email addresses and query strings inside free text. */
 export function scrubText(text: string): string {
-  return text.replace(URL_IN_TEXT_RE, '$1').replace(UUID_RE, '[uuid]').replace(EMAIL_RE, '[email]');
+  return decodeEscapes(text).replace(URL_IN_TEXT_RE, '$1').replace(UUID_RE, '[uuid]').replace(EMAIL_RE, '[email]');
 }
 
 function origin(url: string): string {

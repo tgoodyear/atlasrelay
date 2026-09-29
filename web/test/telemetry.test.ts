@@ -23,6 +23,11 @@ test('free text loses keys, email addresses and query strings', () => {
   assert.equal(scrubText('GET "/projects#top" failed'), 'GET "/projects" failed');
   // A slash inside a word or path is not the start of a URL.
   assert.equal(scrubText('ratio 3/4?'), 'ratio 3/4?');
+  // Pathnames arrive percent-encoded, sometimes twice.
+  assert.equal(scrubText('/projects/someone%40example.org'), '/projects/[email]');
+  assert.equal(scrubText('/p/00000000%2D0000%2D4000%2D8000%2D00000000dead'), '/p/[uuid]');
+  assert.equal(scrubText('/x/a%2540b.example'), '/x/[email]');
+  assert.equal(scrubText('/caf%C3%A9'), '/caf%C3%A9');
 });
 
 test('a page view keeps its path and loses its query, referrer path and user ids', () => {
