@@ -36,12 +36,15 @@ export function oneLine(value: string): string {
   return value.replace(/[\x00-\x1f\x7f-\x9f\s]+/g, ' ').trim();
 }
 
+const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
 /**
- * Cut to at most `max` characters, counted as code points so an emoji is never split in half.
- * A cut ends at the last space in the final fifth when there is one, and gets an ellipsis.
+ * Cut to at most `max` characters, counted as graphemes (what a reader sees as one character), so
+ * a cut never splits an emoji, a flag or a letter with combining accents. A cut ends at the last
+ * space in the final fifth when there is one, and gets an ellipsis.
  */
 export function clip(value: string, max: number): string {
-  const chars = Array.from(value);
+  const chars = Array.from(graphemes.segment(value), (g) => g.segment);
   if (chars.length <= max) return value;
   let cut = chars.slice(0, max - 1).join('');
   const space = cut.lastIndexOf(' ');

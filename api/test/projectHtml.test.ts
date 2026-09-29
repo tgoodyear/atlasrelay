@@ -77,11 +77,12 @@ test('clip leaves short text alone and cuts long text at a word, with an ellipsi
   assert.equal(clip('abcdefghijklmnopqrstuvwxyz', 10), 'abcdefghi…');
 });
 
-test('clip counts code points, so it never splits an emoji or other surrogate pair', () => {
-  const text = '😀'.repeat(30);
-  const cut = clip(text, 10);
-  assert.equal(Array.from(cut).length, 10);
-  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(cut), 'no lone high surrogate');
+test('clip counts graphemes, so it never splits an emoji, a flag or an accented letter', () => {
+  const segments = (s: string): string[] => Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(s), (g) => g.segment);
+  for (const unit of ['😀', '👨‍👩‍👧‍👦', '🇳🇱', 'e\u0301']) {
+    const cut = clip(unit.repeat(30), 10);
+    assert.deepEqual(segments(cut), [...Array(9).fill(unit), '…'], unit);
+  }
 });
 
 test('the project head is one line, capped, and never empty', () => {
