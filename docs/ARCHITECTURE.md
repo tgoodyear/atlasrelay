@@ -285,8 +285,10 @@ function:
 3. The function accepts only `/projects/{id}` and `/projects/{id}/edit` where the id is 12 to
    32 lowercase letters and digits. Anything else is a 404 without a storage read.
 4. It reads the project row. A missing project, or one an operator took down, is a 404 with
-   `404.html`. The rule is `isPublicProject` in `api/src/lib/views.ts`, which the sitemap, the
-   listing and `GET /api/projects/{id}` also use.
+   `404.html` for everyone, since the function does not look at who is signed in. The rule is
+   `isPublicProject` in `api/src/lib/views.ts`, which the sitemap and the listing also apply.
+   `GET /api/projects/{id}` applies it to everyone except the project's owner, so a signed-in
+   owner still sees a taken-down project in the app.
 5. For a public project it returns `shell/project.html` with the project's title and summary in
    `<title>`, the meta description, the Open Graph and Twitter tags, and the text inside
    `#root`, plus a canonical URL and `og:url` on `https://www.atlasrelay.org`. Every value is

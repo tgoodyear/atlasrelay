@@ -30,8 +30,8 @@ instead.
 
 There is one maintainer, so expect a response in days rather than hours. A fraudulent project
 is closed by the site, which stops it accepting credits and removes it from the listing and
-the sitemap. Its page then answers "not found" to everyone except the owner, and the owner cannot
-reopen it. The owner's profile and stored email can be deleted too, but that is
+the sitemap. Its page answers "not found". The owner, once signed in, can still open it in the
+app to settle pledges, but cannot reopen it. The owner's profile and stored email can be deleted too, but that is
 not a ban: signing in again with the same account creates a new profile linked to the old
 projects and pledges.
 

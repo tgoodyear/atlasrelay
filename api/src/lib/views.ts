@@ -22,10 +22,10 @@ export function publicName(displayName: string, handle: string, id: string): str
 
 /**
  * Whether anyone may see a project: every project except one an operator took down
- * (moderationClosed, see docs/RUNBOOK.md). The sitemap, the listing, GET /api/projects/{id} and the
- * server-rendered project page all use this one rule, so a page the sitemap leaves out also answers
- * 404, and the app never shows a project whose page says it does not exist. The project API still
- * answers the owner, who can see what was taken down and settle its pledges.
+ * (moderationClosed, see docs/RUNBOOK.md). The sitemap, the listing and the server-rendered project
+ * page apply it as is, so a page the sitemap leaves out answers 404. GET /api/projects/{id} applies
+ * it to everyone except the project's owner, who can still see what was taken down and settle its
+ * pledges; for the owner alone, the app shows the project over the 404 page the server sent.
  */
 export function isPublicProject(p: Pick<Project, 'moderationClosed'>): boolean {
   return !p.moderationClosed;

@@ -305,8 +305,9 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and re-run th
   scanning the table. Filter exports on `PartitionKey eq 'project'`.
 - **Take a project down**: there is no admin console, so this is done against Table Storage.
   Closing a project stops it accepting credits. Setting `moderationClosed` as well takes it off
-  every listing and the sitemap, and its page and `GET /api/projects/<id>` answer 404 to
-  everyone except the owner. It is reversible, so prefer it to deleting anything. Browsers and
+  every listing and the sitemap, and its page answers 404 to everyone. `GET /api/projects/<id>`
+  answers 404 too, except to the owner, so a signed-in owner still sees the project in the app
+  and can settle its pledges. It is reversible, so prefer it to deleting anything. Browsers and
   proxies may keep the old page for up to a minute.
 
   ```bash
