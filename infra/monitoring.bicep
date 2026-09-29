@@ -86,9 +86,11 @@ let traces = AppTraces
     | where SeverityLevel >= 3
     | where Message !startswith "Executed '"
     | summarize Count = count();
-let exceptions = AppExceptions
-    | where AppRoleName != "web"
-    | summarize Count = sum(ItemCount);
+// Fuzzy, so the rule still evaluates the traces on a workspace where AppExceptions has never
+// been created.
+let exceptions = union isfuzzy=true
+    (AppExceptions | where AppRoleName != "web" | summarize Count = sum(ItemCount)),
+    (datatable(Count: long)[]);
 union traces, exceptions
 | summarize Errors = sum(Count)
 | where Errors >= 3
