@@ -13,8 +13,9 @@
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi;
-// A URL inside free text, up to the first character that cannot be part of it.
-const URL_IN_TEXT_RE = /(https?:\/\/[^\s?#"'<>]*)[?#][^\s"'<>]*/gi;
+// A URL inside free text, absolute or root-relative ("/api/projects?q=..."), up to the first
+// character that cannot be part of it.
+const URL_IN_TEXT_RE = /(https?:\/\/[^\s?#"'<>]*|(?<![\w/.])\/[^\s?#"'<>]*)[?#][^\s"'<>]*/gi;
 
 /** Drop the query string and fragment from a URL or a path. */
 export function stripQuery(url: string): string {

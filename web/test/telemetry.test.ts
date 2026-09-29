@@ -19,6 +19,10 @@ test('query strings and fragments are removed from URLs and paths', () => {
 test('free text loses keys, email addresses and query strings', () => {
   const text = `Failed to fetch https://atlasrelay.org/api/x?token=abc for ${KEY} (someone@example.org)`;
   assert.equal(scrubText(text), 'Failed to fetch https://atlasrelay.org/api/x for [uuid] ([email])');
+  assert.equal(scrubText('Failed to fetch /api/projects?q=secret&tag=dns'), 'Failed to fetch /api/projects');
+  assert.equal(scrubText('GET "/projects#top" failed'), 'GET "/projects" failed');
+  // A slash inside a word or path is not the start of a URL.
+  assert.equal(scrubText('ratio 3/4?'), 'ratio 3/4?');
 });
 
 test('a page view keeps its path and loses its query, referrer path and user ids', () => {
