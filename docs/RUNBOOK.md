@@ -112,6 +112,24 @@ The zone also publishes a `www` CNAME to the site and records stating the domain
 (RFC 7505 null MX, `v=spf1 -all`, DMARC `p=reject`). Remove `rejectMail` if the domain ever
 needs to send email.
 
+### Canonical host
+
+`https://www.atlasrelay.org` is the canonical host. The canonical tags, the sitemap and the
+IndexNow submission all use it, and the README links it. `www` is a CNAME to the site's own
+hostname, while the apex resolves through the A record described above.
+
+`atlasrelay.org` serves the same pages until www is made the site's default domain. Static Web
+Apps then answers every other hostname of the site, the apex and the `azurestaticapps.net` name
+included, with a redirect to it. This is a one-time step for a subscription Owner, in the portal:
+open `swa-internetresearch`, then **Custom domains**, select `www.atlasrelay.org`, and choose
+**Set default**. The custom domain schema has no default-domain property, so Bicep cannot declare
+it, and the CI role cannot write custom domains. Check it afterwards:
+
+```bash
+curl -sI 'https://atlasrelay.org/projects?status=all' | grep -iE '^(HTTP|location)'
+# expect a permanent redirect to https://www.atlasrelay.org/projects?status=all
+```
+
 ## Dev environment
 
 `infra/dev.bicepparam` deploys a second, isolated copy of `app.bicep` into the same resource
@@ -247,6 +265,29 @@ this, because `infra/app.bicepparam` binds nothing.
 
   Several at once usually means RIPE was unreachable or slow. Check App Insights for a matching
   spike of 502s before changing anything.
+
+## Search engines
+
+- **Pages and status codes**: the build writes one HTML file per kind of page from
+  `web/index.html` (`web/src/lib/pages.ts`, run from `web/vite.config.ts`): `index.html` for the
+  home page, `shell/projects.html`, `shell/how-it-works.html`, `shell/project.html` for every
+  project page, `shell/app.html` for the pages behind sign-in, and `404.html`. Each has its own
+  title, description and canonical URL, and a line of text inside `#root` for clients that do not
+  run JavaScript. `staticwebapp.config.json` rewrites each route to its file. There is no
+  navigation fallback, so any other path gets `404.html` with a 404 status. Adding a route to
+  `web/src/App.tsx` means adding a rule for it too; `web/test/seo.test.ts` fails until you do.
+- **Project pages**: every path under `/projects/` returns 200 with the project shell, because
+  the routing rules cannot tell a real project id from a wrong one. When the API says the project
+  does not exist, the page adds `noindex` and shows "Project not found".
+- **Sitemap**: `/sitemap.xml` is rewritten to `GET /api/sitemap`, which lists the home page, the
+  project list, the how-it-works page and every project an operator has not taken down
+  (`moderationClosed`). Responses may be cached for an hour. If storage fails it answers 503.
+- **IndexNow**: after a production deploy, the `indexnow` job in `deploy.yml` reads the live
+  sitemap and posts its URLs to `https://api.indexnow.org/indexnow`. The key is the name and the
+  content of the 32-hex-digit `.txt` file in `web/public`. To rotate it, replace that file with a
+  new one. The job logs problems as warnings and never fails the run.
+- **Share image**: `web/public/og-image.png` is a 1200x630 screenshot of the home page hero,
+  taken with Playwright with the statistics tiles and navigation hidden.
 
 ## Adding an admin role later
 

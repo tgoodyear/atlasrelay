@@ -1,6 +1,9 @@
 import { Link } from 'react-router-dom';
+import { META } from '../lib/pages';
+import { usePageMeta } from '../lib/usePageMeta';
 
 export default function HowItWorks() {
+  usePageMeta(META.howItWorks);
   return (
     <div className="narrow">
       <div className="page-head">
