@@ -2,6 +2,7 @@ import { TableClient, TableEntity, odata, RestError } from '@azure/data-tables';
 import { HttpError } from './http';
 import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
+import { logError, tableDependencyPolicy } from './telemetry';
 
 export type ProjectStatus = 'open' | 'closed';
 export type PledgeMethod = 'api' | 'manual';
@@ -152,7 +153,13 @@ function client(table: 'users' | 'projects' | 'pledges' | 'claims'): TableClient
   if (!c) {
     const conn = process.env.TABLES_CONNECTION_STRING;
     if (!conn) throw new HttpError(503, 'Storage is not configured');
-    c = TableClient.fromConnectionString(conn, table, { allowInsecureConnection: conn.includes('127.0.0.1') || conn.includes('UseDevelopmentStorage') });
+    c = TableClient.fromConnectionString(conn, table, {
+      allowInsecureConnection: conn.includes('127.0.0.1') || conn.includes('UseDevelopmentStorage'),
+      // One log line per storage request (table, operation kind, status, duration), which is how
+      // Table Storage calls show up in Application Insights: the Functions host does not track
+      // dependencies for Node apps. See lib/telemetry.ts.
+      additionalPolicies: [{ policy: tableDependencyPolicy(), position: 'perRetry' }],
+    });
     clients.set(table, c);
   }
   return c;
@@ -615,7 +622,7 @@ export async function anonymizeRetainedNames(userId: string): Promise<{ projects
       projects += 1;
     } catch (err) {
       failed += 1;
-      console.error(`Could not anonymize the owner name on project ${project.id}:`, err instanceof Error ? err.message : err);
+      logError(`Could not anonymize the owner name on project ${project.id}`, err);
     }
   }
 
@@ -628,7 +635,7 @@ export async function anonymizeRetainedNames(userId: string): Promise<{ projects
       pledges += 1;
     } catch (err) {
       failed += 1;
-      console.error(`Could not anonymize the donor name on pledge ${pledge.id}:`, err instanceof Error ? err.message : err);
+      logError(`Could not anonymize the donor name on pledge ${pledge.id}`, err);
     }
   }
 

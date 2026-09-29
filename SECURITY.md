@@ -65,6 +65,11 @@ someone. The researcher receiving the credits still sees who pledged, since they
 match it against their RIPE transaction log, and the pledge record keeps the donor's account
 id.
 
+**Telemetry carries no identifiers.** The site records page views, page load times, browser
+errors and the API calls each page makes in Azure Application Insights. It sets no cookies, stores
+nothing in the browser, and removes query strings and anything shaped like an API key or email
+address before sending. The API's own logs get the same treatment.
+
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.
 

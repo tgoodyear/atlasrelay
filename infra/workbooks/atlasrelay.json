@@ -1,0 +1,447 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "## Atlas Relay\nAPI requests (`AppRequests`) and log lines (`AppTraces`) come from the Functions host. Page views, load times, browser errors and the API calls the browser made (`AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, role `web`) come from the site's own pages. `AppAvailabilityResults` is the home page test. Times are UTC. The saved queries in `ops/queries` (run with `scripts/logs.sh`) show the same data from a terminal."
+      },
+      "name": "title"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "2657e583-79f9-54e0-a1f0-70190e9bb6d0",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "value": {
+              "durationMs": 86400000
+            },
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 3600000
+                },
+                {
+                  "durationMs": 14400000
+                },
+                {
+                  "durationMs": 43200000
+                },
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 172800000
+                },
+                {
+                  "durationMs": 604800000
+                },
+                {
+                  "durationMs": 2592000000
+                }
+              ],
+              "allowCustom": true
+            }
+          }
+        ],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces"
+      },
+      "name": "parameters"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let pageViewCount = toscalar(AppPageViews | summarize sum(ItemCount));\nlet browserErrorCount = toscalar(AppExceptions | where AppRoleName == \"web\" | summarize sum(ItemCount));\nlet availabilityPct = toscalar(AppAvailabilityResults | summarize 100.0 * countif(Success == true) / count());\nAppRequests\n| summarize Requests = sum(ItemCount), Server5xx = sumif(ItemCount, toint(ResultCode) >= 500), P95 = percentile(DurationMs, 95)\n| mv-expand Tile = pack_array(\n    pack(\"Name\", \"Page views\", \"Value\", todouble(coalesce(pageViewCount, 0))),\n    pack(\"Name\", \"API requests\", \"Value\", todouble(Requests)),\n    pack(\"Name\", \"API 5xx, %\", \"Value\", iff(Requests == 0, 0.0, round(100.0 * Server5xx / Requests, 2))),\n    pack(\"Name\", \"API p95, ms\", \"Value\", round(coalesce(P95, 0.0), 0)),\n    pack(\"Name\", \"Browser errors\", \"Value\", todouble(coalesce(browserErrorCount, 0))),\n    pack(\"Name\", \"Home page availability, %\", \"Value\", iff(isnan(availabilityPct), real(null), round(availabilityPct, 2))))\n| project Name = tostring(Tile.Name), Value = todouble(Tile.Value)\n// No availability tile until the test has run.\n| where isnotnull(Value)",
+        "size": 0,
+        "title": "In the time range",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "tiles",
+        "timeContextFromParameter": "TimeRange",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Name",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 12,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 0,
+              "options": {
+                "style": "decimal"
+              }
+            }
+          },
+          "showBorder": false
+        }
+      },
+      "name": "tiles"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Traffic"
+      },
+      "name": "traffic-heading"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppPageViews\n| summarize Views = sum(ItemCount) by bin(TimeGenerated, {TimeRange:grain}), Page = Name\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "Page views by page",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "page-views-over-time",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppRequests\n| summarize Requests = sum(ItemCount) by bin(TimeGenerated, {TimeRange:grain}), Function = Name\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "API requests by function",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "requests-over-time",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let timings = AppBrowserTimings\n    | summarize Loads = sum(ItemCount), P50LoadMs = round(percentile(TotalDurationMs, 50)),\n        P95LoadMs = round(percentile(TotalDurationMs, 95)) by Page = Name;\nAppPageViews\n| summarize Views = sum(ItemCount), PageLoads = dcount(SessionId) by Page = Name\n| join kind=leftouter timings on Page\n| project Page, Views, PageLoads, Loads, P50LoadMs, P95LoadMs\n| order by Views desc",
+        "size": 0,
+        "title": "Pages: views and load times (first page of each visit)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "pages"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### API"
+      },
+      "name": "api-heading"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppRequests\n| summarize Requests = sum(ItemCount) by bin(TimeGenerated, {TimeRange:grain}), Status = strcat(substring(ResultCode, 0, 1), \"xx\")\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "API requests by status class",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "requests-by-status",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppRequests\n| summarize P95ms = percentile(DurationMs, 95) by bin(TimeGenerated, {TimeRange:grain}), Function = Name\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "API p95 latency by function, ms",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "latency-over-time",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppRequests\n| summarize\n    Requests = sum(ItemCount),\n    Client4xx = sumif(ItemCount, toint(ResultCode) between (400 .. 499)),\n    Server5xx = sumif(ItemCount, toint(ResultCode) >= 500),\n    P50ms = round(percentile(DurationMs, 50), 1),\n    P95ms = round(percentile(DurationMs, 95), 1),\n    MaxMs = round(max(DurationMs), 1)\n    by Function = Name\n| order by Requests desc",
+        "size": 0,
+        "title": "API requests and latency by function",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "latency-table",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppDependencies\n| where AppRoleName == \"web\"\n| summarize\n    Calls = sum(ItemCount),\n    Failures = sumif(ItemCount, Success == false),\n    P50ms = round(percentile(DurationMs, 50), 1),\n    P95ms = round(percentile(DurationMs, 95), 1)\n    by Call = Name, Status = ResultCode\n| order by Calls desc",
+        "size": 0,
+        "title": "API calls as the browser saw them",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "browser-api-calls",
+      "customWidth": "50"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Errors"
+      },
+      "name": "errors-heading"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppExceptions\n| where AppRoleName == \"web\"\n| summarize Count = sum(ItemCount), PageLoads = dcount(SessionId), Latest = max(TimeGenerated)\n    by Message = OuterMessage\n| order by Latest desc",
+        "size": 0,
+        "title": "Browser errors by message",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "browser-exceptions",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppTraces\n| where SeverityLevel >= 3\n| where Message !startswith \"Executed '\"\n| extend e = parse_json(iff(Message startswith \"{\", Message, \"{}\"))\n| extend Text = iff(isempty(tostring(e.message)), substring(Message, 0, 300), tostring(e.message))\n| summarize Count = count(), Latest = max(TimeGenerated) by Message = Text, Error = tostring(e.error)\n| order by Latest desc",
+        "size": 0,
+        "title": "API error log lines by message",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "api-errors",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let browser = AppExceptions\n    | where AppRoleName == \"web\"\n    | summarize Count = sum(ItemCount) by bin(TimeGenerated, {TimeRange:grain})\n    | extend Kind = \"browser errors\";\nlet api5xx = AppRequests\n    | where toint(ResultCode) >= 500\n    | summarize Count = sum(ItemCount) by bin(TimeGenerated, {TimeRange:grain})\n    | extend Kind = \"API 5xx\";\nlet apiLogs = AppTraces\n    | where SeverityLevel >= 3 and Message !startswith \"Executed '\"\n    | summarize Count = count() by bin(TimeGenerated, {TimeRange:grain})\n    | extend Kind = \"API error lines\";\nunion browser, api5xx, apiLogs\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "Errors over time",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "errors-over-time"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Availability"
+      },
+      "name": "availability-heading"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppAvailabilityResults\n| summarize Availability = round(100.0 * countif(Success == true) / count(), 2) by bin(TimeGenerated, {TimeRange:grain}), Location\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "Home page availability by location, %",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "availability-over-time",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppAvailabilityResults\n| where Success == false\n| project TimeGenerated, Location, DurationMs = round(DurationMs), Message\n| order by TimeGenerated desc\n| take 50",
+        "size": 0,
+        "title": "Failed test runs",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "availability-failures",
+      "customWidth": "50"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### RIPE Atlas and Table Storage\nOne log line per outbound call from the API. For RIPE Atlas, a 4xx is an answer (a refused transfer, a key without the permission) and counts as a success; `timeout`, `network` and 5xx are failures."
+      },
+      "name": "dependencies-heading"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppTraces\n| where Message has '\"event\":\"dependency\"' and Message has '\"type\":\"RIPE Atlas\"'\n| extend e = parse_json(Message)\n| summarize Calls = count() by bin(TimeGenerated, {TimeRange:grain}), Result = iff(tobool(e.success), \"answered\", \"no answer\")\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "RIPE Atlas calls",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "ripe-over-time",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppTraces\n| where Message has '\"event\":\"dependency\"' and Message has '\"type\":\"RIPE Atlas\"'\n| extend e = parse_json(Message)\n| summarize\n    Calls = count(),\n    Failures = countif(tobool(e.success) == false),\n    P50ms = percentile(toint(e.durationMs), 50),\n    P95ms = percentile(toint(e.durationMs), 95),\n    Latest = max(TimeGenerated)\n    by Call = tostring(e.name), Result = tostring(e.resultCode)\n| order by Calls desc",
+        "size": 0,
+        "title": "RIPE Atlas calls by path and result",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "ripe-table",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppTraces\n| where Message has '\"event\":\"transfer\"'\n| extend e = parse_json(Message)\n| where tostring(e.event) == \"transfer\"\n| summarize Transfers = count() by bin(TimeGenerated, {TimeRange:grain}), Outcome = tostring(e.outcome)\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "API transfers by outcome",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "barchart",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "transfers",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "AppTraces\n| where Message has '\"event\":\"dependency\"' and Message has '\"type\":\"Table Storage\"'\n| extend e = parse_json(Message)\n| summarize\n    Calls = count(),\n    Failures = countif(tobool(e.success) == false),\n    P50ms = percentile(toint(e.durationMs), 50),\n    P95ms = percentile(toint(e.durationMs), 95)\n    by Operation = tostring(e.name), Result = tostring(e.resultCode)\n| order by Calls desc",
+        "size": 0,
+        "title": "Table Storage requests by operation and result",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "__WORKSPACE_ID__"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "filter": true
+        }
+      },
+      "name": "table-storage",
+      "customWidth": "50"
+    }
+  ],
+  "isLocked": false,
+  "fallbackResourceIds": [
+    "__WORKSPACE_ID__"
+  ]
+}

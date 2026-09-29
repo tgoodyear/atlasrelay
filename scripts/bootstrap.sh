@@ -126,6 +126,12 @@ gh secret set AZURE_SUBSCRIPTION_ID --repo "$GITHUB_REPO" --body "$SUBSCRIPTION_
 gh secret set BUDGET_CONTACT_EMAIL --repo "$GITHUB_REPO" --body "$BUDGET_CONTACT_EMAIL"
 # Tells the workflows that Azure exists, so a missing secret becomes a failed run instead of a silent skip.
 gh variable set AZURE_BOOTSTRAPPED --repo "$GITHUB_REPO" --body "true"
+# Compiled into the browser bundle for page view and error telemetry (web/src/lib/telemetry.ts).
+# A variable, not a secret: the connection string is public once the site ships it.
+APPINSIGHTS_CONNECTION_STRING="$(val appInsightsConnectionString)"
+if [[ -n "$APPINSIGHTS_CONNECTION_STRING" && "$APPINSIGHTS_CONNECTION_STRING" != null ]]; then
+  gh variable set APPINSIGHTS_CONNECTION_STRING --repo "$GITHUB_REPO" --body "$APPINSIGHTS_CONNECTION_STRING"
+fi
 
 log "Done"
 echo "Site: https://$SWA_HOST"

@@ -1,11 +1,12 @@
 import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
-import { describeErrorForLog, handle, HttpError, json, readJson } from '../lib/http';
+import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Project, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, totals } from '../lib/store';
 import { MAX_OPEN_PROJECTS_PER_USER, PROJECT_POST_INTERVAL_MS, SurplusClose, capSettlement, surplusOpenProjects } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { publicPledge, publicProject, publicUser } from '../lib/views';
+import { logError } from '../lib/telemetry';
 
 /**
  * How many projects one listing will re-read pledges for. Anything above this keeps its cached
@@ -55,7 +56,7 @@ app.http('projects-list', {
       try {
         t = totals(await listPledges(p.id));
       } catch (err) {
-        console.error(`Could not refresh totals for project ${p.id}:`, err instanceof Error ? err.message : err);
+        logError(`Could not refresh totals for project ${p.id}`, err);
         // Rotate it even though the scan failed. Candidates are ordered least-recently-checked
         // first, so a project whose scan keeps failing stays at the head of that order and is
         // picked again on every single request, spending one of the refresh slots for ever and
@@ -183,7 +184,7 @@ async function settleOpenProjectCap(ownerId: string, ownId: string): Promise<{ o
     try {
       after = await patchProject(extra.id, { status: 'closed' });
     } catch (err) {
-      console.error(`Could not close surplus project ${extra.id}:`, describeErrorForLog(err));
+      logError(`Could not close surplus project ${extra.id}`, err);
       // Ask storage what is stored rather than reading the throw as "the row is untouched". A
       // merge that failed on the way back has still applied, and this is the same rule the pledge
       // path settled on: read the row, not the exception.
@@ -292,7 +293,7 @@ app.http('projects-create', {
     if (settled.ownClosed) {
       throw new HttpError(409, `You already have ${MAX_OPEN_PROJECTS_PER_USER} open projects. Close one before posting another.`);
     }
-    if (settled.unclosed > 0) console.error(overCapNote(settled.unclosed));
+    if (settled.unclosed > 0) logError(overCapNote(settled.unclosed));
 
     return json({ project: publicProject(project) }, 201);
   }),
@@ -366,7 +367,7 @@ app.http('projects-update', {
     // closed. Neither is caught by a preflight; both are caught here.
     if (updated.status === 'open') {
       const settled = await settleOpenProjectCap(p.userId, id);
-      if (settled.unclosed > 0) console.error(overCapNote(settled.unclosed));
+      if (settled.unclosed > 0) logError(overCapNote(settled.unclosed));
       // Answer from the row either way. This path already did: it re-read after settling rather
       // than describing what it had planned, which is the shape the create path was missing.
       if (settled.ownClosed) return json({ project: publicProject((await getProject(id)) ?? updated) });

@@ -219,6 +219,11 @@ Sign-in handles are never returned publicly. Static Web Apps fills `userDetails`
 address for some identity providers, and that value seeds both the handle and the initial display
 name, so `publicName()` reduces anything email-shaped to its local part before it leaves the API.
 
+Browser telemetry (page views, load times, errors and the page's API calls) goes to App Insights
+with no cookies, nothing stored in the browser, and no user id. Query strings, the referrer's path,
+and anything shaped like an API key or email address are removed before it is sent. See
+[Monitoring](RUNBOOK.md#monitoring).
+
 ### Trust model
 - Requester identity is a GitHub/Microsoft account plus a self-declared RIPE email.
   We cannot verify the email against RIPE without federation. Mitigations: the email is
@@ -262,6 +267,7 @@ the SPA shows its own sign-in prompt.
 | Static Web App `swa-internetresearch` + `appsettings` (staging environments disabled) | `infra/app.bicep` | Free |
 | Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS |
 | Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go |
+| Action group `ag-internetresearch`, five log search alerts, availability test `webtest-internetresearch-home` and its alert, workbook "Atlas Relay" | `infra/monitoring.bicep` | |
 | User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | |
 | Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write deployments, the static site and storage only, minus site deletion/invitations/user roles/token reset and storage deletion/key regeneration | `infra/main.bicep` | |
 | Role assignment of that role to the CI identity; `CanNotDelete` locks on the storage account and the static site | `infra/rbac.bicep` | |
@@ -303,7 +309,8 @@ environments.
 web/      Vite + React + TypeScript SPA; public/staticwebapp.config.json
 api/      Azure Functions v4 (Node 22, TypeScript)
 infra/    main.bicep (subscription scope) → identity.bicep, rbac.bicep, app.bicep (+ .bicepparam)
-scripts/  bootstrap.sh (one-time provisioning + GitHub secret wiring) and its helpers
+scripts/  bootstrap.sh (one-time provisioning + GitHub secret wiring) and its helpers; logs.sh
+ops/queries/  saved KQL queries that scripts/logs.sh runs against the Log Analytics workspace
 .github/workflows/deploy.yml   build + test on PRs; build + deploy app & API on main
 .github/workflows/infra.yml    Bicep lint on PRs; what-if + deploy app.bicep on main (OIDC login)
 docs/     this spec, RIPE research notes, runbook
@@ -312,7 +319,8 @@ docs/     this spec, RIPE research notes, runbook
 ## CI/CD
 
 - `deploy.yml`, job `build` (no Azure identity): `npm ci -w api -w web`, tests, build
-  web and API, then stage a self-contained `api-deploy/` folder (npm workspaces hoist the
+  web (with the repository variable `APPINSIGHTS_CONNECTION_STRING`, which turns on browser
+  telemetry) and API, then stage a self-contained `api-deploy/` folder (npm workspaces hoist the
   API's runtime dependencies to the repo root, and the SWA action uploads the API folder
   verbatim), smoke-load the API entry point, upload both as artifacts. Runs on PRs too.
 - `deploy.yml`, job `deploy` (push to `main` / manual only): download artifacts,
@@ -343,7 +351,8 @@ docs/     this spec, RIPE research notes, runbook
 
 ## Security notes
 
-- Global headers: CSP (self + Google Fonts), HSTS, `X-Content-Type-Options`,
+- Global headers: CSP (self, Google Fonts, and the App Insights ingestion endpoints for browser
+  telemetry), HSTS, `X-Content-Type-Options`,
   `Referrer-Policy`, `Permissions-Policy`.
 - Input validation on every write; string lengths, enums, URL scheme allow-list
   (`https:` only), integer ranges.

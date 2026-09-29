@@ -1,0 +1,12 @@
+// Home page availability test by location: runs, failures, availability, p95 response time.
+// Also the time of the latest failure and one failure message.
+AppAvailabilityResults
+| summarize
+    Runs = count(),
+    Failures = countif(Success == false),
+    Availability = round(100.0 * countif(Success == true) / count(), 2),
+    P95ms = round(percentile(DurationMs, 95)),
+    LastFailure = maxif(TimeGenerated, Success == false),
+    FailureMessage = take_anyif(Message, Success == false)
+    by Test = Name, Location
+| order by Location asc

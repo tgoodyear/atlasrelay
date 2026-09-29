@@ -1,4 +1,5 @@
 import { HttpError } from './http';
+import { logDependency } from './telemetry';
 
 /**
  * Minimal RIPE Atlas REST client for the two calls this platform needs.
@@ -34,6 +35,14 @@ export class AtlasRefused extends HttpError {
 
 export function base(): string {
   return (process.env.ATLAS_API_BASE || 'https://atlas.ripe.net/api/v2').replace(/\/$/, '');
+}
+
+function atlasHost(): string {
+  try {
+    return new URL(base()).host;
+  } catch {
+    return 'atlas.ripe.net';
+  }
 }
 
 export function assertKeyFormat(key: unknown): string {
@@ -114,6 +123,18 @@ const BEST_EFFORT_TIMEOUT_MS = 5_000;
 async function atlasCall(path: string, key: string, init: RequestInit = {}, timeoutMs = TRANSFER_TIMEOUT_MS): Promise<AtlasReply> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const started = performance.now();
+  // Logged as a dependency once the call ends. Method and path only: the key travels in a header
+  // and is never part of what is logged, and the query string is dropped.
+  const dependency = (resultCode: string, success: boolean) =>
+    logDependency({
+      type: 'RIPE Atlas',
+      target: atlasHost(),
+      name: `${init.method ?? 'GET'} ${path.split('?')[0]}`,
+      resultCode,
+      success,
+      durationMs: performance.now() - started,
+    });
   try {
     const res = await fetch(`${base()}${path}`, {
       ...init,
@@ -137,6 +158,7 @@ async function atlasCall(path: string, key: string, init: RequestInit = {}, time
       // unknown outcome threw away a success we had been told about, parked the pledge as
       // uncertain, and handed the donor the cancel-and-send-again path over credits that had
       // definitely moved.
+      dependency(String(res.status), res.status < 500);
       return { status: res.status, ok: res.ok, body: null };
     }
 
@@ -148,9 +170,11 @@ async function atlasCall(path: string, key: string, init: RequestInit = {}, time
         body = null;
       }
     }
+    dependency(String(res.status), res.status < 500);
     return { status: res.status, ok: res.ok, body };
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
+    dependency(aborted ? 'timeout' : 'network', false);
     throw new AtlasUnreachable(aborted ? 'RIPE Atlas did not respond in time' : 'Could not reach RIPE Atlas');
   } finally {
     clearTimeout(timer);
