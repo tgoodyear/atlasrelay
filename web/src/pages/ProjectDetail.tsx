@@ -45,11 +45,13 @@ export default function ProjectDetail() {
     void load();
   }, [load]);
 
+  // Error first, matching the render below: a failed reload can leave the previous project set,
+  // and the error view must not keep that project's canonical URL.
   usePageMeta(
-    project
-      ? { title: project.title, description: project.summary, path: `/projects/${project.id}` }
-      : error
-        ? { title: error, noindex: true }
+    error
+      ? { title: error, noindex: true }
+      : project
+        ? { title: project.title, description: project.summary, path: `/projects/${project.id}` }
         : META.project,
   );
 

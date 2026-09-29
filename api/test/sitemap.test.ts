@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SITE_ORIGIN, STATIC_PATHS, sitemapEntries, sitemapXml } from '../src/lib/sitemap';
+import { MAX_URLS, SITE_ORIGIN, STATIC_PATHS, sitemapEntries, sitemapXml } from '../src/lib/sitemap';
 
 // process.cwd() is the api workspace when npm runs the tests; see source.test.ts.
 const repoRoot = join(process.cwd(), '..');
@@ -32,6 +32,11 @@ test('every public project is listed with the date it last changed', () => {
     { loc: `${SITE_ORIGIN}/projects/mf1abcd0000xyz12`, lastmod: '2026-09-20' },
     { loc: `${SITE_ORIGIN}/projects/mf1abcd0000xyz13`, lastmod: '2026-01-02' },
   ]);
+});
+
+test('the sitemap never lists more URLs than one file may hold', () => {
+  const rows = Array.from({ length: MAX_URLS + 5 }, (_, i) => row(`mf1abcd${String(i).padStart(9, '0')}`));
+  assert.equal(sitemapEntries(rows).length, MAX_URLS);
 });
 
 test('a project an operator took down is left out', () => {

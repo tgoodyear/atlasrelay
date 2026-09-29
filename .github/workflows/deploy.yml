@@ -6,7 +6,9 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'infra/**'
-      - 'scripts/**'
+      # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
+      # to it has to trigger this workflow.
+      - 'scripts/*.sh'
       - '**.md'
       - '.github/workflows/infra.yml'
   pull_request:
@@ -14,7 +16,9 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'infra/**'
-      - 'scripts/**'
+      # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
+      # to it has to trigger this workflow.
+      - 'scripts/*.sh'
       - '**.md'
       - '.github/workflows/infra.yml'
   workflow_dispatch:
