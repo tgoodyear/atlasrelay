@@ -2,12 +2,13 @@
 
 [atlasrelay.org](https://www.atlasrelay.org) connects Internet researchers who need
 [RIPE Atlas](https://atlas.ripe.net) measurement credits with Atlas users who have credits to
-spare. Researchers post a project, and donors send credits in one of two ways. Through the RIPE
-Atlas API, with a single-use, transfer-only key, the pledge is normally confirmed as soon as RIPE
-accepts the transfer. By hand on atlas.ripe.net, the researcher confirms receipt.
+spare. Researchers post a project, and donors send credits in one of two ways. Donors can
+transfer through the RIPE Atlas API with a single-use, transfer-only key, and the pledge is
+normally confirmed as soon as RIPE accepts the transfer. Donors can also transfer by hand on
+atlas.ripe.net, and the researcher then confirms receipt.
 
 Credits are donations. Nothing is bought or sold, and donors get nothing in return. The site
-never holds credits or long-lived API keys; RIPE Atlas stays the ledger.
+never holds credits or long-lived API keys, and every transfer happens in RIPE Atlas.
 
 Atlas Relay is a community project and is not affiliated with or endorsed by the RIPE NCC.
 

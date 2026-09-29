@@ -372,8 +372,8 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
                 {recorded
                   ? ' The pledge is confirmed.'
                   : ' Recording it here did not complete, so the pledge is still showing as pending. Do not send the credits again: the researcher can confirm it once they arrive.'}
-                {' '}RIPE accepting the transfer is the record; it publishes the transaction to
-                your account’s log a minute or so later, where you can see it yourself.
+                {' '}The transaction appears in your account’s log on atlas.ripe.net a minute or
+                so later.
               </div>
               {warning && <div className="alert alert-warn">{warning}</div>}
               <p>Remember to delete or disable the API key you used at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.</p>
