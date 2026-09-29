@@ -64,6 +64,31 @@
       ]
     },
     {
+      "route": "/projects/",
+      "redirect": "/projects",
+      "statusCode": 301
+    },
+    {
+      "route": "/projects/new/",
+      "redirect": "/projects/new",
+      "statusCode": 301
+    },
+    {
+      "route": "/how-it-works/",
+      "redirect": "/how-it-works",
+      "statusCode": 301
+    },
+    {
+      "route": "/dashboard/",
+      "redirect": "/dashboard",
+      "statusCode": 301
+    },
+    {
+      "route": "/profile/",
+      "redirect": "/profile",
+      "statusCode": 301
+    },
+    {
       "route": "/sitemap.xml",
       "rewrite": "/api/sitemap"
     },

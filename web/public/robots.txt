@@ -1,5 +1,6 @@
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /projects/*/edit
 
 Sitemap: https://www.atlasrelay.org/sitemap.xml

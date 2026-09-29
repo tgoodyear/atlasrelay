@@ -279,6 +279,11 @@ this, because `infra/app.bicepparam` binds nothing.
 - **Project pages**: every path under `/projects/` returns 200 with the project shell, because
   the routing rules cannot tell a real project id from a wrong one. When the API says the project
   does not exist, the page adds `noindex` and shows "Project not found".
+  The edit form at `/projects/<id>/edit` shares that shell. A route rule cannot match a segment
+  after a wildcard, so `robots.txt` disallows `/projects/*/edit` instead, and the page adds
+  `noindex` itself.
+- **Trailing slashes**: `/projects/`, `/projects/new/`, `/how-it-works/`, `/dashboard/` and
+  `/profile/` redirect with a 301 to the same path without the slash.
 - **Sitemap**: `/sitemap.xml` is rewritten to `GET /api/sitemap`, which lists the home page, the
   project list, the how-it-works page and every project an operator has not taken down
   (`moderationClosed`). Responses may be cached for an hour. If storage fails it answers 503.

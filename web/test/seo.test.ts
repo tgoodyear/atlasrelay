@@ -221,6 +221,12 @@ test('each route gets the shell with the matching head', () => {
   for (const p of ['/dashboard', '/profile', '/projects/new']) assert.equal(resolve(p).serves, '/shell/app.html');
 });
 
+test('a trailing slash on a fixed route redirects permanently to the route without it', () => {
+  for (const p of ['/projects', '/projects/new', '/how-it-works', '/dashboard', '/profile']) {
+    assert.deepEqual(resolve(`${p}/`), { status: 301, serves: p }, `${p}/`);
+  }
+});
+
 test('unknown paths return 404 with the not-found page', () => {
   for (const p of ['/does-not-exist', '/projectsx', '/how-it-works/more', '/dashboard/x', '/index.php', '/assets']) {
     assert.deepEqual(resolve(p), { status: 404, serves: '/404.html' }, p);
@@ -242,6 +248,9 @@ test('robots.txt keeps the API out and names the sitemap', () => {
   assert.match(robots, /^Disallow: \/api\/$/m);
   assert.match(robots, new RegExp(`^Sitemap: ${SITE_ORIGIN.replace(/\./g, '\\.')}/sitemap\\.xml$`, 'm'));
   assert.doesNotMatch(robots, /^Disallow: \/$/m);
+  // The edit form shares the project wildcard and its shell, which is indexable, and a route rule
+  // cannot match a segment after a wildcard. It needs sign-in and nothing public links to it.
+  assert.match(robots, /^Disallow: \/projects\/\*\/edit$/m);
 });
 
 test('the IndexNow key file is served from the site root and holds its own key', () => {
