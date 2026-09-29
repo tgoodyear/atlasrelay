@@ -272,8 +272,10 @@ this, because `infra/app.bicepparam` binds nothing.
   `web/index.html` (`web/src/lib/pages.ts`, run from `web/vite.config.ts`): `index.html` for the
   home page, `shell/projects.html`, `shell/how-it-works.html`, `shell/project.html` for every
   project page, `shell/app.html` for the pages behind sign-in, and `404.html`. Each has its own
-  title, description and canonical URL, and a line of text inside `#root` for clients that do not
-  run JavaScript. `staticwebapp.config.json` rewrites each route to its file. There is no
+  title and description, and a line of text inside `#root` for clients that do not run
+  JavaScript. The home, projects and how-it-works files carry a canonical URL. The project shell
+  has none, because the app adds each project's own, and the sign-in and not-found files carry
+  `noindex` instead. `staticwebapp.config.json` rewrites each route to its file. There is no
   navigation fallback, so any other path gets `404.html` with a 404 status. Adding a route to
   `web/src/App.tsx` means adding a rule for it too; `web/test/seo.test.ts` fails until you do.
 - **Project pages**: every path under `/projects/` returns 200 with the project shell, because
