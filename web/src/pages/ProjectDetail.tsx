@@ -25,6 +25,10 @@ export default function ProjectDetail() {
   const load = useCallback(async () => {
     try {
       const r = await api.project(id);
+      // React Router keeps this component when only :id changes, so an earlier 404 or failure
+      // would otherwise keep the error view and its head over the project that just loaded.
+      setError('');
+      setNotFound(false);
       setProject(r.project);
       setPage(r.page);
       setOwner(r.owner);
