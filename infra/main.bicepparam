@@ -19,10 +19,12 @@ param dnsZoneName = 'atlasrelay.org'
 // The dev instance's hostname, so dev.atlasrelay.org is declared rather than hand-made.
 // Clear this if the dev instance is torn down.
 param devStaticWebAppDefaultHostname = 'icy-bay-08401271e.1.azurestaticapps.net'
-// Apex domain-validation token issued by Static Web Apps, published as a TXT record at the
-// apex alongside the SPF policy. Recorded here so a later deployment does not remove it.
+// TXT values published at the apex alongside the SPF policy: the Static Web Apps domain-validation
+// token and the Google Search Console verification token. Recorded here so a later deployment
+// does not remove them.
 param dnsApexTxtValues = [
   '_rkdd5nw27suei8qugfsuaq79khba6z0'
+  'google-site-verification=PmPeiS951f6LV0yLSeciOw2VCg8GoDdKAQTllGN6fkQ'
 ]
 param githubRepo = 'tgoodyear/atlasrelay'
 param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX')
