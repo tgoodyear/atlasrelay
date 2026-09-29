@@ -83,6 +83,10 @@ jobs:
           mv api-deploy/bundle.js api-deploy/dist/bundle.js
           test "$(node -p "require('./api-deploy/package.json').main")" = dist/bundle.js
           test ! -d api-deploy/node_modules
+          # The project page function returns HTML built from web/dist/shell/project.html (see
+          # api/bundle.mjs), so the bundle has to name this build's script file, not a stale one.
+          script="$(grep -o '/assets/index-[A-Za-z0-9_-]*\.js' web/dist/shell/project.html)"
+          test -n "$script" && grep -qF "$script" api-deploy/dist/bundle.js
           # @azure/functions-core is supplied by the Functions worker and is the one import left
           # outside the bundle; @azure/functions runs without it here, so a plain load proves
           # everything else resolved into the file.

@@ -43,9 +43,9 @@ export const META = {
   home: { path: '/' },
   projects: { title: 'Projects', description: PROJECTS_TEXT, path: '/projects' },
   howItWorks: { title: 'How it works', description: HOW_IT_WORKS_TEXT, path: '/how-it-works' },
-  // One file serves every project page, so it cannot name the project. It carries no canonical
-  // tag rather than a wrong one: the app adds the project's own once it has loaded, and search
-  // engines only accept a canonical added by script when the HTML did not declare one.
+  // The template the API renders each project page from (api/src/lib/projectHtml.ts), and what it
+  // serves as is, with noindex, when it cannot read the project. It carries no canonical tag
+  // rather than a wrong one: the server or the app adds the project's own.
   project: { title: 'Research project' },
   // Pages that need a signed-in account. A crawler only ever sees a sign-in prompt on them.
   dashboard: { title: 'Dashboard', noindex: true },

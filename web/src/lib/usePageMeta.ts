@@ -33,9 +33,16 @@ function setCanonical(href: string | null): void {
  * Keep the head in step with the page on screen. The server sends each kind of page with its own
  * head (see pages.ts), but moving around inside the app never reloads the document, so without
  * this the tab kept the first page's title and a crawler that runs scripts kept its canonical URL.
+ *
+ * null leaves the head alone. A project page passes it while the project loads, so the head the
+ * server rendered for that project stays in place instead of being swapped for a generic one and
+ * back again.
  */
-export function usePageMeta({ title, description, path, noindex }: PageMeta): void {
+export function usePageMeta(meta: PageMeta | null): void {
+  const { title, description, path, noindex } = meta ?? {};
+  const skip = meta === null;
   useEffect(() => {
+    if (skip) return;
     const fullTitle = documentTitle(title);
     const desc = description || DEFAULT_DESCRIPTION;
     const url = path && !noindex ? canonicalUrl(path) : null;
@@ -48,5 +55,5 @@ export function usePageMeta({ title, description, path, noindex }: PageMeta): vo
     setMeta('property', 'og:url', url);
     setCanonical(url);
     setMeta('name', 'robots', noindex ? 'noindex' : null);
-  }, [title, description, path, noindex]);
+  }, [skip, title, description, path, noindex]);
 }
