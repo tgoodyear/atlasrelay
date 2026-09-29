@@ -1,0 +1,11 @@
+// Page views and load times by page.
+// Pages are named by route ("/projects/:id"), so every project page counts together. Load times come from the first page of each visit (AppBrowserTimings);
+// later pages in the same visit are route changes and have no load of their own.
+let timings = AppBrowserTimings
+    | summarize Loads = sum(ItemCount), P50LoadMs = round(percentile(TotalDurationMs, 50)),
+        P95LoadMs = round(percentile(TotalDurationMs, 95)) by Page = Name;
+AppPageViews
+| summarize Views = sum(ItemCount), PageLoads = dcount(SessionId) by Page = Name
+| join kind=leftouter timings on Page
+| project Page, Views, PageLoads, Loads, P50LoadMs, P95LoadMs
+| order by Views desc

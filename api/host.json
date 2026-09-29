@@ -1,8 +1,19 @@
 {
   "version": "2.0",
   "logging": {
+    "logLevel": {
+      "default": "Information",
+      "Host.Results": "Information",
+      "Host.Aggregator": "Information",
+      "Function": "Information",
+      "Host.Startup": "Warning",
+      "Microsoft": "Warning",
+      "Microsoft.Azure.WebJobs.Script.Diagnostics.HealthChecks": "Error"
+    },
     "applicationInsights": {
-      "samplingSettings": { "isEnabled": true, "excludedTypes": "Request" }
+      "samplingSettings": {
+        "isEnabled": false
+      }
     }
   }
 }

@@ -1,6 +1,7 @@
 // Owner-only platform resources: monitoring and the cost guardrail.
 // Deployed from main.bicep. Kept out of app.bicep so the CI identity cannot raise the Log
-// Analytics cap or SKU, change App Insights, or delete/raise the budget.
+// Analytics cap or SKU, change App Insights, its alerts or availability test, or delete/raise the
+// budget. Alerts, the availability test and the workbook are in monitoring.bicep.
 targetScope = 'resourceGroup'
 
 @description('Base name used for resources')
@@ -24,6 +25,12 @@ param budgetContactEmail string
 
 @description('First day of the budget period (YYYY-MM-01). Must be the current month on first creation; reuse the existing value afterwards (scripts/budget-start-date.sh).')
 param budgetStartDate string
+
+@description('Email that receives monitoring alerts')
+param alertEmail string
+
+@description('Page the availability test requests, e.g. https://atlasrelay.org/. Empty skips the test.')
+param availabilityTestUrl string = ''
 
 param tags object = {}
 
@@ -56,6 +63,19 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableAppl
     IngestionMode: 'LogAnalytics'
     RetentionInDays: 30
     DisableLocalAuth: false
+  }
+}
+
+module monitoring 'monitoring.bicep' = if (enableApplicationInsights) {
+  name: 'monitoring'
+  params: {
+    baseName: baseName
+    location: location
+    tags: tags
+    workspaceId: logs!.id
+    appInsightsId: appInsights!.id
+    alertEmail: alertEmail
+    availabilityTestUrl: availabilityTestUrl
   }
 }
 
@@ -97,3 +117,7 @@ resource budget 'Microsoft.Consumption/budgets@2023-11-01' = {
 
 output appInsightsName string = enableApplicationInsights ? appInsights!.name : ''
 output workspaceName string = enableApplicationInsights ? logs!.name : ''
+// Compiled into the browser bundle by the Deploy workflow (scripts/bootstrap.sh copies it to the
+// repository variable APPINSIGHTS_CONNECTION_STRING). It names the ingestion endpoint and the
+// instrumentation key; it is not a credential and is public once the site ships it.
+output appInsightsConnectionString string = enableApplicationInsights ? appInsights!.properties.ConnectionString : ''

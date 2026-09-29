@@ -1,0 +1,30 @@
+// API failures, newest first: 5xx requests by function and status, error log lines, and
+// exceptions from the Functions runtime (the api-errors alert counts all three).
+// Log lines written by api/src/lib/telemetry.ts are JSON; "Message" is the fixed sentence from
+// the code and "Error" the error's class, code and status (never its message). 499 is a request
+// the browser gave up on and is left out.
+let requests = AppRequests
+    | where toint(ResultCode) >= 500
+    | summarize Count = sum(ItemCount), First = min(TimeGenerated), Latest = max(TimeGenerated)
+        by Function = Name, Status = ResultCode
+    | extend Source = "request", Message = "", Error = "";
+let logs = AppTraces
+    | where SeverityLevel >= 3
+    | where Message !startswith "Executed '"
+    | extend e = parse_json(iff(Message startswith "{", Message, "{}"))
+    | extend Text = iff(isempty(tostring(e.message)), substring(Message, 0, 300), tostring(e.message))
+    | summarize Count = count(), First = min(TimeGenerated), Latest = max(TimeGenerated)
+        by Function = tostring(Properties.Category), Message = Text, Error = tostring(e.error)
+    | extend Source = "log", Status = "";
+// Fuzzy, with the summarize inside the leg, so the query still runs on a workspace where
+// AppExceptions has no rows yet (its columns do not resolve until then).
+let exceptions = union isfuzzy=true
+        (AppExceptions
+            | where AppRoleName != "web"
+            | summarize Count = sum(ItemCount), First = min(TimeGenerated), Latest = max(TimeGenerated)
+                by Function = OperationName, Error = ExceptionType, Message = ProblemId),
+        (datatable(Count: long, First: datetime, Latest: datetime, Function: string, Error: string, Message: string)[])
+    | extend Source = "exception", Status = "";
+union requests, logs, exceptions
+| project Latest, First, Source, Count, Function, Status, Message, Error
+| order by Latest desc

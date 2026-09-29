@@ -1,0 +1,8 @@
+// Uncaught errors and unhandled promise rejections in the browser, grouped by message.
+// Newest first. PageLoads counts distinct page loads (there are no cookies, so no longer sessions).
+AppExceptions
+| where AppRoleName == "web"
+| summarize Count = sum(ItemCount), PageLoads = dcount(SessionId), First = min(TimeGenerated),
+    Latest = max(TimeGenerated), Browser = take_any(ClientBrowser)
+    by Message = OuterMessage, Type = ExceptionType
+| order by Latest desc

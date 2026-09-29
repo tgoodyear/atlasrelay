@@ -3,6 +3,7 @@
 //
 //   identity.bicep  CI managed identity + GitHub federated credential(s)          (Owner-only)
 //   platform.bicep  Log Analytics + App Insights, monthly budget                    (Owner-only)
+//   monitoring.bicep  alerts, availability test, workbook (from platform.bicep)      (Owner-only)
 //   dns.bicep       public DNS zone for the project domain                          (Owner-only)
 //   rbac.bicep      least-privilege role assignment for CI, delete locks           (Owner-only)
 //   app.bicep       storage + tables, static web app + app settings                 (CI deploys this)
@@ -98,6 +99,12 @@ param budgetContactEmail string
 @description('First day of the budget period (YYYY-MM-01). Must be the current month on first creation; reuse the existing value afterwards.')
 param budgetStartDate string
 
+@description('Email that receives monitoring alerts. Defaults to the budget contact.')
+param alertEmail string = budgetContactEmail
+
+@description('Page the availability test requests, e.g. https://atlasrelay.org/. Empty skips the test.')
+param availabilityTestUrl string = ''
+
 @description('Tags applied to every resource')
 param tags object = {
   project: 'atlasrelay'
@@ -181,6 +188,8 @@ module platform 'platform.bicep' = {
     budgetAmount: budgetAmount
     budgetContactEmail: budgetContactEmail
     budgetStartDate: budgetStartDate
+    alertEmail: alertEmail
+    availabilityTestUrl: availabilityTestUrl
     tags: tags
   }
 }
@@ -240,6 +249,7 @@ output ciClientId string = identity.outputs.clientId
 output ciPrincipalId string = identity.outputs.principalId
 output ciRoleDefinitionId string = ciRole.id
 output appInsightsName string = platform.outputs.appInsightsName
+output appInsightsConnectionString string = platform.outputs.appInsightsConnectionString
 output dnsZoneName string = empty(dnsZoneName) ? '' : dns!.outputs.zoneName
 output dnsNameServers array = empty(dnsZoneName) ? [] : dns!.outputs.nameServers
 output tenantId string = tenant().tenantId

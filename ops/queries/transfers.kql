@@ -1,0 +1,12 @@
+// API transfers and their outcome, newest first.
+// Outcomes: confirmed, refused (RIPE Atlas said no, nothing moved),
+// uncertain (no usable answer, the credits may have moved) and unrecorded (RIPE Atlas accepted it
+// but the pledge row could not be updated). Uncertain and unrecorded ones need a person; see the
+// runbook. Project and pledge ids are the RowKeys in the projects and pledges tables.
+AppTraces
+| where Message has '"event":"transfer"'
+| extend e = parse_json(Message)
+| where tostring(e.event) == "transfer"
+| project TimeGenerated, Outcome = tostring(e.outcome), UpstreamStatus = tostring(e.upstreamStatus),
+    ProjectId = tostring(e.projectId), PledgeId = tostring(e.pledgeId), OperationId
+| order by TimeGenerated desc

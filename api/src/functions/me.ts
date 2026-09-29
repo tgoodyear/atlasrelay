@@ -1,9 +1,10 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requirePrincipal } from '../lib/auth';
-import { describeErrorForLog, handle, json, readJson } from '../lib/http';
+import { handle, json, readJson } from '../lib/http';
 import { Project, anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listPledges, listProjectsByOwner, patchProject, pledgeRacedDeletion, projectMayHaveRacedDeletion, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { privateUser } from '../lib/views';
+import { logError } from '../lib/telemetry';
 
 app.http('me-get', {
   route: 'me',
@@ -59,7 +60,7 @@ app.http('me-delete', {
           closed += 1;
         } catch (err) {
           failed += 1;
-          console.error(`Could not close project ${project.id} while deleting its owner:`, err instanceof Error ? err.message : err);
+          logError(`Could not close project ${project.id} while deleting its owner`, err);
         }
       }
       return { closed, failed };
@@ -79,7 +80,7 @@ app.http('me-delete', {
     // somebody who will delete their profile to post faster can register another account anyway.
     // Best effort, like everything after the delete: the profile is gone, and that is the promise.
     await deleteProjectPostWindow(p.userId).catch((err) => {
-      console.error('Profile deleted but its posting window could not be removed:', describeErrorForLog(err));
+      logError('Profile deleted but its posting window could not be removed', err);
     });
 
     // Then close what they own. A project left briefly open cannot be pledged to, because the
@@ -90,7 +91,7 @@ app.http('me-delete', {
     try {
       owned = await listProjectsByOwner(p.userId);
     } catch (err) {
-      console.error('Profile deleted but its projects could not be listed:', describeErrorForLog(err));
+      logError('Profile deleted but its projects could not be listed', err);
     }
 
     let closed = 0;
@@ -99,7 +100,7 @@ app.http('me-delete', {
       try {
         ({ closed, failed } = await closeOpen(owned));
       } catch (err) {
-        console.error('Profile deleted but its projects could not be swept:', err instanceof Error ? err.message : err);
+        logError('Profile deleted but its projects could not be swept', err);
         failed = -1;
       }
     } else {
@@ -128,7 +129,7 @@ app.http('me-delete', {
         }
         pledgesInFlight = n;
       } catch (err) {
-        console.error('Profile deleted but pledges in flight could not be checked:', describeErrorForLog(err));
+        logError('Profile deleted but pledges in flight could not be checked', err);
       }
     }
 
@@ -144,7 +145,7 @@ app.http('me-delete', {
     try {
       named = await anonymizeRetainedNames(p.userId);
     } catch (err) {
-      console.error('Profile deleted but its retained names could not be anonymized:', err instanceof Error ? err.message : err);
+      logError('Profile deleted but its retained names could not be anonymized', err);
       named = { projects: 0, pledges: 0, failed: -1 };
     }
     // The profile is gone either way, which is the promise that matters and the one the page

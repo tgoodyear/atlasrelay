@@ -20,13 +20,15 @@ The script is idempotent and creates nothing outside Bicep. It:
 2. Reads the GitHub OIDC subject prefix of `GITHUB_REPO`.
 3. Runs `az deployment sub create` with `infra/main.bicep`: resource group, CI managed
    identity with its GitHub federated credential, least-privilege custom role, Log
-   Analytics and App Insights (`platform.bicep`), storage account
+   Analytics and App Insights (`platform.bicep`) with their alerts, availability test and
+   workbook (`monitoring.bicep`), storage account
    and tables plus the static web app with its app settings (`app.bicep`), then the role
    assignment and delete locks (`rbac.bicep`). A failed first attempt is retried once
    after 45 s (custom-role replication lag).
 4. Waits for the role assignment to be visible, then sets GitHub secrets
    `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identifiers, not
-   credentials), `BUDGET_CONTACT_EMAIL`, and the variable `AZURE_BOOTSTRAPPED`.
+   credentials), `BUDGET_CONTACT_EMAIL`, and the variables `AZURE_BOOTSTRAPPED` and
+   `APPINSIGHTS_CONNECTION_STRING` (read by the Deploy workflow for browser telemetry).
 5. Prints the site hostname.
 
 Role assignments can take a few minutes to propagate; if the first workflow run fails
@@ -189,13 +191,98 @@ what-if reads them as removed. The PUT is the same no-op as re-running `az stati
 set` against a binding that already exists. The Infrastructure workflow's what-if never prints
 this, because `infra/app.bicepparam` binds nothing.
 
+## Monitoring
+
+API and browser telemetry go to App Insights `appi-internetresearch`, which stores it in the Log
+Analytics workspace `log-internetresearch` (0.1 GB/day cap, 30-day retention).
+
+### What is collected
+
+| Source | Tables | Contents |
+| --- | --- | --- |
+| Functions host | `AppRequests` | One row per API request: function name, status, duration. |
+| `api/src/lib/telemetry.ts` | `AppTraces` | JSON log lines with an `event` field: `dependency` for every RIPE Atlas and Table Storage call (operation, status, duration), `transfer` for the outcome of every API transfer, and `error`. |
+| `web/src/lib/telemetry.ts` | `AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, all with role `web` | Page views by route, page load timings, uncaught errors and unhandled promise rejections, and the API calls each page makes. |
+| Availability test | `AppAvailabilityResults` | The home page, requested from 3 locations every 15 minutes. |
+
+Nothing sent contains a request or response body, a RIPE Atlas API key, an email address, a user
+id or a query string. The API replaces anything shaped like a UUID (every RIPE Atlas key is one)
+or an email address in every log line, and logs an unexpected error by class, code and status,
+never by message. The browser drops query strings and fragments from URLs, cuts the referrer to
+its origin, applies the same replacement, sets no cookies and writes nothing to local or session
+storage. `api/test/telemetry.test.ts` and `web/test/telemetry.test.ts` check these rules.
+
+The Functions host does not record dependencies for Node apps, so RIPE Atlas and Table Storage
+calls are log lines rather than `AppDependencies` rows. `api/host.json` turns sampling off, so
+every request and log line is kept, and drops host start-up and health-check lines below warning
+level. Those lines were about 80% of the traces in September 2026, most of them the storage health
+check, which reports unhealthy on every start because managed functions have no
+`AzureWebJobsStorage`.
+
+Browser telemetry is compiled in only when the build has `VITE_APPINSIGHTS_CONNECTION_STRING`,
+so local and dev builds send nothing. The Deploy workflow passes the repository variable
+`APPINSIGHTS_CONNECTION_STRING`, which `scripts/bootstrap.sh` sets from the Bicep output. The
+SDK loads once the page has finished loading, so the first page's own API calls are not in
+`AppDependencies`. Later calls are, and their `traceparent` header gives the API request the same
+operation id.
+
+### Where to look
+
+The workbook **Atlas Relay** (App Insights `appi-internetresearch`, Workbooks) shows traffic, page
+load times, API latency and failures, errors, availability, RIPE Atlas and Table Storage calls,
+and transfer outcomes.
+
+From a terminal, `scripts/logs.sh` runs a saved query from `ops/queries` against the workspace
+and prints a table. `scripts/logs.sh list` names the queries. It needs `az` and `jq`; set
+`SUBSCRIPTION_ID` if the workspace is not in az's current subscription.
+
+```bash
+scripts/logs.sh api-errors          # 5xx by function, and API error lines (last day)
+scripts/logs.sh transfers 7d        # API transfers and their outcome
+scripts/logs.sh ripe-atlas 6h       # RIPE Atlas calls by path and result
+scripts/logs.sh browser-exceptions  # browser errors by message
+```
+
+### Alerts
+
+Every alert emails the contact address `scripts/bootstrap.sh` was run with, through the action
+group `ag-internetresearch`.
+
+| Alert | Fires when | Severity |
+| --- | --- | --- |
+| Home page unavailable | The availability test fails from 2 of its 3 locations. | 1 |
+| API transfer outcome unknown or unrecorded | Any API transfer ends `uncertain` or `unrecorded`. | 1 |
+| API server errors | At least 3 requests answer 5xx in 15 minutes, and at least 10% of requests. | 2 |
+| RIPE Atlas API not answering | At least 2 RIPE Atlas calls time out, fail to connect or return 5xx in 30 minutes. | 3 |
+| API error log lines | At least 3 API error lines or exceptions in 30 minutes. | 3 |
+| Browser errors | At least 5 uncaught browser errors from at least 2 page loads in an hour. | 3 |
+
+For a transfer alert, `scripts/logs.sh transfers` gives the project and pledge ids. An `uncertain`
+transfer is the case in [A pledge stuck at "Sent, outcome unknown"](#operations). `unrecorded`
+means RIPE Atlas accepted the transfer and both attempts to write the confirmation failed; the
+donor was told not to send again, and the owner can confirm the pledge once the credits arrive.
+
+The "Failure Anomalies" rule that App Insights created by itself sends to its own action group,
+"Application Insights Smart Detection". That group notifies holders of the Monitoring Contributor
+and Monitoring Reader roles, and nobody holds either on this subscription.
+
+### Changing monitoring
+
+The alerts, availability test, action group and workbook are declared in `infra/monitoring.bicep`,
+a module of `infra/platform.bicep`. The CI role has no `Microsoft.Insights` write permission, so
+only `scripts/bootstrap.sh`, run as an Owner, deploys them. The alert queries, the workbook and
+`ops/queries` read the JSON field names that `api/src/lib/telemetry.ts` writes, so change them
+together.
+
+`infra/workbooks/atlasrelay.json` is the workbook in the portal's own format. To change it, edit
+the workbook in the portal, open the Advanced Editor, copy the Gallery Template JSON into that
+file, replace the workspace's resource id with `__WORKSPACE_ID__`, and re-run the bootstrap.
+
 ## Operations
 
-- **Logs**: API logs and request telemetry go to App Insights `appi-internetresearch`
-  (Log Analytics workspace `log-internetresearch`, 0.1 GB/day cap, 30-day retention).
-  Bicep wires `APPLICATIONINSIGHTS_CONNECTION_STRING` into the SWA settings; do not set
-  app settings by hand, the next infra deploy replaces the whole map. Extra settings go
-  in the `additionalAppSettings` parameter.
+- **Logs**: see [Monitoring](#monitoring). Bicep wires `APPLICATIONINSIGHTS_CONNECTION_STRING`
+  into the SWA settings; do not set app settings by hand, the next infra deploy replaces the
+  whole map. Extra settings go in the `additionalAppSettings` parameter.
 - **Rotate storage keys without downtime**: the API reads key `storageKeyIndex`
   (0 = key1). Set `storageKeyIndex = 1` in both `.bicepparam` files and merge (the
   Infrastructure workflow deploys), renew key1 (`az storage account keys renew --key

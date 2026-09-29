@@ -1,0 +1,15 @@
+// API requests by function: count, 4xx, 5xx, 5xx rate, p50/p95/max latency.
+// From AppRequests, one row per request written by the Functions host. The function name is the
+// one registered in api/src/functions, e.g. "projects-list" or "pledges-create".
+AppRequests
+| summarize
+    Requests = sum(ItemCount),
+    Client4xx = sumif(ItemCount, toint(ResultCode) between (400 .. 499)),
+    Server5xx = sumif(ItemCount, toint(ResultCode) >= 500),
+    P50ms = round(percentile(DurationMs, 50), 1),
+    P95ms = round(percentile(DurationMs, 95), 1),
+    MaxMs = round(max(DurationMs), 1)
+    by Function = Name
+| extend ErrorRate = strcat(round(100.0 * Server5xx / Requests, 2), "%")
+| project Function, Requests, Client4xx, Server5xx, ErrorRate, P50ms, P95ms, MaxMs
+| order by Requests desc

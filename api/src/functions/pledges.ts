@@ -2,12 +2,13 @@ import { app, HttpRequest } from '@azure/functions';
 import { RestError } from '@azure/data-tables';
 import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
-import { describeErrorForLog, handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
+import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
+import { logError, logEvent } from '../lib/telemetry';
 
 app.http('pledges-list', {
   route: 'projects/{id}/pledges',
@@ -145,7 +146,7 @@ app.http('pledges-create', {
             stored = await getPledge(id, pledge.id);
           } catch (readErr) {
             readFailed = true;
-            console.error('Could not read back a pledge whose creation was ambiguous:', describeErrorForLog(readErr));
+            logError('Could not read back a pledge whose creation was ambiguous', readErr);
           }
           // Ambiguous on top of ambiguous. Hold the slot: the invariant worth keeping is that a live row
           // always has a slot behind it, and releasing buys the donor nothing here anyway, because the
@@ -200,11 +201,11 @@ app.http('pledges-create', {
         } catch (cleanupErr) {
           const changed = cleanupErr instanceof RestError && cleanupErr.statusCode === 412;
           if (changed) rollbackFoundConflict = true;
-          console.error(
+          logError(
             changed
               ? 'Did not withdraw a pledge: somebody had already acted on it'
-              : 'Could not withdraw a pledge:',
-            cleanupErr instanceof Error ? cleanupErr.message : cleanupErr,
+              : 'Could not withdraw a pledge',
+            cleanupErr,
           );
         }
         try {
@@ -221,7 +222,7 @@ app.http('pledges-create', {
           try {
             await releasePledgeClaim(id, donor.id, pledge.id);
           } catch (cleanupErr) {
-            console.error('Could not release a pledge slot:', cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+            logError('Could not release a pledge slot', cleanupErr);
           }
         }
         // Whoever else acted decides what this request may offer, so answer it here rather than at
@@ -256,7 +257,7 @@ app.http('pledges-create', {
       try {
         pledge.etag = (await createPledge(pledge)).etag;
       } catch (createErr) {
-        console.error('Could not create a pledge row:', describeErrorForLog(createErr));
+        logError('Could not create a pledge row', createErr);
         throw await rollback(new HttpError(503, 'We could not record your pledge just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
       }
 
@@ -272,7 +273,7 @@ app.http('pledges-create', {
       try {
         updatedProject = await recomputeProjectTotals(id);
       } catch (err) {
-        console.error('Could not recompute project totals before a transfer:', err instanceof Error ? err.message : err);
+        logError('Could not recompute project totals before a transfer', err);
         throw await rollback(new HttpError(503, 'We could not check this project’s current total just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
       }
       if (updatedProject.creditsConfirmed + updatedProject.creditsPending > maxCredits(project.creditsRequested)) {
@@ -358,7 +359,7 @@ app.http('pledges-create', {
             }
             throw new HttpError(409, 'This request sent nothing, but somebody else acted on this pledge while it was being set up, so it may already record a transfer. Open it on your dashboard before sending anything.', { transfer: 'unknown' });
           }
-          console.error('Could not record the transfer start marker:', describeErrorForLog(markErr));
+          logError('Could not record the transfer start marker', markErr);
           // Any other failure is ambiguous: the write may have been applied and only its answer
           // lost, leaving the row a version ahead of the one held here, so the conditional
           // withdrawal below would fail 412 and strand the row in flight holding the donor's slot.
@@ -393,7 +394,7 @@ app.http('pledges-create', {
         } catch (ownerErr) {
           // A storage failure here is not the owner being gone, but either way no transfer has been
           // made, so the row and the slot must not be left behind holding the donor out.
-          console.error('Could not re-read the project owner before transferring:', ownerErr instanceof Error ? ownerErr.message : ownerErr);
+          logError('Could not re-read the project owner before transferring', ownerErr);
           throw await rollback(new HttpError(503, 'We could not confirm where to send the credits just now, so nothing was sent. Please try again in a moment.', NOT_SENT));
         }
         if (!ownerNow?.atlasEmail) {
@@ -415,6 +416,7 @@ app.http('pledges-create', {
           // retry that sends the credits twice.
           if (err instanceof AtlasRefused) {
             // RIPE read the request and declined, so this is a definite no-send.
+            logEvent('transfer', { outcome: 'refused', upstreamStatus: err.upstreamStatus, projectId: id, pledgeId: pledge.id });
             throw await rollback(new HttpError(err.status, err.message, NOT_SENT));
           }
           // The row already says this. It was written before the POST, at `sent` and uncertain, which is
@@ -435,10 +437,12 @@ app.http('pledges-create', {
           try {
             await savePledge(pledge, pledge.etag);
           } catch (clearErr) {
-            console.error('Could not clear the in-flight marker on an uncertain transfer:', describeErrorForLog(clearErr));
+            logError('Could not clear the in-flight marker on an uncertain transfer', clearErr);
           }
           // totals() counts `pledged` and `sent` alike as pending, so the pre-POST write already put this
           // pledge in the project's reserved total and nothing needs recomputing.
+          // Read by the "transfer outcome unknown" alert (infra/monitoring.bicep).
+          logEvent('transfer', { outcome: 'uncertain', projectId: id, pledgeId: pledge.id }, 'warn');
           throw new HttpError(
             502,
             `${err instanceof Error ? err.message : 'RIPE Atlas did not answer'}. The credits may still have moved, so check your transaction log at https://atlas.ripe.net/credits/transactions/ before sending again. The pledge is recorded and waiting for the project owner to settle it.`,
@@ -480,7 +484,7 @@ app.http('pledges-create', {
           await savePledge(pledge);
           saved = true;
         } catch (confirmErr) {
-          console.error('Transfer completed but the confirmation could not be written:', describeErrorForLog(confirmErr));
+          logError('Transfer completed but the confirmation could not be written', confirmErr);
           // One more attempt at the same confirmed row, not a reduced one.
           //
           // This used to write back `pledged` with the transfer fields cleared, to get the in-flight
@@ -504,7 +508,7 @@ app.http('pledges-create', {
             saved = true;
           } catch (clearErr) {
             if (!(clearErr instanceof RestError && clearErr.statusCode === 412)) {
-              console.error('Could not record a completed transfer on retry either:', describeErrorForLog(clearErr));
+              logError('Could not record a completed transfer on retry either', clearErr);
             }
             // Ask the row, whatever the exception was, because neither answer settles it alone. A
             // 412 says the version moved, not who moved it: the first write may have landed with
@@ -517,6 +521,9 @@ app.http('pledges-create', {
             if (stored?.status === 'confirmed') saved = true;
           }
         }
+        // Read by the same alert: credits that moved without a confirmed row need a human.
+        if (saved) logEvent('transfer', { outcome: 'confirmed', projectId: id, pledgeId: pledge.id });
+        else logEvent('transfer', { outcome: 'unrecorded', projectId: id, pledgeId: pledge.id }, 'error');
         if (!saved) {
           apiSaveFailed = true;
           recordWarning = 'Your transfer completed, but recording it here did not. Do not send it again. The project owner can confirm the pledge once the credits arrive. If their dashboard refuses at first, it will accept a minute or two later.';
@@ -524,7 +531,7 @@ app.http('pledges-create', {
         try {
           updatedProject = await recomputeProjectTotals(id);
         } catch (err) {
-          console.error('Transfer completed but project totals could not be recomputed:', err instanceof Error ? err.message : err);
+          logError('Transfer completed but project totals could not be recomputed', err);
           // Nothing else will repair this on its own. A confirmed pledge leaves pending at zero, and
           // both maintenance refreshers only look at projects showing a reservation, so this row
           // would sit wrong indefinitely. Mark it so they pick it up.
@@ -540,7 +547,7 @@ app.http('pledges-create', {
           try {
             await releasePledgeClaim(id, donor.id, pledge.id);
           } catch (releaseErr) {
-            console.error('Could not release a pledge slot after a completed transfer:', releaseErr instanceof Error ? releaseErr.message : releaseErr);
+            logError('Could not release a pledge slot after a completed transfer', releaseErr);
           }
         }
       }
@@ -559,7 +566,7 @@ app.http('pledges-create', {
         try {
           ownerRow = await getUser(project.ownerId);
         } catch (ownerErr) {
-          console.error('Could not read the project owner for a manual pledge:', ownerErr instanceof Error ? ownerErr.message : ownerErr);
+          logError('Could not read the project owner for a manual pledge', ownerErr);
           throw await rollback(new HttpError(503, 'We could not look up where to send the credits just now, so the pledge was not created. Please try again in a moment.'));
         }
         recipientEmail = ownerRow?.atlasEmail || undefined;
@@ -616,7 +623,7 @@ app.http('pledges-create', {
       // message must not be published because an unknown error can carry the request body, which
       // on this route holds an API key, and then passed that message straight to console.error.
       if (!(err instanceof HttpError)) {
-        console.error('Unexpected failure before a transfer was issued:', describeErrorForLog(err));
+        logError('Unexpected failure before a transfer was issued', err);
       }
       throw markNotSent(err);
     }

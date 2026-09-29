@@ -1,5 +1,5 @@
 import { app, type HttpResponseInit } from '@azure/functions';
-import { describeErrorForLog } from '../lib/http';
+import { logError } from '../lib/telemetry';
 import { sitemapEntries, sitemapXml } from '../lib/sitemap';
 import { listProjects } from '../lib/store';
 
@@ -17,7 +17,7 @@ app.http('sitemap', {
     } catch (err) {
       // A 503 tells a crawler to come back later and keep the copy it has. A sitemap of the static
       // pages alone would read as every project page having gone.
-      console.error('Sitemap failed:', describeErrorForLog(err));
+      logError('Sitemap failed', err);
       return { status: 503, body: 'Sitemap temporarily unavailable', headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '3600' } };
     }
   },

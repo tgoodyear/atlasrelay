@@ -3,6 +3,7 @@ import { requirePrincipal } from '../lib/auth';
 import { handle, json } from '../lib/http';
 import { Project, getProject, listPledges, listPledgesByDonor, listProjectsByOwner, now, patchProject, totals } from '../lib/store';
 import { privatePledge, publicProject } from '../lib/views';
+import { logError } from '../lib/telemetry';
 
 /** Projects one dashboard request will re-read pledges for. See the same cap on the listing. */
 const DASHBOARD_REFRESH_LIMIT = 20;
@@ -38,7 +39,7 @@ app.http('my', {
         try {
           t = totals(await listPledges(x.id));
         } catch (err) {
-          console.error(`Could not refresh totals for project ${x.id}:`, err instanceof Error ? err.message : err);
+          logError(`Could not refresh totals for project ${x.id}`, err);
           // Same rotation as the public listing: a project whose scan keeps failing would otherwise
           // stay least-recently-checked and be picked on every dashboard load, spending a refresh
           // slot for ever. Advancing the timestamp moves it to the back; totalsDirty stays set, so

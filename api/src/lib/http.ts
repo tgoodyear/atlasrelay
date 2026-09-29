@@ -1,4 +1,5 @@
 import { HttpResponseInit } from '@azure/functions';
+import { logError } from './telemetry';
 
 export class HttpError extends Error {
   constructor(public status: number, message: string, public details?: unknown) {
@@ -36,26 +37,8 @@ export function markNotSent(err: unknown): unknown {
   return new HttpError(err.status, err.message, NOT_SENT);
 }
 
-/**
- * How an unexpected error may be written to a log.
- *
- * Never its message. SECURITY.md promises a pasted API key cannot reach a log, and an unknown
- * error is unknown: whatever threw it may have folded the request body, which on the pledge route
- * carries the donor's key, into free text. Two places here previously said that in a comment and
- * then logged the message anyway.
- *
- * What is left is still enough to work with, because the errors that actually reach these paths
- * are Azure storage errors: the class name, the service's own error code, and the HTTP status are
- * all fixed identifiers chosen by the SDK rather than anything derived from the request.
- */
-export function describeErrorForLog(err: unknown): string {
-  if (!(err instanceof Error)) return typeof err;
-  const { code, statusCode } = err as { code?: unknown; statusCode?: unknown };
-  const parts = [err.name || 'Error'];
-  if (typeof code === 'string') parts.push(`code=${code}`);
-  if (typeof statusCode === 'number') parts.push(`status=${statusCode}`);
-  return parts.join(' ');
-}
+// Kept importable from here, where its callers have always found it; it lives with the logger.
+export { describeErrorForLog } from './telemetry';
 
 export function json(body: unknown, status = 200, headers: Record<string, string> = {}): HttpResponseInit {
   return {
@@ -81,7 +64,7 @@ export function handle<TArgs extends unknown[]>(fn: (...args: TArgs) => Promise<
       // Never echo unknown error objects, to the client or to the log: they might contain request
       // bodies, and on the pledge route a request body holds the donor's API key. This used to log
       // err.message, one line under a comment saying not to.
-      console.error('Unhandled error:', describeErrorForLog(err));
+      logError('Unhandled error', err);
       return json({ error: { status: 500, message: 'Internal error' } }, 500);
     }
   };

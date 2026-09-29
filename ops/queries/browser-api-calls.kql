@@ -1,0 +1,13 @@
+// API calls as the browser saw them: count, failures, p50/p95 latency by path and status.
+// Includes the network and the Static Web Apps edge, so compare with api-requests for the
+// function's own time. Calls made before the telemetry SDK loads (the first page's own API calls)
+// are not recorded.
+AppDependencies
+| where AppRoleName == "web"
+| summarize
+    Calls = sum(ItemCount),
+    Failures = sumif(ItemCount, Success == false),
+    P50ms = round(percentile(DurationMs, 50), 1),
+    P95ms = round(percentile(DurationMs, 95), 1)
+    by Call = Name, Status = ResultCode
+| order by Calls desc

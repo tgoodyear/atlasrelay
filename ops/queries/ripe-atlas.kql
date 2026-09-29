@@ -1,0 +1,14 @@
+// Calls from the API to RIPE Atlas by path and result: count, failures, p50/p95 latency.
+// A result of "timeout" or "network" means no answer came back; 5xx is RIPE failing. A 4xx is RIPE
+// answering (a refused transfer, a key without the permission) and counts as a success here.
+AppTraces
+| where Message has '"event":"dependency"' and Message has '"type":"RIPE Atlas"'
+| extend e = parse_json(Message)
+| summarize
+    Calls = count(),
+    Failures = countif(tobool(e.success) == false),
+    P50ms = percentile(toint(e.durationMs), 50),
+    P95ms = percentile(toint(e.durationMs), 95),
+    Latest = max(TimeGenerated)
+    by Call = tostring(e.name), Result = tostring(e.resultCode)
+| order by Calls desc
