@@ -32,6 +32,14 @@ test('a page view keeps its path and loses its query, referrer path and user ids
   assert.deepEqual(item.tags, { 'ai.operation.name': '/projects', 'ai.cloud.role': 'web', 'ai.session.id': 'load1' });
 });
 
+test('every tag is scrubbed, not only the ones named', () => {
+  const item = { tags: { 'ai.operation.name': `/someone@example.org/${KEY}`, 'ai.location.ip': 'x', 'ai.custom': `key ${KEY}` } };
+  scrubItem(item, 'web', 'load1');
+  const sent = JSON.stringify(item);
+  assert.equal(sent.includes(KEY), false);
+  assert.equal(sent.includes('someone@example.org'), false);
+});
+
 test('an exception that quotes a key or a body does not carry it out', () => {
   const item = {
     baseData: {
@@ -72,4 +80,6 @@ test('page view names follow the routes in App.tsx', () => {
   assert.equal(routeName('/'), '/');
   assert.equal(routeName('/projects/'), '/projects');
   assert.equal(routeName('/wp-admin'), '(not found)');
+  assert.equal(routeName('/Projects/'), '/projects');
+  assert.equal(routeName('/HOW-IT-WORKS'), '/how-it-works');
 });

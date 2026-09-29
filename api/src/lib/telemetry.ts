@@ -60,9 +60,16 @@ type Level = 'info' | 'warn' | 'error';
 type Field = string | number | boolean | null | undefined;
 
 function write(level: Level, line: Record<string, Field>): void {
-  const text = scrub(JSON.stringify(line));
-  const sink: LogSink = invocationLog.getStore() ?? console;
-  sink[level](text);
+  // Never throws. These calls sit inside the RIPE Atlas client and the transfer path, where an
+  // exception from logging would be read as a failed call: a completed transfer could be
+  // reported as one whose outcome is unknown.
+  try {
+    const text = scrub(JSON.stringify(line));
+    const sink: LogSink = invocationLog.getStore() ?? console;
+    sink[level](text);
+  } catch {
+    // Losing a log line is the right trade.
+  }
 }
 
 /**
@@ -90,7 +97,8 @@ export interface Dependency {
   name: string;
   /** HTTP status, or "timeout" / "network" when no answer came back. */
   resultCode: string;
-  /** Whether the service answered. A 4xx is an answer; a 5xx, a timeout or a network error is not. */
+  /** Whether the call went as expected. For RIPE Atlas any 4xx is an answer and counts; for Table
+   *  Storage see tableStatusOk. A 5xx, a timeout or a network error never counts. */
   success: boolean;
   durationMs: number;
 }
@@ -128,8 +136,19 @@ export function tableOperation(method: string, url: string): string {
   const [, table, parens, inner] = match;
   if (table === 'Tables') return `${method} Tables`;
   if (table === '$batch') return `${method} batch`;
-  if (parens && inner) return `${method} ${table} entity`;
+  // A keyed URL is one row. Without a key, GET is a filtered read and anything else (POST) is an
+  // insert, which is also one row.
+  if ((parens && inner) || method !== 'GET') return `${method} ${table} entity`;
   return `${method} ${table} query`;
+}
+
+/**
+ * Whether a Table Storage status is an answer the code expects. 404 (row not found), 409 (already
+ * exists) and 412 (row changed since it was read) are how this API learns about rows and races;
+ * any other 4xx (authentication, a malformed request, throttling) and every 5xx is a failure.
+ */
+export function tableStatusOk(status: number): boolean {
+  return status < 400 || status === 404 || status === 409 || status === 412;
 }
 
 /**
@@ -153,7 +172,7 @@ export function tableDependencyPolicy() {
       }
       try {
         const res = await next(request);
-        logDependency({ type: 'Table Storage', target, name, resultCode: String(res.status), success: res.status < 500, durationMs: performance.now() - started });
+        logDependency({ type: 'Table Storage', target, name, resultCode: String(res.status), success: tableStatusOk(res.status), durationMs: performance.now() - started });
         return res;
       } catch (err) {
         const status = (err as { statusCode?: unknown }).statusCode;
@@ -163,7 +182,7 @@ export function tableDependencyPolicy() {
           target,
           name,
           resultCode: answered ? String(status) : 'network',
-          success: answered && (status as number) < 500,
+          success: answered && tableStatusOk(status as number),
           durationMs: performance.now() - started,
         });
         throw err;

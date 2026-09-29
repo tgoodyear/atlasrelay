@@ -1,6 +1,7 @@
 // Table Storage requests by table and operation: count, failures, p50/p95 latency.
-// "entity" is a single-row read or write, "query" a filtered read. 404 (row not found), 409
-// (already exists) and 412 (row changed since it was read) are normal answers, not failures.
+// "entity" is a single-row read or write (inserts included), "query" a filtered read. 404 (row
+// not found), 409 (already exists) and 412 (row changed since it was read) are normal answers;
+// any other 4xx and every 5xx counts as a failure.
 AppTraces
 | where Message has '"event":"dependency"' and Message has '"type":"Table Storage"'
 | extend e = parse_json(Message)

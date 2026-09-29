@@ -53,8 +53,8 @@ if ! result=$(az rest --method post \
   --url "https://api.loganalytics.io/v1/workspaces/$workspace/query" \
   --headers Content-Type=application/json \
   --body "@$body" -o json 2>&1); then
-  # A table appears only once its first row arrives (for example AppPageViews before any browser
-  # telemetry, or AppAvailabilityResults before the first test run).
+  # Workspace-based App Insights defines its App* tables up front, so this only happens against a
+  # workspace that was never connected to App Insights.
   if grep -q "Failed to resolve table" <<< "$result"; then
     echo "no data of this kind has reached the workspace yet" >&2
     exit 0

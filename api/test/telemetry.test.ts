@@ -103,6 +103,7 @@ test('Table Storage requests are named without keys or filters', () => {
   assert.equal(tableOperation('GET', `${base}/projects(PartitionKey='owner-abc123',RowKey='mf3k2x9a0abc1234')`), 'GET projects entity');
   assert.equal(tableOperation('GET', `${base}/projects()?$filter=PartitionKey%20eq%20'owner-abc123'`), 'GET projects query');
   assert.equal(tableOperation('GET', `${base}/projects?$filter=x`), 'GET projects query');
+  assert.equal(tableOperation('POST', `${base}/pledges`), 'POST pledges entity');
   assert.equal(tableOperation('POST', `${base}/Tables`), 'POST Tables');
   assert.equal(tableOperation('POST', `${base}/$batch`), 'POST batch');
   assert.equal(tableOperation('PUT', `http://127.0.0.1:10002/devstoreaccount1/claims(PartitionKey='p',RowKey='d')`), 'PUT claims entity');
@@ -116,7 +117,11 @@ test('the Table Storage policy logs status and never the URL', async () => {
   await invocationLog.run(sink, () =>
     policy.sendRequest({ url, method: 'GET' }, async () => { throw Object.assign(new Error('socket hang up'), { code: 'REQUEST_SEND_ERROR' }); }).catch(() => null),
   );
-  const [notFound, dropped] = lines.map((l) => JSON.parse(l.text));
+  await invocationLog.run(sink, () => policy.sendRequest({ url, method: 'GET' }, async () => ({ status: 403 })));
+  const [notFound, dropped, forbidden] = lines.map((l) => JSON.parse(l.text));
+  // 404, 409 and 412 are answers this API expects; an authorization failure is not.
+  assert.equal(forbidden.resultCode, '403');
+  assert.equal(forbidden.success, false);
   assert.deepEqual({ ...notFound, durationMs: 0 }, {
     event: 'dependency', type: 'Table Storage', target: 'st.table.core.windows.net', name: 'GET users entity', resultCode: '404', success: true, durationMs: 0,
   });
@@ -144,4 +149,15 @@ test('the API writes logs only through lib/telemetry.ts', () => {
   };
   walk(root);
   assert.deepEqual(offenders, []);
+});
+
+test('a logger that throws cannot turn a completed RIPE Atlas call into a failure', async () => {
+  // The dependency line is written inside the RIPE Atlas client, on the transfer path. If logging
+  // could throw there, a 201 would surface as "could not reach RIPE Atlas" and the pledge would be
+  // parked as uncertain over credits that had moved.
+  const broken: LogSink = { info: () => { throw new Error('sink down'); }, warn: () => { throw new Error('sink down'); }, error: () => { throw new Error('sink down'); } };
+  const result = await invocationLog.run(broken, () =>
+    withFetch(async () => new Response(JSON.stringify({ transaction: '' }), { status: 201 }), () => transferCredits(KEY, 'owner@example.org', 10)),
+  );
+  assert.deepEqual(result, { transaction: '' });
 });

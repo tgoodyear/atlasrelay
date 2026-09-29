@@ -69,6 +69,7 @@ export function scrubItem(item: TelemetryItemLike, role: string, pageLoadId: str
   const tags = item.tags as Record<string, unknown>;
   for (const t of DROPPED_TAGS) delete tags[t];
   if (typeof tags['ai.operation.name'] === 'string') tags['ai.operation.name'] = stripQuery(tags['ai.operation.name'] as string);
+  for (const t of Object.keys(tags)) if (typeof tags[t] === 'string') tags[t] = scrubText(tags[t] as string);
   tags['ai.cloud.role'] = role;
   // No cookies and no storage, so there is no session to join. A random id per page load groups
   // one visit's page views, API calls and errors, and is gone when the tab closes.
@@ -81,7 +82,8 @@ export function scrubItem(item: TelemetryItemLike, role: string, pageLoadId: str
  * the page, not to one project.
  */
 export function routeName(pathname: string): string {
-  const path = pathname.replace(/\/+$/, '') || '/';
+  // React Router matches routes without regard to case, so /Projects is the projects page.
+  const path = pathname.toLowerCase().replace(/\/+$/, '') || '/';
   if (['/', '/projects', '/projects/new', '/dashboard', '/profile', '/how-it-works'].includes(path)) return path;
   if (/^\/projects\/[^/]+\/edit$/.test(path)) return '/projects/:id/edit';
   if (/^\/projects\/[^/]+$/.test(path)) return '/projects/:id';
