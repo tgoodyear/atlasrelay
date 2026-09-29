@@ -5,9 +5,12 @@ import SignInPrompt from '../components/SignInPrompt';
 import Spinner from '../components/Spinner';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { META } from '../lib/pages';
+import { usePageMeta } from '../lib/usePageMeta';
 
 export default function Profile() {
   const { loading, principal, user, refresh } = useAuth();
+  usePageMeta(META.profile);
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const next = params.get('next') ?? '';

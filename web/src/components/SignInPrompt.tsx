@@ -4,7 +4,8 @@ export default function SignInPrompt({ reason, returnTo }: { reason: string; ret
   return (
     <div className="card">
       <div className="card-body" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
-        <h2>Sign in to continue</h2>
+        {/* The page's only heading when signed out, so it is the h1, at the h2 size it had. */}
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Sign in to continue</h1>
         <p className="muted">{reason}</p>
         <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
           <a className="btn btn-github" href={loginUrl('github', returnTo)}>Continue with GitHub</a>

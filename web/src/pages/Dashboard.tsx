@@ -6,9 +6,12 @@ import SignInPrompt from '../components/SignInPrompt';
 import Spinner from '../components/Spinner';
 import { api, ApiError, fmt, fmtDate, type Pledge, type Project } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { META } from '../lib/pages';
+import { usePageMeta } from '../lib/usePageMeta';
 
 export default function Dashboard() {
   const { loading, principal, user } = useAuth();
+  usePageMeta(META.dashboard);
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [pledges, setPledges] = useState<Pledge[]>([]);
   const [tab, setTab] = useState<'projects' | 'pledges'>('projects');

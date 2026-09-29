@@ -6,6 +6,8 @@ import Progress from '../components/Progress';
 import Spinner from '../components/Spinner';
 import { api, ApiError, fmt, fmtDate, pingsFor, type Pledge, type Project, type PublicUser } from '../lib/api';
 import { loginUrl, useAuth } from '../lib/auth';
+import { META } from '../lib/pages';
+import { usePageMeta } from '../lib/usePageMeta';
 
 export default function ProjectDetail() {
   const { id = '' } = useParams();
@@ -43,7 +45,17 @@ export default function ProjectDetail() {
     void load();
   }, [load]);
 
-  if (error) return <div className="narrow"><div className="empty" style={{ marginTop: '3rem' }}>{error}. <Link to="/projects">All projects</Link></div></div>;
+  // Error first, matching the render below: a failed reload can leave the previous project set,
+  // and the error view must not keep that project's canonical URL.
+  usePageMeta(
+    error
+      ? { title: error, noindex: true }
+      : project
+        ? { title: project.title, description: project.summary, path: `/projects/${project.id}` }
+        : META.project,
+  );
+
+  if (error) return <div className="narrow"><div className="empty" style={{ marginTop: '3rem' }}><h1>{error}</h1><p><Link to="/projects">All projects</Link></p></div></div>;
   if (!project) return <div className="container"><Spinner /></div>;
 
   const canPledge = project.open && project.maxPledge > 0 && !isOwner;

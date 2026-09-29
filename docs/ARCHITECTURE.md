@@ -245,6 +245,7 @@ name, so `publicName()` reduces anything email-shaped to its local part before i
 | `GET /api/my` | user | My projects + my pledges. |
 | `GET /api/stats` | public | Totals for the home page. |
 | `POST /api/atlas/balance` | user | `{apiKey}` → `{current_balance,...}` from RIPE. Never stored. |
+| `GET /api/sitemap` | public | Sitemap XML of the public pages and every project not taken down. Served at `/sitemap.xml` by a rewrite in `staticwebapp.config.json`. |
 
 Authorization is enforced twice: `staticwebapp.config.json` route rules require the
 `authenticated` role on mutating routes, and every function re-checks the decoded
@@ -318,6 +319,9 @@ docs/     this spec, RIPE research notes, runbook
   `azure/login` (OIDC, managed identity), read the SWA deployment token with
   `az staticwebapp secrets list` (masked, never stored), then
   `Azure/static-web-apps-deploy@v1` with `skip_app_build`/`skip_api_build`.
+- `deploy.yml`, job `indexnow` (after a deploy that uploaded, no Azure identity): runs
+  `scripts/indexnow.mjs`, which reads the live `/sitemap.xml` and posts its URLs to IndexNow.
+  It logs failures as warnings and is `continue-on-error`, so it cannot fail a deploy.
 - `infra.yml`: lints every template and checks parameter drift on PRs; on `main` it
   logs in, runs `az deployment group what-if` (resource ids only, so no connection
   string reaches the log) then `create` on `infra/app.bicep`.

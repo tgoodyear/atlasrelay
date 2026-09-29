@@ -6,7 +6,9 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'infra/**'
-      - 'scripts/**'
+      # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
+      # to it has to trigger this workflow.
+      - 'scripts/*.sh'
       - '**.md'
       - '.github/workflows/infra.yml'
   pull_request:
@@ -14,7 +16,9 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'infra/**'
-      - 'scripts/**'
+      # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
+      # to it has to trigger this workflow.
+      - 'scripts/*.sh'
       - '**.md'
       - '.github/workflows/infra.yml'
   workflow_dispatch:
@@ -100,6 +104,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    outputs:
+      # 'success' only when the upload step ran and succeeded; 'skipped' before bootstrap.
+      uploaded: ${{ steps.upload.outcome }}
     steps:
       - name: Azure secrets missing after bootstrap
         if: env.AZURE_READY != 'true' && env.AZURE_BOOTSTRAPPED == 'true'
@@ -140,6 +147,7 @@ jobs:
           echo "value=$token" >> "$GITHUB_OUTPUT"
 
       - name: Upload to Static Web Apps
+        id: upload
         if: env.AZURE_READY == 'true'
         uses: Azure/static-web-apps-deploy@1a947af9992250f3bc2e68ad0754c0b0c11566c9 # v1
         with:
@@ -150,3 +158,30 @@ jobs:
           output_location: ''
           skip_app_build: true
           skip_api_build: true
+
+  # Sends the live sitemap's URLs to IndexNow (Bing, Yandex and others; Google does not use it)
+  # after a real deploy. It holds no Azure identity, and it can never fail the run: the site is
+  # already live, the script only logs warnings, and the job is continue-on-error besides.
+  indexnow:
+    name: Submit URLs to IndexNow
+    needs: deploy
+    if: needs.deploy.outputs.uploaded == 'success'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            web/public
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Submit sitemap URLs
+        run: node scripts/indexnow.mjs

@@ -5,5 +5,6 @@ import './functions/pledges';
 import './functions/my';
 import './functions/stats';
 import './functions/atlas';
+import './functions/sitemap';
 
 app.setup({ enableHttpStream: false });

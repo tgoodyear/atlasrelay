@@ -5,12 +5,15 @@ import SignInPrompt from '../components/SignInPrompt';
 import Spinner from '../components/Spinner';
 import { api, ApiError, TAGS, pingsFor, type Tag } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { META } from '../lib/pages';
+import { usePageMeta } from '../lib/usePageMeta';
 
 export default function ProjectForm() {
   const { id } = useParams();
   const editing = Boolean(id);
   const navigate = useNavigate();
   const { loading, principal, user } = useAuth();
+  usePageMeta(editing ? META.editProject : META.newProject);
 
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');

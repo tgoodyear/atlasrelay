@@ -3,10 +3,13 @@ import { Link } from 'react-router-dom';
 import { api, fmtCompact, type Project, type Stats } from '../lib/api';
 import ProjectCard from '../components/ProjectCard';
 import Spinner from '../components/Spinner';
+import { META } from '../lib/pages';
+import { usePageMeta } from '../lib/usePageMeta';
 
 export default function Home() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [projects, setProjects] = useState<Project[] | null>(null);
+  usePageMeta(META.home);
 
   useEffect(() => {
     api.stats().then((r) => setStats(r.stats)).catch(() => setStats(null));

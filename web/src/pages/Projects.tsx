@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, TAGS, type Project } from '../lib/api';
 import ProjectCard from '../components/ProjectCard';
 import Spinner from '../components/Spinner';
+import { META } from '../lib/pages';
+import { usePageMeta } from '../lib/usePageMeta';
 
 export default function Projects() {
   const [params, setParams] = useSearchParams();
@@ -12,6 +14,7 @@ export default function Projects() {
   const q = params.get('q') ?? '';
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState('');
+  usePageMeta(META.projects);
 
   useEffect(() => {
     setProjects(null);
