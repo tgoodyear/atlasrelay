@@ -22,6 +22,7 @@ interface Route {
   methods?: string[];
 }
 interface SwaConfig {
+  trailingSlash?: 'auto' | 'always' | 'never';
   routes: Route[];
   navigationFallback?: unknown;
   responseOverrides?: Record<string, { rewrite?: string; statusCode?: number }>;
@@ -177,6 +178,11 @@ const builtFiles = new Set(['/index.html', ...SHELLS.map((s) => `/${s.file}`)]);
  * 404 override. There is no navigation fallback, so nothing else returns the app.
  */
 function resolve(path: string): { status: number; serves: string } {
+  // trailingSlash "never": SWA answers any path ending in a slash (except the root) with a 301 to
+  // the same path without it, before the route rules run.
+  if (config.trailingSlash === 'never' && path !== '/' && path.endsWith('/')) {
+    return { status: 301, serves: path.replace(/\/+$/, '') };
+  }
   const rule = config.routes.find((r) =>
     (!r.methods || r.methods.includes('GET')) && (r.route.endsWith('*') ? path.startsWith(r.route.slice(0, -1)) : r.route === path),
   );
@@ -219,6 +225,19 @@ test('each route gets the shell with the matching head', () => {
   assert.equal(resolve('/how-it-works').serves, '/shell/how-it-works.html');
   assert.equal(resolve('/projects/mf1abcd0000xyz12').serves, '/shell/project.html');
   for (const p of ['/dashboard', '/profile', '/projects/new']) assert.equal(resolve(p).serves, '/shell/app.html');
+});
+
+test('SWA would accept the routes: no two rules normalize to the same route', () => {
+  // SWA matches routes case-insensitively and ignores a trailing slash, and it rejects the whole
+  // config at deploy time when two rules collide (a "/projects/" redirect next to the "/projects"
+  // rewrite did exactly that). Trailing slashes are handled by trailingSlash instead.
+  const seen = new Map<string, string>();
+  for (const r of config.routes) {
+    const key = `${r.route.toLowerCase().replace(/(.)\/+$/, '$1')} ${[...(r.methods ?? [])].sort().join(',')}`;
+    assert.ok(!seen.has(key), `${r.route} duplicates ${seen.get(key)}`);
+    seen.set(key, r.route);
+  }
+  assert.equal(config.trailingSlash, 'never');
 });
 
 test('a trailing slash on a fixed route redirects permanently to the route without it', () => {
