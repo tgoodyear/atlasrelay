@@ -10,7 +10,7 @@ the project, the pledge and its confirmation.
 | Goal | Decision |
 | --- | --- |
 | Simple UI | Single-page React app with a handful of screens. |
-| Serverless | Azure Static Web Apps (Free) + managed Azure Functions + Azure Table Storage + App Insights. |
+| Serverless | Azure Static Web Apps (Standard) + an Azure Function App on the Flex Consumption plan, linked to the site as its API + Azure Table Storage + App Insights. |
 | CI/CD from GitHub | Two GitHub Actions workflows: app deploy (build and test on PRs, deploy on push to `main`, logging in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub) and infra checks (Bicep lint on PRs and `main`). The infrastructure itself is one deployment stack per environment, deployed by a subscription Owner. |
 | Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth. RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); the design leaves a slot for it. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
@@ -22,11 +22,12 @@ the project, the pledge and its confirmation.
    │  /.auth/login/github | /.auth/login/aad      (SWA built-in auth, free)
    │  /api/*  (x-ms-client-principal injected by SWA edge)
    ▼
- Azure Static Web Apps (Free)  ── managed Azure Functions (Node 22, HTTP only)
-   │                                    │
-   │ static assets (global CDN)         │ @azure/data-tables
+ Azure Static Web Apps (Standard) ── linked backend: Function App (Flex Consumption,
+   │                                   Node 22, HTTP only; refuses requests the site
+   │                                   did not send)
+   │ static assets (global CDN)         │ @azure/data-tables, managed identity
    │                                    ▼
-   │                          Azure Storage account (Standard LRS)
+   │                          Azure Storage account (Standard LRS, no shared keys)
    │                             tables: users, projects, pledges, claims
    │
    └── donor-initiated transfer ──▶ https://atlas.ripe.net/api/v2/credits/transfers/
@@ -240,7 +241,7 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 - Donor keys: single request, never persisted, never logged. The function also refuses
   to proceed if the key would be echoed in any error path.
 
-## API (managed functions, `/api/*`)
+## API (`/api/*`, a Function App linked to the site)
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
@@ -262,7 +263,12 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 
 Authorization is enforced twice: `staticwebapp.config.json` route rules require the
 `authenticated` role on mutating routes, and every function re-checks the decoded
-`x-ms-client-principal` header and ownership. Static Web Apps only supports a wildcard
+`x-ms-client-principal` header and ownership. The functions can trust that header because only
+the site reaches them: linking the Function App to the site adds an identity provider, "Azure
+Static Web Apps (Linked)", to the app's App Service authentication, and it refuses every request
+the site did not send, a forged header included. The Deploy workflow checks this after every
+deploy. While an environment's app is not linked (only while moving off managed functions), Bicep
+sets `IGNORE_CLIENT_PRINCIPAL=1` and the API treats every request as anonymous. Static Web Apps only supports a wildcard
 at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code only
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
 the SPA shows its own sign-in prompt.
@@ -323,12 +329,16 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Resource | Bicep | SKU |
 | --- | --- | --- |
 | Resource group `rg-atlasrelay-prod` (westus2) | `infra/main.bicep` | |
-| Static Web App `swa-atlasrelay-prod` + `appsettings` (staging environments disabled) | `infra/app.bicep` | Free |
-| Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS |
+| Static Web App `swa-atlasrelay-prod` (staging environments disabled), no app settings | `infra/app.bicep` | Standard |
+| Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims`; shared keys refused | `infra/app.bicep` | Standard LRS |
+| Function App `func-atlasrelay-prod-<6 characters>` (Node 22) on plan `plan-atlasrelay-prod-api`, linked to the site as its backend, with its app settings | `infra/api.bicep` | Flex Consumption, on demand only |
+| User-assigned managed identity `id-atlasrelay-prod-api`, the Function App's identity for storage | `infra/api.bicep` | |
+| Storage account `stfnatlasrelayprod<4 characters>` for the Functions host and the deployment package (container `deployments`); shared keys refused | `infra/api.bicep` | Standard LRS |
 | Log Analytics `log-atlasrelay-prod` (0.1 GB/day cap; App Insights tables kept 90 days, other tables 30) + App Insights `appi-atlasrelay-prod` | `infra/platform.bicep` | Pay-as-you-go |
 | Action group `ag-atlasrelay-prod`, five log search alerts, availability test `webtest-atlasrelay-prod-home` and its alert, workbook "Atlas Relay" | `infra/monitoring.bicep` | |
 | User-assigned managed identity `id-atlasrelay-prod-ci` + federated credential for the GitHub Environment `prod` | `infra/identity.bicep` | |
-| Custom role "Atlas Relay CI Deployer (prod)": read the resource group and the static site, and list the site's deployment token; assigned to the CI identity on the group | `infra/rbac.bicep` | |
+| Custom role "Atlas Relay CI Deployer (prod)": read the resource group, the static site and its linked backend, and list the site's deployment token; assigned to the CI identity on the group | `infra/rbac.bicep` | |
+| Custom role "Atlas Relay CI API Deployer (prod)": read the Function App and publish a package to it; assigned to the CI identity on the Function App only | `infra/rbac.bicep` | |
 | Public DNS zone `atlasrelay.org` with the apex A record, a `www` CNAME to the site, the apex TXT set and mail-rejection records (prod only) | `infra/dns.bicep` | Azure DNS |
 
 The stack deploys with `--action-on-unmanage deleteResources`, so a resource removed from the
@@ -337,10 +347,29 @@ delete a managed resource outside the stack, Owners included. That replaces the 
 locks the storage account and the site used to carry. Neither setting excludes any principal: CI
 deletes nothing, and an Owner who needs to delete by hand deploys once with the deny settings off.
 
-CI deploys no Bicep. Its role can read the resource group and the site and list the deployment
-token the upload action needs, and nothing else, so a compromised workflow run cannot change RBAC, re-federate the
-identity, touch storage, keys, DNS or monitoring, or delete anything. It can replace the site's
-content, which is what a deploy is.
+CI deploys no Bicep. Its roles can read the resource group, the site and its linked backend, list
+the deployment token the upload action needs, and read the Function App and publish a package to
+it. They grant nothing else. A compromised workflow run cannot change RBAC, re-federate the identity,
+read or change app settings, touch storage, DNS or monitoring, or delete anything. It can replace
+the site's content and the API's code, which is what a deploy is.
+
+### Storage access
+
+No storage account in an environment accepts shared keys (`allowSharedKeyAccess: false`), and
+no connection string with a key exists anywhere. Every caller signs in with Microsoft Entra:
+
+| Who | Role | Scope |
+| --- | --- | --- |
+| API identity `id-atlasrelay-prod-api` | Storage Table Data Contributor | each of the four tables in the data account, one assignment per table |
+| API identity | Storage Blob Data Owner, Storage Table Data Contributor | the host account (what the Functions host needs for `AzureWebJobsStorage` and the deployment package) |
+| The operator in `ATLASRELAY_OPERATOR_PRINCIPAL_ID` | Storage Table Data Contributor | the data account, for moderation and exports by hand |
+
+The API builds its table client from `TABLES_ENDPOINT` and the identity's client id
+(`api/src/lib/tables.ts`). It does not create tables in Azure, since the tables are declared in
+Bicep and its role cannot create them. `TABLES_CONNECTION_STRING` is only for local development
+and tests against Azurite; nothing in Azure sets it. The Function App's settings still hold the
+App Insights connection string. It names the ingestion endpoint, and the browser bundle makes it
+public anyway.
 
 `infra/main.bicepparam` reads the environment's settings (`.azure/<env>/.env`, git-ignored) with
 `readEnvironmentVariable`; `.azure/env.example` lists them and `scripts/check-params.sh` checks
@@ -357,12 +386,20 @@ GitHub issues immutable subjects of the form `repo:OWNER@OWNER-ID/REPO@REPO-ID:�
 `:environment:<env>`. `bootstrap.sh` also restricts that GitHub Environment to `main`.
 
 Why no pull-request previews: preview environments would run unreviewed code against the
-production tables with a CI identity, so PRs only build, test and lint. Previews can be
-re-enabled later with `stagingEnvironmentPolicy: Enabled` and a federated credential for pull
-requests in `infra/identity.bicep`.
+production tables with a CI identity, so PRs only build, test and lint. Static Web Apps cannot link
+a backend to a preview environment either, so a preview would have no API.
 
-Upgrade path: SWA Standard for custom OIDC (RIPE NCC Access), an SLA and PR preview
-environments.
+Why the Standard plan: only Standard can link a Function App, and a linked Function App is what
+lets the API sign in to storage with a managed identity (managed functions have none). Standard
+also allows custom OIDC providers, which RIPE NCC Access sign-in would need.
+
+Why Flex Consumption: it takes identity-based host storage with no Azure Files share (on the
+Consumption and Premium plans the share's connection needs a key), runs Node 22, scales to zero
+and is available in westus2. The table on Microsoft's Static Web Apps page for Azure Functions
+lists Consumption, Premium and Dedicated as the plans a linked Function App may use. Flex
+Consumption is not on that list. The runbook's cutover checks the Function App directly before the
+switch and the main routes through the site right after it, and its rollback puts the managed
+functions back.
 
 ## Repository layout
 
@@ -375,7 +412,7 @@ infra/    main.bicep (subscription scope, one deployment stack per environment) 
 scripts/  bootstrap.sh, provision.sh, teardown.sh, settings.sh (lib/env.sh); bind-custom-domain.sh;
           logs.sh; check-params.sh
 ops/queries/  saved KQL queries that scripts/logs.sh runs against the Log Analytics workspace
-.github/workflows/deploy.yml   build + test on PRs; build + deploy app & API on main
+.github/workflows/deploy.yml   build + test on PRs; on main, publish the API to the Function App, then upload the site
 .github/workflows/infra.yml    Bicep build + lint, settings check, ShellCheck; deploys nothing
 docs/     this spec, RIPE research notes, runbook
 ```
@@ -384,9 +421,9 @@ docs/     this spec, RIPE research notes, runbook
 
 - `deploy.yml`, job `build` (no Azure identity): `npm ci -w api -w web`, tests, build
   web (with the repository variable `APPINSIGHTS_CONNECTION_STRING`, which turns on browser
-  telemetry) and API, then stage a self-contained `api-deploy/` folder (npm workspaces hoist the
-  API's runtime dependencies to the repo root, and the SWA action uploads the API folder
-  verbatim), smoke-load the API entry point, upload both as artifacts. Runs on PRs too.
+  telemetry) and API, then stage a self-contained `api-deploy/` folder (the bundle, `host.json`
+  and `package.json`, published as it is with no remote build), smoke-load the API entry point,
+  upload both as artifacts. Runs on PRs too.
 - `deploy.yml`, job `browser` (no Azure identity): Playwright tests in `web/e2e` against a
   `vite preview` of the site; they answer `/api`, `/.auth` and App Insights requests themselves.
 - `deploy.yml`, job `flows` (no Azure identity, no secrets): full-flow Playwright tests in
@@ -397,9 +434,15 @@ docs/     this spec, RIPE research notes, runbook
   `ATLAS_API_BASE`. Traces and the stack's logs are uploaded when it fails. `deploy` needs `build`,
   `browser` and `flows`.
 - `deploy.yml`, job `deploy` (push to `main` / manual only, in the GitHub Environment `prod`):
-  download artifacts, `azure/login` (OIDC, managed identity), read the SWA deployment token with
-  `az staticwebapp secrets list` (masked, never stored), then
-  `Azure/static-web-apps-deploy@v1` with `skip_app_build`/`skip_api_build`.
+  download artifacts, `azure/login` (OIDC, managed identity), find the Function App from the
+  site's linked backend (the run stops if there is none), publish the zipped API to it through
+  its `/api/publish` endpoint with a Microsoft Entra token and wait for the deployment, read the
+  SWA deployment token with `az staticwebapp secrets list` (masked, never stored), upload the
+  site with `Azure/static-web-apps-deploy@v1` and an empty `api_location`, then check that direct
+  requests to `/api/stats` and `/api/me` on the Function App's hostname, both with a forged
+  `x-ms-client-principal`, are refused. The API goes first, so a failed publish leaves the
+  previous API and site in place. Between the publish and the upload, project pages from the new
+  API reference script files the old site does not serve yet.
 - `deploy.yml`, job `indexnow` (after a deploy that uploaded, no Azure identity): runs
   `scripts/indexnow.mjs`, which reads the live `/sitemap.xml` and posts its URLs to IndexNow.
   It logs failures as warnings and is `continue-on-error`, so it cannot fail a deploy.
@@ -428,12 +471,12 @@ docs/     this spec, RIPE research notes, runbook
   `Referrer-Policy`, `Permissions-Policy`.
 - Input validation on every write; string lengths, enums, URL scheme allow-list
   (`https:` only), integer ranges.
-- Storage account: public blob access off, TLS 1.2 minimum, shared-key access used by
-  the managed function via connection string (managed identity is not available on
-  SWA managed functions; moving to a "bring your own Functions" app with identity is
-  the upgrade path).
-- Secrets: the storage connection string and the App Insights connection string, both
-  written into the SWA app settings by Bicep (Bicep is the only writer; the settings
-  resource replaces the whole map). GitHub holds three non-secret identifiers (client,
-  tenant, subscription); the SWA deployment token is fetched per run and masked. Azure
-  login from CI is OIDC. Untrusted build steps never run in a job that holds the identity.
+- Storage accounts: public blob access off, TLS 1.2 minimum, shared-key access off. See
+  [Storage access](#storage-access).
+- Function App: HTTPS only, FTP and SCM basic-auth publishing off, reachable only through the
+  site once linked.
+- Secrets: none in app settings. The Function App's settings (Bicep is the only writer; the
+  settings resource replaces the whole map) hold account names, endpoints, the identity's client
+  id and the App Insights connection string. GitHub holds three non-secret identifiers (client,
+  tenant, subscription); the SWA deployment token is fetched per run and masked. Azure login from
+  CI is OIDC. Untrusted build steps never run in a job that holds the identity.

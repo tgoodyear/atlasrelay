@@ -99,12 +99,18 @@ if [ -n "$EMAIL" ]; then
   aset ATLASRELAY_ALERT_EMAIL "$EMAIL"
 fi
 [ -n "$(aget ATLASRELAY_ALERT_EMAIL)" ] || echo "  no --alert-email: the stack deploys no action group and no alerts"
+# Owner grants no access to table rows, so whoever bootstraps gets Storage Table Data Contributor
+# on the data account for moderation by hand. Kept once set; change it with scripts/settings.sh.
+if [ -z "$(aget ATLASRELAY_OPERATOR_PRINCIPAL_ID)" ] && [ -n "$me" ]; then
+  aset ATLASRELAY_OPERATOR_PRINCIPAL_ID "$me"
+fi
 
 step "Deploying stack $STACK"
 provision
 echo "  resource group:  $(aget AZURE_RESOURCE_GROUP)"
 echo "  static web app:  $(aget SWA_NAME)  (https://$(aget SWA_HOSTNAME))"
 echo "  storage:         $(aget STORAGE_ACCOUNT)"
+echo "  function app:    $(aget FUNCTION_APP_NAME)  (linked to the site as /api)"
 echo "  ci identity:     $(aget CI_CLIENT_ID)"
 
 step "Waiting for the CI role assignment to be visible"
@@ -152,8 +158,7 @@ if [ "$ENV_NAME" = prod ]; then
   gh variable set APPINSIGHTS_CONNECTION_STRING --repo "$REPO" --body "$(aget APPLICATIONINSIGHTS_CONNECTION_STRING)"
 else
   echo
-  echo "The Deploy workflow uploads to prod only. To deploy $ENV_NAME, upload the build with the"
-  echo "site's token: az staticwebapp secrets list -n $(aget SWA_NAME) -g $(aget AZURE_RESOURCE_GROUP) --subscription $SUBSCRIPTION"
+  echo "The Deploy workflow deploys prod only. To deploy $ENV_NAME, see \"Dev environment\" in docs/RUNBOOK.md."
 fi
 
 step "Done"

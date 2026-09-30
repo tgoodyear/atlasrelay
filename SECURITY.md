@@ -84,8 +84,18 @@ accounts. The site records the project, the pledge and its confirmation.
 GitHub Actions deploys with OpenID Connect through a user-assigned managed identity that
 trusts only jobs in this repository's GitHub Environment `prod`, which only the `main` branch may
 use. No long-lived Azure credential is stored in the repository or in GitHub secrets. The
-identity's custom role can read its resource group and the static web app and list the site's
-deployment token, and nothing else: it cannot deploy infrastructure, change role assignments, modify its own federation,
-change DNS, read or change storage, or delete anything. Infrastructure is deployed by a
-subscription Owner as a deployment stack whose deny settings block deleting its resources
-outside the stack.
+identity's custom roles let it read its resource group, the static web app and its linked
+backend, list the site's deployment token, and read the API's Function App and publish a package
+to it. It can do nothing else: it cannot deploy infrastructure, change role assignments, modify
+its own federation, read or change app settings, change DNS, read or change storage, or delete
+anything. Infrastructure is
+deployed by a subscription Owner as a deployment stack whose deny settings block deleting its
+resources outside the stack.
+
+The API runs on an Azure Function App that only the static web app can call: linking the two puts
+an identity provider in front of the Function App that refuses requests the site did not send, and
+every deploy checks that a direct request is refused. The API reaches its tables with a managed
+identity. In the data account it may read and write rows in the `users`, `projects`, `pledges` and
+`claims` tables and nothing else; its other roles are on a separate storage account that holds
+only the Functions host's state and the deployment package. No storage account accepts its access
+keys, and no storage key or storage connection string is stored anywhere.

@@ -1,9 +1,8 @@
 // Bundles the API into one file for deployment.
 //
-// Static Web Apps' managed Functions load the app from a network file share on every cold start,
-// and this is a quiet site, so nearly every real visit meets a cold host. Shipping node_modules
-// meant reading over three thousand small files before the first request could run; one bundled
-// file is one read.
+// This is a quiet site, so nearly every real visit meets a cold host, and a cold host has to
+// load the app before the first request can run. Shipping node_modules meant over three thousand
+// small files to unpack and read; one bundled file is one read.
 //
 // @azure/functions-core is not a real package. The Functions worker provides it at runtime, and
 // @azure/functions requires it to register handlers, so it has to stay external.

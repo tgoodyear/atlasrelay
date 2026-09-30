@@ -24,8 +24,9 @@ npm run dev        # http://localhost:4280 (SWA emulator + API + Azurite)
 
 ## How it is built
 
-A React single-page app on Azure Static Web Apps, with its API in managed Azure Functions
-(Node 22) and data in Azure Table Storage. All Azure resources are defined in Bicep under
+A React single-page app on Azure Static Web Apps, with its API on an Azure Function App (Node 22,
+Flex Consumption plan) linked to the site, and data in Azure Table Storage, which the API reaches
+with a managed identity instead of a key. All Azure resources are defined in Bicep under
 `infra/` and deployed as one deployment stack per environment by `scripts/bootstrap.sh` and
 `scripts/provision.sh`. GitHub Actions deploys the site and API from `main` using OIDC, with no
 stored Azure credentials. Pushes that touch only docs or infrastructure deploy nothing, and pull

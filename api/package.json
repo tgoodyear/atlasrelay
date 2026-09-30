@@ -2,17 +2,18 @@
   "name": "api",
   "private": true,
   "version": "0.1.0",
-  "description": "Atlas Relay API (Azure Functions v4, managed by Static Web Apps)",
+  "description": "Atlas Relay API (Azure Functions v4 on a Function App linked to Static Web Apps)",
   "main": "dist/bundle.js",
   "scripts": {
     "build": "tsc && node bundle.mjs",
     "watch": "concurrently -k -n tsc,bundle \"tsc -w --noEmit --preserveWatchOutput\" \"node bundle.mjs --watch\"",
-    "test": "tsc --noEmit && node --test --import tsx test/validate.test.ts test/source.test.ts test/atlas.test.ts test/pledges.test.ts test/projects.test.ts test/views.test.ts test/sitemap.test.ts test/projectHtml.test.ts test/projectPage.test.ts test/telemetry.test.ts",
+    "test": "tsc --noEmit && node --test --import tsx test/validate.test.ts test/source.test.ts test/atlas.test.ts test/pledges.test.ts test/projects.test.ts test/views.test.ts test/sitemap.test.ts test/projectHtml.test.ts test/projectPage.test.ts test/telemetry.test.ts test/tables.test.ts test/auth.test.ts",
     "start": "func start"
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.2",
-    "@azure/functions": "^4.16.4"
+    "@azure/functions": "^4.16.4",
+    "@azure/identity": "^4.13.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",

@@ -76,10 +76,10 @@ jobs:
       - name: Build API
         run: npm run build -w api
 
-      # The SWA action uploads api_location verbatim (skip_api_build). The API is bundled into one
-      # file (api/bundle.mjs), so the artifact is that file, host.json and package.json, with no
-      # node_modules: a cold host reading three thousand small files off a network share was most
-      # of the wait on a first visit.
+      # The deploy job publishes this folder, zipped, to the Function App as it is (no remote
+      # build). The API is bundled into one file (api/bundle.mjs), so the artifact is that file,
+      # host.json and package.json, with no node_modules: a cold host reading three thousand small
+      # files was most of the wait on a first visit.
       - name: Stage API artifact
         run: |
           rm -rf api-deploy && mkdir -p api-deploy/dist
@@ -94,7 +94,7 @@ jobs:
           # @azure/functions-core is supplied by the Functions worker and is the one import left
           # outside the bundle; @azure/functions runs without it here, so a plain load proves
           # everything else resolved into the file.
-          cd api-deploy && node -e "process.env.TABLES_CONNECTION_STRING='x'; require('./dist/bundle.js'); console.log('API bundle loads without node_modules')"
+          cd api-deploy && node -e "require('./dist/bundle.js'); console.log('API bundle loads without node_modules')"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -196,9 +196,11 @@ jobs:
             web/e2e-stack/*.log
           retention-days: 7
 
-  # Only this job holds an Azure identity, and only for pushes to main / manual runs.
+  # Only this job holds an Azure identity, and only for pushes to main / manual runs. It publishes
+  # the API to the Function App linked to the site first, then uploads the site, so a failed API
+  # publish leaves the previous API and site in place together.
   deploy:
-    name: Deploy to Azure Static Web Apps
+    name: Deploy to Azure
     needs: [build, browser, flows]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -242,6 +244,58 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # The Function App that serves /api is the site's linked backend. Without one, uploading a
+      # site that has no managed functions would leave /api unanswered, so the run stops here.
+      - name: Find the API's Function App
+        if: env.AZURE_READY == 'true'
+        id: backend
+        run: |
+          site="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/staticSites/$SWA_NAME"
+          ids="$(az rest --method get --url "$site/linkedBackends?api-version=2024-04-01" --query "value[].properties.backendResourceId" -o tsv)"
+          if [ "$(grep -c . <<< "$ids")" != 1 ] || [[ "${ids,,}" != */providers/microsoft.web/sites/* ]]; then
+            echo "::error::$SWA_NAME needs exactly one linked Function App (found: ${ids:-none}); see docs/RUNBOOK.md"
+            exit 1
+          fi
+          app="$(az rest --method get --url "$ids?api-version=2024-04-01" -o json)"
+          host="$(jq -r '.properties.defaultHostName' <<< "$app")"
+          scm="$(jq -r '[.properties.hostNameSslStates[] | select(.hostType == "Repository") | .name][0] // empty' <<< "$app")"
+          [ -n "$host" ] && [ "$host" != null ] && [ -n "$scm" ] || { echo "::error::could not read the Function App's hostnames"; exit 1; }
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+          echo "scm=$scm" >> "$GITHUB_OUTPUT"
+
+      # One deploy to Flex Consumption: POST the zip to the app's publish endpoint with a Microsoft
+      # Entra token (the CI role has sites/publish/Action on this app only), then wait for the
+      # deployment to finish. No publishing password exists.
+      - name: Publish the API
+        if: env.AZURE_READY == 'true'
+        env:
+          SCM_HOST: ${{ steps.backend.outputs.scm }}
+        run: |
+          (cd api-deploy && zip -qr ../api.zip .)
+          token="$(az account get-access-token --query accessToken -o tsv)"
+          echo "::add-mask::$token"
+          code="$(curl -sS -o publish.txt -w '%{http_code}' -X POST "https://$SCM_HOST/api/publish?RemoteBuild=false" \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/zip' --data-binary @api.zip)"
+          case "$code" in
+            200) echo "API published"; exit 0 ;;
+            202) ;;
+            *) echo "::error::publish answered $code"; cat publish.txt; exit 1 ;;
+          esac
+          # A 202 carries the new deployment's id. Its status: 4 succeeded; 3 failed; -1 or 5
+          # cancelled; 6 partly succeeded. The endpoint can miss a poll while the app restarts.
+          id="$(tr -d '"[:space:]' < publish.txt)"
+          [[ $id =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::publish returned no deployment id"; cat publish.txt; exit 1; }
+          for _ in $(seq 1 120); do
+            sleep 5
+            status="$(curl -sS "https://$SCM_HOST/api/deployments/$id" -H "Authorization: Bearer $token" | jq -r '.status // empty' 2> /dev/null || true)"
+            case "$status" in
+              4) echo "API published"; exit 0 ;;
+              3|-1|5|6) echo "::error::API deployment ended with status $status"; exit 1 ;;
+            esac
+          done
+          echo "::error::API deployment did not finish in 10 minutes"
+          exit 1
+
       - name: Read Static Web App deployment token
         if: env.AZURE_READY == 'true'
         id: token
@@ -250,6 +304,8 @@ jobs:
           echo "::add-mask::$token"
           echo "value=$token" >> "$GITHUB_OUTPUT"
 
+      # The site only. api_location stays empty: a site with managed functions cannot keep a
+      # linked backend.
       - name: Upload to Static Web Apps
         id: upload
         if: env.AZURE_READY == 'true'
@@ -258,10 +314,27 @@ jobs:
           azure_static_web_apps_api_token: ${{ steps.token.outputs.value }}
           action: upload
           app_location: web/dist
-          api_location: api-deploy
+          api_location: ''
           output_location: ''
           skip_app_build: true
           skip_api_build: true
+
+      # The linked identity provider must refuse anything the site did not send, including a
+      # forged x-ms-client-principal. A 2xx here means the API is open to the Internet.
+      - name: Direct calls to the Function App are refused
+        if: env.AZURE_READY == 'true'
+        env:
+          API_HOST: ${{ steps.backend.outputs.host }}
+        run: |
+          forged="$(printf '%s' '{"identityProvider":"github","userId":"ci-check","userDetails":"ci-check","userRoles":["anonymous","authenticated"]}' | base64 -w0)"
+          for path in /api/stats /api/me; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -H "x-ms-client-principal: $forged" "https://$API_HOST$path")"
+            echo "$path: $code"
+            case "$code" in
+              401|403) ;;
+              *) echo "::error::https://$API_HOST$path answered $code to a direct request; it should be refused"; exit 1 ;;
+            esac
+          done
 
   # Sends the live sitemap's URLs to IndexNow (Bing, Yandex and others; Google does not use it)
   # after a real deploy. It holds no Azure identity, and it can never fail the run: the site is

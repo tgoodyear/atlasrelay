@@ -9,13 +9,16 @@ deployed from the same template. Environment names are 1 to 6 lowercase letters 
 | Resource | prod | Declared in |
 | --- | --- | --- |
 | Resource group | `rg-atlasrelay-prod` | `infra/main.bicep` |
-| Static Web App, with its app settings | `swa-atlasrelay-prod` | `infra/app.bicep` |
+| Static Web App (Standard) | `swa-atlasrelay-prod` | `infra/app.bicep` |
 | Storage account with tables `users`, `projects`, `pledges`, `claims` | `statlasrelayprod<6 characters>` | `infra/app.bicep` |
+| Function App (Flex Consumption), linked to the site as its API, with its app settings and plan | `func-atlasrelay-prod-<6 characters>`, `plan-atlasrelay-prod-api` | `infra/api.bicep` |
+| The Function App's managed identity | `id-atlasrelay-prod-api` | `infra/api.bicep` |
+| Storage account for the Functions host and the deployment package | `stfnatlasrelayprod<4 characters>` | `infra/api.bicep` |
 | Log Analytics workspace | `log-atlasrelay-prod` | `infra/platform.bicep` |
 | Application Insights | `appi-atlasrelay-prod` | `infra/platform.bicep` |
 | Action group, log search alerts `alert-atlasrelay-prod-*`, availability test `webtest-atlasrelay-prod-home`, workbook "Atlas Relay" | `ag-atlasrelay-prod` | `infra/monitoring.bicep` |
 | CI identity, federated with the GitHub Environment `prod` | `id-atlasrelay-prod-ci` | `infra/identity.bicep` |
-| Custom role and its assignment to the CI identity | "Atlas Relay CI Deployer (prod)" | `infra/rbac.bicep` |
+| Custom roles and their assignments to the CI identity | "Atlas Relay CI Deployer (prod)", "Atlas Relay CI API Deployer (prod)" | `infra/rbac.bicep` |
 | Public DNS zone (prod only) | `atlasrelay.org` | `infra/dns.bicep` |
 
 Every resource is tagged `project=atlasrelay` and `environment=<env>`. `dev` gets the same set
@@ -33,8 +36,14 @@ with `dev` in the names, no zone, and a `dev` CNAME in the prod zone (`infra/dns
   the deny assignments.
 - Deployment stacks have no what-if.
 
-CI deploys no Bicep. The CI role can read the resource group and the static web app and list the
-site's deployment token, and nothing else. Every infrastructure change is a stack deployment by a subscription Owner.
+CI deploys no Bicep. The CI roles can read the resource group, the static web app and its linked
+backend, list the site's deployment token, and read the Function App and publish a package to it.
+They grant nothing else. Every infrastructure change is a stack deployment by a subscription Owner.
+
+No storage account accepts shared keys. The API signs in to storage with its managed identity, and
+the operator named in the setting `ATLASRELAY_OPERATOR_PRINCIPAL_ID` (whoever ran
+`scripts/bootstrap.sh`) gets Storage Table Data Contributor on the data account for the commands
+under [Operations](#operations). See "Storage access" in [ARCHITECTURE.md](ARCHITECTURE.md#storage-access).
 
 ### Settings
 
@@ -69,7 +78,8 @@ It is idempotent. It:
 1. Registers the resource providers the templates use.
 2. Reads the repository's GitHub OIDC subject prefix and writes the settings.
 3. Deploys the stack `atlasrelay-prod`, retrying twice if a new custom role has not replicated
-   yet, and saves its outputs as settings.
+   yet, and saves its outputs as settings. The Function App is linked to the site in the same
+   deployment.
 4. Creates the GitHub Environment `prod` and restricts it to the `main` branch. The CI identity
    trusts only jobs in that GitHub Environment.
 5. Sets the repository secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`
@@ -78,7 +88,7 @@ It is idempotent. It:
 
 Then deploy the site with `gh workflow run deploy.yml --ref main`, or merge to `main`. Role
 assignments can take a few minutes to propagate; if that first run fails with
-`AuthorizationFailed`, re-run it.
+`AuthorizationFailed` or a 403 from the publish step, re-run it.
 
 ## Local development
 
@@ -88,7 +98,8 @@ npm run dev            # Azurite + Functions host (:7071) + Vite (:5173) + SWA e
 ```
 
 `npm run dev` copies `api/local.settings.json.example` to `api/local.settings.json` if it
-is missing; that file points `TABLES_CONNECTION_STRING` at Azurite. Open
+is missing; that file points `TABLES_CONNECTION_STRING` at Azurite. Only local runs and tests use
+a connection string; in Azure the API has `TABLES_ENDPOINT` and a managed identity instead. Open
 http://localhost:4280. The SWA emulator lets you "log in" as any username without a real
 GitHub account. Node 22.12 or newer is required; newer major versions work with a warning
 from the Functions host. `func` comes from Azure Functions Core Tools v4, installed
@@ -184,13 +195,20 @@ scripts/bind-custom-domain.sh dev      # once dev.atlasrelay.org resolves
 
 The stack `atlasrelay-dev` holds `rg-atlasrelay-dev` and everything in it, and the `dev` CNAME
 in the prod zone, pointing at `swa-atlasrelay-dev`. The CNAME and the site are in one stack, so a
-rebuilt site takes its record with it. The Deploy workflow uploads to prod only. To put a build on
-dev, build and stage it as the workflow's build job does, then upload it with the dev site's token:
+rebuilt site takes its record with it. The Deploy workflow deploys prod only. To put a build on
+dev, build it, publish the API to dev's Function App, then upload the site with the dev site's
+token:
 
 ```bash
+npm ci && npm run build
+rm -rf api-deploy api.zip && mkdir -p api-deploy/dist
+cp api/dist/bundle.js api-deploy/dist/ && cp api/host.json api/package.json api-deploy/
+(cd api-deploy && zip -qr ../api.zip .)
+az functionapp deployment source config-zip -g rg-atlasrelay-dev --subscription <id> \
+  -n "$(scripts/settings.sh dev FUNCTION_APP_NAME)" --src api.zip
 TOKEN=$(az staticwebapp secrets list -n swa-atlasrelay-dev -g rg-atlasrelay-dev \
   --subscription <id> --query properties.apiKey -o tsv)
-npx swa deploy web/dist --api-location api-deploy --deployment-token "$TOKEN" --env production
+npx swa deploy web/dist --deployment-token "$TOKEN" --env production
 ```
 
 `scripts/teardown.sh dev` removes it again, the CNAME included.
@@ -264,6 +282,173 @@ GitHub Environment. For prod it also deletes the zone and removes the repository
 Deploy workflow builds without deploying until prod is bootstrapped again. A new zone gets new
 name servers, and the registrar has to be updated.
 
+## Moving the API off managed functions
+
+Until this change the API ran as the site's managed functions and read the tables with the
+storage account key, from the site's app setting `TABLES_CONNECTION_STRING`. Now it runs on the
+Function App in `infra/api.bicep`, linked to the site, and signs in with its managed identity.
+A site cannot be linked while it still has managed functions, so the site is uploaded without
+them and linked straight after. `/api` has no backend from the upload until the link has
+succeeded; the pages themselves keep serving. No other step interrupts the running site.
+
+Two settings are set for the move and cleared again at the end:
+
+- `ATLASRELAY_STORAGE_SHARED_KEY=true` keeps the data account accepting its key, which the managed
+  functions still use.
+- `ATLASRELAY_API_UNLINKED=true` leaves the Function App unlinked. Until it is linked the app is
+  public, so Bicep also sets `IGNORE_CLIENT_PRINCIPAL=1` on it and it answers every request as
+  anonymous.
+
+Run from a checkout of `main` that includes this change, as a subscription Owner, with `SUB` set
+to the subscription id and `npm ci` done.
+
+1. Merge the change. The Deploy run it starts stops at "Find the API's Function App", because the
+   site has no linked backend yet; it touches nothing.
+
+2. Set the transition settings, and name yourself as the operator with access to the tables:
+
+   ```bash
+   scripts/settings.sh prod ATLASRELAY_STORAGE_SHARED_KEY true
+   scripts/settings.sh prod ATLASRELAY_API_UNLINKED true
+   scripts/settings.sh prod ATLASRELAY_OPERATOR_PRINCIPAL_ID "$(az ad signed-in-user show --query id -o tsv)"
+   ```
+
+3. Deploy the stack. `detachAll` keeps the site's app settings, which the stack no longer
+   declares and would otherwise delete while the managed functions still read them. This upgrades
+   the site to Standard and creates the Function App, its identity, host storage and role
+   assignments; the site and its managed API keep serving:
+
+   ```bash
+   ACTION_ON_UNMANAGE=detachAll scripts/provision.sh prod
+   az staticwebapp show -n swa-atlasrelay-prod -g rg-atlasrelay-prod --subscription $SUB --query sku.name -o tsv   # Standard
+   az staticwebapp appsettings list -n swa-atlasrelay-prod -g rg-atlasrelay-prod --subscription $SUB \
+     --query "keys(properties)" -o tsv                                           # still lists TABLES_CONNECTION_STRING
+   ```
+
+4. Build, and publish the API to the Function App:
+
+   ```bash
+   export VITE_APPINSIGHTS_CONNECTION_STRING="$(scripts/settings.sh prod APPLICATIONINSIGHTS_CONNECTION_STRING)"
+   npm run build
+   rm -rf api-deploy api.zip && mkdir -p api-deploy/dist
+   cp api/dist/bundle.js api-deploy/dist/ && cp api/host.json api/package.json api-deploy/
+   (cd api-deploy && zip -qr ../api.zip .)
+   APP=$(scripts/settings.sh prod FUNCTION_APP_NAME)
+   az functionapp deployment source config-zip -g rg-atlasrelay-prod -n "$APP" --src api.zip --subscription $SUB
+   ```
+
+5. Check the Function App directly. The public routes read the tables with the managed identity,
+   so matching totals mean the identity and its roles work. Signed-in routes answer 401, even
+   with a forged principal, because Bicep set `IGNORE_CLIENT_PRINCIPAL=1` on the unlinked app:
+
+   ```bash
+   API="https://$(scripts/settings.sh prod FUNCTION_APP_HOSTNAME)"
+   diff <(curl -s "$API/api/stats") <(curl -s https://atlasrelay.org/api/stats) && echo same totals
+   curl -s -o /dev/null -w '%{http_code}\n' "$API/api/projects?status=all"      # 200
+   FORGED=$(printf '%s' '{"identityProvider":"github","userId":"check","userDetails":"check","userRoles":["anonymous","authenticated"]}' | base64)
+   curl -s -o /dev/null -w '%{http_code}\n' -H "x-ms-client-principal: $FORGED" "$API/api/me"   # 401
+   ```
+
+   If a storage call fails, `scripts/logs.sh api-errors 30m` shows the error code. A 403
+   `AuthorizationPermissionMismatch` usually means a role assignment has not propagated yet; wait
+   five minutes and try again.
+
+6. Switch the site to the Function App. Upload the site without managed functions, then link the
+   app at once; `/api` is unanswered from the upload until the link has succeeded:
+
+   ```bash
+   TOKEN=$(az staticwebapp secrets list -n swa-atlasrelay-prod -g rg-atlasrelay-prod --subscription $SUB \
+     --query properties.apiKey -o tsv)
+   npx swa deploy web/dist --deployment-token "$TOKEN" --env production
+   LINK="/subscriptions/$SUB/resourceGroups/rg-atlasrelay-prod/providers/Microsoft.Web/staticSites/swa-atlasrelay-prod/linkedBackends/$APP?api-version=2024-04-01"
+   FUNC_ID="/subscriptions/$SUB/resourceGroups/rg-atlasrelay-prod/providers/Microsoft.Web/sites/$APP"
+   az rest --method put --url "$LINK" --body "{\"properties\":{\"backendResourceId\":\"$FUNC_ID\",\"region\":\"westus2\"}}"
+   az rest --method get --url "$LINK" --query properties.provisioningState -o tsv   # repeat until Succeeded
+   ```
+
+   Public routes answer again once the link has succeeded. Signed-in routes answer 401 until the
+   next deployment removes `IGNORE_CLIENT_PRINCIPAL`. The stack takes the link over, since it
+   declares the same resource:
+
+   ```bash
+   scripts/settings.sh prod ATLASRELAY_API_UNLINKED ""
+   scripts/provision.sh prod
+   ```
+
+7. Check the API through the site, and that the Function App refuses direct requests:
+
+   ```bash
+   curl -s https://atlasrelay.org/api/stats                                             # totals
+   curl -s -o /dev/null -w '%{http_code}\n' 'https://atlasrelay.org/api/projects?status=all'   # 200
+   curl -s -o /dev/null -w '%{http_code}\n' https://atlasrelay.org/api/me                # 401, signed out
+   curl -s https://atlasrelay.org/sitemap.xml | head -3                                   # XML
+   curl -s -o /dev/null -w '%{http_code}\n' https://atlasrelay.org/projects/abcdefghijkl   # 404
+   curl -s -o /dev/null -w '%{http_code}\n' "$API/api/stats"                             # 401 or 403
+   curl -s -o /dev/null -w '%{http_code}\n' -H "x-ms-client-principal: $FORGED" "$API/api/me"   # 401 or 403
+   ```
+
+   The 404 for a well-formed id that does not exist shows that the rewrite of `/projects/*` still
+   reaches the API with `x-ms-original-url`: without the header the function answers 200 with the
+   plain project shell. Then sign in on https://atlasrelay.org and open the dashboard and the
+   profile page, which call `/api/me` and `/api/my` with your principal.
+
+8. Run the Deploy workflow. This time it publishes the API with the CI identity, uploads the site,
+   and checks that direct requests are refused:
+
+   ```bash
+   gh workflow run deploy.yml --repo tgoodyear/atlasrelay --ref main
+   gh run watch --repo tgoodyear/atlasrelay      # pick the Deploy run just started
+   ```
+
+9. Turn shared keys off, delete the site's old app settings, and renew both keys, since
+   `TABLES_CONNECTION_STRING` held one of them. `-o none` keeps the new keys off the screen:
+
+   ```bash
+   scripts/settings.sh prod ATLASRELAY_STORAGE_SHARED_KEY ""
+   scripts/settings.sh prod ATLASRELAY_STORAGE_KEY_INDEX ""      # the old key-rotation setting, now unread
+   scripts/provision.sh prod
+   az staticwebapp appsettings delete -n swa-atlasrelay-prod -g rg-atlasrelay-prod --subscription $SUB \
+     --setting-names TABLES_CONNECTION_STRING ATLAS_API_BASE APPLICATIONINSIGHTS_CONNECTION_STRING
+   STORAGE=$(scripts/settings.sh prod STORAGE_ACCOUNT)
+   az storage account keys renew -g rg-atlasrelay-prod -n "$STORAGE" --key primary --subscription $SUB -o none
+   az storage account keys renew -g rg-atlasrelay-prod -n "$STORAGE" --key secondary --subscription $SUB -o none
+   ```
+
+10. Check again: repeat step 7, then confirm the key is refused and your own sign-in works (the
+    operator role can take a few minutes to apply):
+
+    ```bash
+    az storage account show -n "$STORAGE" --subscription $SUB --query allowSharedKeyAccess -o tsv   # false
+    az storage entity query --table-name projects --account-name "$STORAGE" --subscription $SUB \
+      --auth-mode key --num-results 1 -o none                       # fails: key-based authentication is not permitted
+    az storage entity query --table-name projects --account-name "$STORAGE" --subscription $SUB \
+      --auth-mode login --num-results 1 -o none                     # succeeds
+    ```
+
+### Rollback
+
+- **Before step 6**: nothing visitors use has changed. Revert this change on `main`, then run
+  `scripts/provision.sh prod`: the earlier templates put the site back on Free with its app
+  settings, and delete the Function App and what came with it.
+- **From step 6 on**: put the managed functions back. `/api` is down from the first command until
+  the Deploy run at the end uploads the managed API, which takes two stack deployments and a
+  Deploy run:
+
+  ```bash
+  scripts/settings.sh prod ATLASRELAY_STORAGE_SHARED_KEY true
+  scripts/settings.sh prod ATLASRELAY_API_UNLINKED true
+  scripts/provision.sh prod                 # unlinks the Function App and accepts the key again
+  ```
+
+  Then merge a revert of this change to `main` and, once it is merged, run
+  `scripts/provision.sh prod` again from `main`. The earlier templates write
+  `TABLES_CONNECTION_STRING` back into the site's app settings from the current key, move the site
+  to Free and delete the Function App. The push of the revert starts a Deploy run that uploads the
+  site with its managed API; if it finished before that deployment did, run it again with
+  `gh workflow run deploy.yml --repo tgoodyear/atlasrelay --ref main`.
+
+Afterwards, remove this section.
+
 ## History
 
 Until #54 the project ran in a resource group named `internetresearch`, deployed with
@@ -298,9 +483,8 @@ storage. The only values it takes from a query string are `utm_source`, `utm_med
 The Functions host does not record dependencies for Node apps, so RIPE Atlas and Table Storage
 calls are log lines rather than `AppDependencies` rows. `api/host.json` turns sampling off, so
 every request and log line is kept, and drops host start-up and health-check lines below warning
-level. Those lines were about 80% of the traces in September 2026, most of them the storage health
-check, which reports unhealthy on every start because managed functions have no
-`AzureWebJobsStorage`.
+level. Those lines were about 80% of the traces in September 2026, when the API still ran as
+managed functions, most of them a storage health check that reported unhealthy on every start.
 
 Browser telemetry is compiled in only when the build has `VITE_APPINSIGHTS_CONNECTION_STRING`,
 so local and dev builds send nothing. The Deploy workflow passes the repository variable
@@ -387,7 +571,7 @@ with browser counts, and `actions` shows the API count beside them. Never add th
 
 What these numbers cannot tell you: unique or returning visitors, time on the site, visits from
 browsers that block App Insights or do not run JavaScript, and what people searched for. Google
-Search Console has search queries. Static Web Apps Free keeps no access logs, so there is no
+Search Console has search queries. Static Web Apps keeps no access logs, so there is no
 server-side count of page requests to compare with.
 
 ### Alerts
@@ -431,20 +615,34 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
 
 ## Operations
 
-- **Logs**: see [Monitoring](#monitoring). Bicep wires `APPLICATIONINSIGHTS_CONNECTION_STRING`
-  into the SWA settings; do not set app settings by hand, the next stack deployment replaces
-  the whole map. Extra settings go in the `additionalAppSettings` parameter.
-- **Rotate storage keys without downtime**: the API reads the key the setting
-  `ATLASRELAY_STORAGE_KEY_INDEX` names (0 = key1). Run
-  `scripts/settings.sh prod ATLASRELAY_STORAGE_KEY_INDEX 1` and `scripts/provision.sh prod`,
-  renew key1 (`az storage account keys renew -g rg-atlasrelay-prod -n <storage account> --key
-  primary`), set the index back to 0 and provision again, then renew key2 (`--key secondary`).
-  Renewing the key the API currently uses takes the API down until the next deployment.
+- **Logs**: see [Monitoring](#monitoring). Bicep writes the Function App's app settings,
+  `APPLICATIONINSIGHTS_CONNECTION_STRING` included; do not set app settings by hand, the next
+  stack deployment replaces the whole map. Extra settings go in the `additionalAppSettings`
+  parameter.
+- **Storage keys**: neither storage account accepts its keys, and nothing stores one, so there is
+  nothing to rotate. Renewing them anyway changes nothing for the site.
+- **Direct requests to the Function App**: a request straight to the Function App's hostname is
+  refused, with or without an `x-ms-client-principal` header. The Deploy workflow checks this after
+  every deploy with a forged header; to check without one by hand:
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' "https://$(scripts/settings.sh prod FUNCTION_APP_HOSTNAME)/api/stats"   # 401 or 403
+  ```
+
+  A 200 means the link's identity provider is gone from the Function App (App Service
+  authentication, provider "Azure Static Web Apps (Linked)"). Deploy the stack again with
+  `scripts/provision.sh prod`; if that does not bring it back, set `ATLASRELAY_API_UNLINKED=true`,
+  deploy, then clear it and deploy again to relink.
 - **Rotate SWA deploy token**: `az staticwebapp secrets reset-api-key` (an Owner; the
   CI role cannot). Nothing else to do; workflows fetch the token on every run.
 - **Change infrastructure**: see [Changing infrastructure](#changing-infrastructure).
-- **Data export**: `az storage entity query --table-name projects ...` or use Azure
-  Storage Explorer.
+- **Table access by hand**: the commands below sign in as you (`--auth-mode login`), because the
+  accounts refuse keys. They need Storage Table Data Contributor on the data account, which the
+  stack grants to the object id in `ATLASRELAY_OPERATOR_PRINCIPAL_ID`. Owner on the subscription
+  alone gives no access to rows. To hand it to someone else, set that setting to their object id
+  and run `scripts/provision.sh prod`.
+- **Data export**: `az storage entity query --table-name projects --account-name <storage account>
+  --auth-mode login ...`, or Azure Storage Explorer signed in with the same account.
 - **Owner index rows**: the `projects` table holds two kinds of row. Projects are in partition
   `project`; each owner also has a partition `owner-<user id>` with one row per project they
   posted, which the open-project cap, the owner's dashboard and profile deletion read instead of
@@ -457,7 +655,7 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
   proxies may keep the old page for up to a minute.
 
   ```bash
-  az storage entity merge --table-name projects --account-name <storage account> --auth-mode key \
+  az storage entity merge --table-name projects --account-name <storage account> --auth-mode login \
     --entity PartitionKey=project RowKey=<project id> status=closed \
               moderationClosed=true moderationClosed@odata.type=Edm.Boolean
   ```
@@ -470,9 +668,9 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
   NCC Access email. Find the id from the project's `ownerId`, then:
 
   ```bash
-  az storage entity show --table-name users --account-name <storage account> --auth-mode key \
+  az storage entity show --table-name users --account-name <storage account> --auth-mode login \
     --partition-key user --row-key <owner id>
-  az storage entity delete --table-name users --account-name <storage account> --auth-mode key \
+  az storage entity delete --table-name users --account-name <storage account> --auth-mode login \
     --partition-key user --row-key <owner id>
   ```
 
@@ -496,7 +694,7 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
   ```bash
   az storage entity query --table-name pledges \
     --filter "transferUncertain eq true and (status eq 'pledged' or status eq 'sent')" \
-    --account-name <storage account> --auth-mode key
+    --account-name <storage account> --auth-mode login
   ```
 
   Several at once usually means RIPE was unreachable or slow. Check App Insights for a matching
@@ -549,6 +747,6 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
 
 ## Adding an admin role later
 
-SWA Free supports role invitations from the portal (Settings → Role management).
+Static Web Apps supports role invitations from the portal (Settings → Role management).
 Invite yourself with role `admin`; then a route rule `"allowedRoles": ["admin"]` and a
 check on `userRoles` in the API can gate moderation endpoints.

@@ -3,6 +3,7 @@ import { HttpError } from './http';
 import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
 import { logError, tableDependencyPolicy } from './telemetry';
+import { createTableClient, tableAccess } from './tables';
 
 export type ProjectStatus = 'open' | 'closed';
 export type PledgeMethod = 'api' | 'manual';
@@ -148,13 +149,16 @@ type Entity = TableEntity<Record<string, unknown>>;
 
 const clients = new Map<string, TableClient>();
 
+function access() {
+  const a = tableAccess(process.env);
+  if (!a) throw new HttpError(503, 'Storage is not configured');
+  return a;
+}
+
 function client(table: 'users' | 'projects' | 'pledges' | 'claims'): TableClient {
   let c = clients.get(table);
   if (!c) {
-    const conn = process.env.TABLES_CONNECTION_STRING;
-    if (!conn) throw new HttpError(503, 'Storage is not configured');
-    c = TableClient.fromConnectionString(conn, table, {
-      allowInsecureConnection: conn.includes('127.0.0.1') || conn.includes('UseDevelopmentStorage'),
+    c = createTableClient(access(), table, {
       // One log line per storage request (table, operation kind, status, duration), which is how
       // Table Storage calls show up in Application Insights: the Functions host does not track
       // dependencies for Node apps. See lib/telemetry.ts.
@@ -167,10 +171,15 @@ function client(table: 'users' | 'projects' | 'pledges' | 'claims'): TableClient
 
 let ensured: Promise<void> | null = null;
 
-/** Create the tables if they do not exist. Runs once per process; Bicep also creates them in Azure. */
+/**
+ * Create the tables if they do not exist, once per process, when the API runs on a connection
+ * string (Azurite). In Azure the tables are declared in Bicep, and the API's identity may read and
+ * write rows in those four tables but not create tables, so there is nothing to do.
+ */
 export function ensureTables(): Promise<void> {
   if (!ensured) {
     ensured = (async () => {
+      if (access().kind !== 'connection-string') return;
       // In parallel: this runs on the first request every cold instance serves, so four sequential
       // round trips were four waits added to the slowest request the site has.
       await Promise.all((['users', 'projects', 'pledges', 'claims'] as const).map(async (t) => {
