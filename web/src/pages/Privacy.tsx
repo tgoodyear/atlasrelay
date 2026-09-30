@@ -30,9 +30,10 @@ export default function Privacy() {
             <li>utm_source, utm_medium and utm_campaign, if the link you followed carried them;</li>
             <li>how long the page took to load, JavaScript errors, and the calls the page makes to this site's API (method, path, status and time);</li>
             <li>
-              a few actions: opening the Send credits form, making a pledge (the method, and the amount
-              rounded to a power of ten), posting a project, following a sign-in link, and following a
-              link to atlas.ripe.net;
+              a few actions, each with the page it happened on: opening the Send credits form, making a
+              pledge (the method, and the amount as a range such as 1,000 to 9,999) and posting a
+              project, each with the project's public id; following a sign-in link (GitHub or
+              Microsoft); and following a link to atlas.ripe.net (which page there);
             </li>
             <li>your browser, operating system and device model, as your browser reports them.</li>
           </ul>
@@ -41,8 +42,8 @@ export default function Privacy() {
             your IP address when the data arrives, and stores the address as 0.0.0.0.
           </p>
           <p className="muted">
-            No id links one visit to the next. The site sets no cookies, stores nothing in your
-            browser, and gives you no user or tracking id. Each page load gets a random id that is
+            No id links one visit to the next. The statistics set no cookies, store nothing in your
+            browser, and give you no user or tracking id. Each page load gets a random id that is
             gone when you close the tab. Anything shaped like an email address or a RIPE Atlas API
             key is removed before sending. There is no advertising and no other analytics service.
             If your browser blocks Application Insights, the site works the same.
@@ -57,7 +58,8 @@ export default function Privacy() {
         <div className="card"><div className="card-body">
           <h2>Accounts, projects and pledges</h2>
           <p className="muted">
-            You sign in with GitHub or Microsoft through Azure Static Web Apps. Your profile stores
+            You sign in with GitHub or Microsoft through Azure Static Web Apps, which sets its
+            sign-in cookies to keep you signed in. The site sets no other cookies. Your profile stores
             which of the two you used, the account name it passes on (for Microsoft this can be your
             email address), and an internal account id. Your display name starts as that account
             name, without anything after an @, and is shown next to your projects and pledges. You can
@@ -99,9 +101,10 @@ export default function Privacy() {
           <h2>Legal basis</h2>
           <p className="muted">
             The usage statistics and logs are kept to count how the site is used and to keep it
-            working, which is a legitimate interest. There is no consent banner because the site
-            stores nothing on your device. Account, project and pledge records are kept because the
-            site cannot publish a project or record a pledge without them.
+            working, which is a legitimate interest. There is no consent banner because the statistics
+            store nothing on your device; the only cookies are the sign-in cookies, set when you sign
+            in. Account, project and pledge records are kept because the site cannot publish a project
+            or record a pledge without them.
           </p>
         </div></div>
 
@@ -118,8 +121,13 @@ export default function Privacy() {
         <div className="card"><div className="card-body">
           <h2>Contact</h2>
           <p className="muted">
-            For questions about your data, or to ask for something to be corrected or removed, use{' '}
-            <a href="https://goodyeartechnical.com/contact/" target="_blank" rel="noreferrer">goodyeartechnical.com/contact</a>.
+            Atlas Relay is an open-source project. Ask questions, or ask for something to be corrected
+            or removed, in its{' '}
+            <a href="https://github.com/tgoodyear/atlasrelay/issues" target="_blank" rel="noreferrer">GitHub issues</a>.
+            Issues are public, so do not put personal data in one. Report security problems privately,
+            as{' '}
+            <a href="https://github.com/tgoodyear/atlasrelay/blob/main/SECURITY.md" target="_blank" rel="noreferrer">SECURITY.md</a>{' '}
+            describes. You can delete your profile yourself, as described above.
           </p>
           <p className="small muted">Last updated 29 September 2026.</p>
         </div></div>

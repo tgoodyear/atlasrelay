@@ -225,8 +225,9 @@ the referrer's path, and anything shaped like an API key or email address are re
 sent. Each page view carries the referring site's origin (or `direct` / `internal`) and, when the
 landing URL had them, `utm_source`, `utm_medium` and `utm_campaign`, lowercased, redacted the same
 way and cut to 64 characters. The actions (`pledge-started`, `pledge-completed`, `project-posted`,
-`sign-in-clicked`, `outbound-click`) carry public project ids, the pledge method, the amount to the
-nearest power of ten, the sign-in provider or an atlas.ripe.net path, and nothing about the person.
+`sign-in-clicked`, `outbound-click`) carry the route, public project ids, the pledge method, the
+amount as a power-of-ten range, the sign-in provider or an atlas.ripe.net path, and nothing about
+the person.
 The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same. See
 [Monitoring](RUNBOOK.md#monitoring) and [Traffic](RUNBOOK.md#traffic).
 

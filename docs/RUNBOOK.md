@@ -289,8 +289,8 @@ Actions are `AppEvents` rows. Each also carries `page`, the route it happened on
 | `outbound-click` | A link to atlas.ripe.net was clicked or middle-clicked | `host`, `path` (up to three segments, numbers as `:n`) |
 
 A project page view is a page view named `/projects/:id`; its `Url` holds the project id, so there
-is no separate event for it. Pledge amounts are rounded because the exact amount, date and name of
-every pledge are public, and an exact amount would match one pledge row.
+is no separate event for it. Pledge amounts are sent as a power-of-ten range because the exact
+amount, date and name of every pledge are public, and an exact amount would match one pledge row.
 
 The browser only counts visitors whose browser loaded the telemetry and could reach App Insights;
 content blockers stop both. The API counts (201 answers from `pledges-create` and

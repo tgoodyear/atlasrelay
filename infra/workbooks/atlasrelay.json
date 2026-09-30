@@ -4,7 +4,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## Atlas Relay\n**Operations** shows the API, errors, availability and transfers. **Traffic** shows who visits and what they do: pages, referring sites, campaigns, countries, devices and the pledge funnel.\n\nAPI requests (`AppRequests`) and log lines (`AppTraces`) come from the Functions host. Page views, load times, browser errors and the API calls the browser made (`AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, role `web`) come from the site's own pages. `AppAvailabilityResults` is the home page test. Times are UTC. The saved queries in `ops/queries` (run with `scripts/logs.sh`) show the same data from a terminal."
+        "json": "## Atlas Relay\n**Operations** shows the API, errors, availability and transfers. **Traffic** shows how visitors arrive and what they do: pages, referring sites, campaigns, countries, devices and the pledge funnel.\n\nAPI requests (`AppRequests`) and log lines (`AppTraces`) come from the Functions host. Page views, load times, browser errors, the API calls the browser made and the actions it counts (`AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, `AppEvents`, role `web`) come from the site's own pages. `AppAvailabilityResults` is the home page test. Times are UTC. The saved queries in `ops/queries` (run with `scripts/logs.sh`) show the same data from a terminal."
       },
       "name": "title"
     },
