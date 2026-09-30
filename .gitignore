@@ -13,3 +13,6 @@ api-deploy/
 web/dist-e2e/
 web/test-results/
 web/playwright-report/
+# Environment settings (scripts/bootstrap.sh); only the example is committed.
+.azure/*
+!.azure/env.example

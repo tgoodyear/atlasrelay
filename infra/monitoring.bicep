@@ -1,6 +1,6 @@
 // Alerts, the availability test and the workbook, over the App Insights component and Log
-// Analytics workspace that platform.bicep creates. Owner-only like the rest of platform.bicep: the
-// CI role has no Microsoft.Insights write permission, so scripts/bootstrap.sh deploys this.
+// Analytics workspace that platform.bicep creates. Part of the environment's deployment stack
+// (infra/main.bicep); the CI role has no Microsoft.Insights write permission.
 //
 // What the queries read (docs/RUNBOOK.md, "Monitoring"):
 //   AppRequests          one row per API request, written by the Functions host
@@ -19,8 +19,8 @@ param tags object = {}
 param workspaceId string
 param appInsightsId string
 
-@description('Address that receives alert email')
-param alertEmail string
+@description('Address that receives alert email. Empty skips the action group and every alert.')
+param alertEmail string = ''
 
 @description('Page the availability test requests, e.g. https://atlasrelay.org/. Empty skips the test and its alert.')
 param availabilityTestUrl string = ''
@@ -30,7 +30,9 @@ param availabilityTestUrl string = ''
 // The group Application Insights created on its own ("Application Insights Smart Detection")
 // notifies holders of the Monitoring Contributor and Monitoring Reader roles, and nobody holds
 // either on this subscription, so it reaches no one. This one sends email.
-resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
+var alerts = !empty(alertEmail)
+
+resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = if (alerts) {
   name: 'ag-${baseName}'
   location: 'global'
   tags: tags
@@ -155,7 +157,7 @@ var rules = [
 ]
 
 resource alert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [
-  for r in rules: {
+  for r in rules: if (alerts) {
     name: 'alert-${baseName}-${r.name}'
     location: location
     tags: tags
@@ -187,7 +189,7 @@ resource alert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [
         ]
       }
       actions: {
-        actionGroups: [actionGroup.id]
+        actionGroups: [actionGroup!.id]
       }
     }
   }
@@ -238,7 +240,7 @@ resource webtest 'Microsoft.Insights/webtests@2022-06-15' = if (!empty(availabil
   }
 }
 
-resource unavailable 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(availabilityTestUrl)) {
+resource unavailable 'Microsoft.Insights/metricAlerts@2018-03-01' = if (alerts && !empty(availabilityTestUrl)) {
   name: 'alert-${baseName}-home-unavailable'
   location: 'global'
   tags: union(tags, linkTag)
@@ -246,20 +248,20 @@ resource unavailable 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(a
     description: 'The home page (${availabilityTestUrl}) failed from at least 2 of 3 locations. Check the Availability page of appi-${baseName}, then scripts/logs.sh availability.'
     severity: 1
     enabled: true
-    scopes: [webtest.id, appInsightsId]
+    scopes: [webtest!.id, appInsightsId]
     evaluationFrequency: 'PT1M'
     // At least one run per location in the window.
     windowSize: 'PT15M'
     criteria: {
       'odata.type': 'Microsoft.Azure.Monitor.WebtestLocationAvailabilityCriteria'
-      webTestId: webtest.id
+      webTestId: webtest!.id
       componentId: appInsightsId
       failedLocationCount: 2
     }
     autoMitigate: true
     actions: [
       {
-        actionGroupId: actionGroup.id
+        actionGroupId: actionGroup!.id
       }
     ]
   }
@@ -270,7 +272,7 @@ resource unavailable 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(a
 // infra/workbooks/atlasrelay.json is the portal's own format (Advanced Editor, Gallery Template)
 // with the workspace's resource id replaced by __WORKSPACE_ID__. To change it, edit the workbook
 // in the portal, copy the JSON back into that file with the id turned back into the placeholder,
-// and re-run scripts/bootstrap.sh.
+// and run scripts/provision.sh.
 resource workbook 'Microsoft.Insights/workbooks@2023-06-01' = {
   // A workbook's name is a GUID; a fixed seed keeps it stable so a redeploy updates it in place.
   name: guid(resourceGroup().id, 'atlasrelay-workbook')
@@ -287,4 +289,4 @@ resource workbook 'Microsoft.Insights/workbooks@2023-06-01' = {
   }
 }
 
-output actionGroupId string = actionGroup.id
+output actionGroupId string = alerts ? actionGroup!.id : ''

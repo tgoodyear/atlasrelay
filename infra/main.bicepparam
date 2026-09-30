@@ -1,35 +1,26 @@
+// Parameters for infra/main.bicep, from the environment's settings (.azure/<env>/.env).
+// scripts/provision.sh exports the settings that have a value before it deploys the stack; the
+// rest take the defaults here. .azure/env.example lists every setting.
 using './main.bicep'
 
-// Deploy with scripts/bootstrap.sh: it exports GITHUB_OIDC_SUBJECT_PREFIX and BUDGET_START_DATE.
-// Values marked (shared) must match infra/app.bicepparam; scripts/check-params.sh enforces it.
-param resourceGroupName = 'internetresearch'
-param location = 'westus2'
-param baseName = 'internetresearch'                 // (shared)
-param swaLocation = 'westus2'                        // (shared)
-param swaSku = 'Free'                                // (shared)
-param stagingEnvironmentPolicy = 'Disabled'          // (shared)
-param enableApplicationInsights = true               // (shared)
-param storageKeyIndex = 0                            // (shared)
-param additionalAppSettings = {}                     // (shared)
+param environmentName = readEnvironmentVariable('AZURE_ENV_NAME')
+param location = readEnvironmentVariable('AZURE_LOCATION', 'westus2')
+param swaLocation = 'westus2'
+param swaSku = 'Free'
+param stagingEnvironmentPolicy = 'Disabled'
+param githubRepo = readEnvironmentVariable('ATLASRELAY_GITHUB_REPO', 'tgoodyear/atlasrelay')
+param githubOidcSubjectPrefix = readEnvironmentVariable('ATLASRELAY_GITHUB_OIDC_SUBJECT_PREFIX')
 param logDailyCapGb = '0.1'
-// Requested every 15 minutes from 3 locations (infra/monitoring.bicep). Alerts go to
-// BUDGET_CONTACT_EMAIL unless alertEmail is set.
-param availabilityTestUrl = 'https://atlasrelay.org/'
-param dnsZoneName = 'atlasrelay.org'
-// The dev instance's hostname, so dev.atlasrelay.org is declared rather than hand-made.
-// Clear this if the dev instance is torn down.
-param devStaticWebAppDefaultHostname = 'icy-bay-08401271e.1.azurestaticapps.net'
-// TXT values published at the apex alongside the SPF policy: the Static Web Apps domain-validation
-// token and the Google Search Console verification token. Recorded here so a later deployment
-// does not remove them.
-param dnsApexTxtValues = [
-  '_rkdd5nw27suei8qugfsuaq79khba6z0'
-  'google-site-verification=PmPeiS951f6LV0yLSeciOw2VCg8GoDdKAQTllGN6fkQ'
-]
-param githubRepo = 'tgoodyear/atlasrelay'
-param githubOidcSubjectPrefix = readEnvironmentVariable('GITHUB_OIDC_SUBJECT_PREFIX')
-param enablePullRequestFederation = false
+param storageKeyIndex = int(readEnvironmentVariable('ATLASRELAY_STORAGE_KEY_INDEX', '0'))
+param additionalAppSettings = {}
+param alertEmail = readEnvironmentVariable('ATLASRELAY_ALERT_EMAIL', '')
 param budgetAmount = 120
-// Supplied by scripts/bootstrap.sh and the Infrastructure workflow; no address is kept in the repo.
-param budgetContactEmail = readEnvironmentVariable('BUDGET_CONTACT_EMAIL')
-param budgetStartDate = readEnvironmentVariable('BUDGET_START_DATE')
+param budgetStartDate = readEnvironmentVariable('ATLASRELAY_BUDGET_START', '')
+param dnsZoneName = readEnvironmentVariable('ATLASRELAY_DNS_ZONE', '')
+param dnsTtl = int(readEnvironmentVariable('ATLASRELAY_DNS_TTL', '3600'))
+// Google Search Console domain verification, published at the apex next to SPF. Public, so it
+// lives in git. The Static Web Apps apex token is per site and lives in the settings instead.
+param dnsApexTxtValues = {
+  'atlasrelay.org': ['google-site-verification=PmPeiS951f6LV0yLSeciOw2VCg8GoDdKAQTllGN6fkQ']
+}
+param swaApexToken = readEnvironmentVariable('ATLASRELAY_SWA_APEX_TOKEN', '')

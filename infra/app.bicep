@@ -1,13 +1,14 @@
-// Atlas Relay – application resources (resource-group scope).
-// Deployed by main.bicep (bootstrap) and by the Infrastructure workflow on every merge to main
-// with the CI identity, whose custom role covers only deployments, static sites and storage.
-// Monitoring and the budget live in platform.bicep (Owner-only) and are referenced here read-only.
+// Atlas Relay: application resources (resource-group scope), a module of infra/main.bicep.
+// Storage with the tables the API uses, and the static web app with its app settings.
 targetScope = 'resourceGroup'
 
-@description('Base name used for resources')
+@description('Base name used for resources, e.g. atlasrelay-prod')
+param baseName string
+
+@description('Storage account name: 3-24 lowercase letters and digits, unique in Azure')
 @minLength(3)
-@maxLength(20)
-param baseName string = 'internetresearch'
+@maxLength(24)
+param storageName string
 
 @description('Region for the storage account')
 param location string = resourceGroup().location
@@ -22,7 +23,7 @@ param location string = resourceGroup().location
 ])
 param swaLocation string = 'westus2'
 
-@description('Free or Standard. Standard ($9/mo) unlocks custom OIDC providers.')
+@description('Free or Standard. Standard unlocks custom OIDC providers.')
 @allowed([
   'Free'
   'Standard'
@@ -36,11 +37,8 @@ param swaSku string = 'Free'
 ])
 param stagingEnvironmentPolicy string = 'Disabled'
 
-@description('Wire APPLICATIONINSIGHTS_CONNECTION_STRING from the App Insights resource created by platform.bicep')
-param enableApplicationInsights bool = true
-
-@description('Name of the App Insights resource created by platform.bicep')
-param appInsightsName string = 'appi-${baseName}'
+@description('App Insights connection string for the API. Empty leaves telemetry off.')
+param appInsightsConnectionString string = ''
 
 @description('Which storage key the API uses (0 = key1, 1 = key2). Flip during key rotation for zero downtime.')
 @allowed([
@@ -52,18 +50,9 @@ param storageKeyIndex int = 0
 @description('Extra app settings merged into the managed-functions configuration. Bicep is the only writer of app settings.')
 param additionalAppSettings object = {}
 
-@description('''Hostname to bind to this site, e.g. dev.atlasrelay.org. Empty binds nothing.
-Its CNAME must already resolve in public DNS when this deployment runs: Static Web Apps validates
-a cname-delegation binding by querying public DNS, not by reading the zone resource that declares
-the record (infra/dns.bicep). Production hostnames are deliberately not bound from here, and
-infra/app.bicepparam says why.''')
-param customDomain string = ''
-
 @description('Tags applied to every resource')
 param tags object = {}
 
-var suffix = toLower(uniqueString(resourceGroup().id))
-var storageName = toLower(take('st${replace(baseName, '-', '')}${suffix}', 24))
 var swaName = 'swa-${baseName}'
 var tableNames = [
   'users'
@@ -112,12 +101,6 @@ resource tables 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-
   }
 ]
 
-// ---------- monitoring (created by platform.bicep; read-only here) ----------
-
-resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = if (enableApplicationInsights) {
-  name: appInsightsName
-}
-
 // ---------- web + api ----------
 
 resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
@@ -142,11 +125,11 @@ var baseAppSettings = {
   TABLES_CONNECTION_STRING: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[storageKeyIndex].value};EndpointSuffix=${environment().suffixes.storage}'
   ATLAS_API_BASE: 'https://atlas.ripe.net/api/v2'
 }
-var monitoringAppSettings = enableApplicationInsights
-  ? {
-      APPLICATIONINSIGHTS_CONNECTION_STRING: appInsights!.properties.ConnectionString
+var monitoringAppSettings = empty(appInsightsConnectionString)
+  ? {}
+  : {
+      APPLICATIONINSIGHTS_CONNECTION_STRING: appInsightsConnectionString
     }
-  : {}
 
 resource swaSettings 'Microsoft.Web/staticSites/config@2024-04-01' = {
   parent: swa
@@ -154,29 +137,10 @@ resource swaSettings 'Microsoft.Web/staticSites/config@2024-04-01' = {
   properties: union(baseAppSettings, monitoringAppSettings, additionalAppSettings)
 }
 
-// The second half of a custom domain. The record is in infra/dns.bicep; the binding is here, on
-// the site that answers for the name. Only the record was ever declared, so dev.atlasrelay.org
-// resolved to a site that returned 404 for it unless somebody remembered to run
-// `az staticwebapp hostname set` after every rebuild (issue #24).
-//
-// The binding is declared on the site rather than beside the record in dns.bicep because the
-// command that rebuilds the dev environment is a resource-group deployment of this template with
-// infra/dev.bicepparam. In dns.bicep the binding would need an Owner-only subscription deployment
-// as well, so it would still be a step to remember, just a differently placed one.
-//
-// cname-delegation is the only method that can be declared. The apex uses dns-txt-token, where
-// the service issues a token that has to reach DNS before the binding validates, so the binding
-// cannot be part of the deployment that asks for it; scripts/bind-custom-domain.sh does that.
-// Nothing in Bicep can express the real ordering constraint either, which is not
-// CNAME-before-binding but registrar-delegation-before-binding. See docs/RUNBOOK.md, which also
-// records why what-if reports this resource as modified on every single run.
-resource swaCustomDomain 'Microsoft.Web/staticSites/customDomains@2024-04-01' = if (!empty(customDomain)) {
-  parent: swa
-  name: customDomain
-  properties: {
-    validationMethod: 'cname-delegation'
-  }
-}
+// Custom domains are not declared here. Static Web Apps validates a binding against public DNS,
+// after the registrar delegates the zone, which happens between deployments; the apex also needs
+// a token the service issues only once the binding is requested. scripts/bind-custom-domain.sh
+// makes the bindings and records the apex token as a setting, and dns.bicep publishes it.
 
 output storageAccountName string = storage.name
 output staticWebAppName string = swa.name

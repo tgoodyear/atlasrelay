@@ -1,51 +1,49 @@
-// Owner-only: role assignment for the CI identity and delete locks on the stateful/critical
-// resources. Kept out of app.bicep so CI never needs Microsoft.Authorization write permissions.
+// What CI may do in an environment: read the static web app and list its deployment token, which
+// the Deploy workflow hands to the upload action. Nothing else. The stack deploys every resource
+// (scripts/bootstrap.sh, scripts/provision.sh, run by a subscription Owner), so CI needs no
+// deployment, storage, monitoring, DNS, identity or role assignment rights.
 targetScope = 'resourceGroup'
+
+@description('Environment name, part of the role name (role names are unique per tenant)')
+param environmentName string
 
 @description('Object id of the CI identity')
 param principalId string
 
-@description('Full resource id of the role definition to assign')
-param roleDefinitionId string
-
-@description('Storage account to protect with a CanNotDelete lock')
-param storageAccountName string
-
-@description('Static web app to protect with a CanNotDelete lock')
-param staticWebAppName string
-
-resource ciAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, principalId, roleDefinitionId)
+resource ciRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+  name: guid(subscription().id, resourceGroup().id, 'atlasrelay-ci-deployer')
   properties: {
-    roleDefinitionId: roleDefinitionId
+    roleName: 'Atlas Relay CI Deployer (${environmentName})'
+    description: 'Read the Atlas Relay static web app and list its deployment token.'
+    type: 'CustomRole'
+    assignableScopes: [resourceGroup().id]
+    permissions: [
+      {
+        actions: [
+          'Microsoft.Resources/subscriptions/resourceGroups/read'
+          'Microsoft.Web/staticSites/read'
+          // az staticwebapp secrets list
+          'Microsoft.Web/staticSites/listSecrets/action'
+        ]
+        notActions: []
+        dataActions: []
+        notDataActions: []
+      }
+    ]
+  }
+}
+
+// Assigned on the group, like the role's assignable scope: azure/login selects the subscription
+// after signing in, which needs an assignment it can see from there. The group holds one static
+// web app, and the role grants nothing on anything else in it.
+resource ciAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, principalId, ciRole.id)
+  properties: {
+    roleDefinitionId: ciRole.id
     principalId: principalId
     principalType: 'ServicePrincipal'
-    description: 'GitHub Actions (OIDC) deploys infra/app.bicep and reads the Static Web App deployment token'
+    description: 'GitHub Actions (OIDC) reads the Static Web App deployment token'
   }
 }
 
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
-  name: storageAccountName
-}
-
-resource storageLock 'Microsoft.Authorization/locks@2020-05-01' = {
-  name: 'no-delete'
-  scope: storage
-  properties: {
-    level: 'CanNotDelete'
-    notes: 'Holds all user, project and pledge data. Remove the lock deliberately before deleting.'
-  }
-}
-
-resource swa 'Microsoft.Web/staticSites@2024-04-01' existing = {
-  name: staticWebAppName
-}
-
-resource swaLock 'Microsoft.Authorization/locks@2020-05-01' = {
-  name: 'no-delete'
-  scope: swa
-  properties: {
-    level: 'CanNotDelete'
-    notes: 'Production site. Remove the lock deliberately before deleting.'
-  }
-}
+output roleDefinitionId string = ciRole.id

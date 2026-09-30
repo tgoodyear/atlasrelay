@@ -1,12 +1,12 @@
-// Public DNS zone for the project's domain.
-// Owner-only: the CI role grants no Microsoft.Network permissions, so CI cannot change DNS.
+// Public DNS zone for the project's domain, in the prod environment's stack. The CI role grants
+// no Microsoft.Network permissions, so CI cannot change DNS.
 //
 // Ordering note. Static Web Apps validates a custom domain only after the zone is delegated at
 // the registrar, which happens between two deployments and cannot be expressed as a dependency.
-// So this template creates the zone and the records, and the bindings that consume them are made
-// separately: production by scripts/bind-custom-domain.sh, dev by the customDomain parameter of
-// app.bicep (see docs/RUNBOOK.md). Once the apex validation token is issued, record it in
-// apexTxtValues so Bicep stays the only writer of this zone.
+// So this template creates the zone and the records, and scripts/bind-custom-domain.sh makes the
+// bindings that consume them. That script records the apex validation token as the setting
+// ATLASRELAY_SWA_APEX_TOKEN, which infra/main.bicep adds to apexTxtValues, so the stack stays the
+// only writer of this zone. Other environments add their own <env> CNAME with dns-subdomain.bicep.
 //
 // Apex routing. DNS forbids a CNAME at the zone apex, and an Azure DNS alias record cannot
 // target a static site (alias targets are limited to public IPs, Traffic Manager, CDN and Front
@@ -20,9 +20,6 @@ param zoneName string
 @description('Default hostname of the static web app, used for the www CNAME')
 param staticWebAppDefaultHostname string
 
-@description('Default hostname of the dev static web app. Empty leaves dev.atlasrelay.org uncreated.')
-param devStaticWebAppDefaultHostname string = ''
-
 @description('''Address the static web app serves on, for the apex A record. Empty skips the
 record, which is correct on a first deployment before the platform has assigned one.''')
 param staticWebAppInboundIp string = ''
@@ -31,8 +28,8 @@ param staticWebAppInboundIp string = ''
 param ttl int = 3600
 
 @description('''Extra TXT values published at the apex, joined with the SPF record.
-Put the Static Web Apps domain-validation token here once Azure issues it, so a later
-deployment does not remove it.''')
+infra/main.bicep passes the site-verification tokens from infra/main.bicepparam and the Static
+Web Apps domain-validation token from the environment's settings.''')
 param apexTxtValues array = []
 
 @description('Publish records stating the domain sends and receives no mail (RFC 7505 null MX, SPF -all, DMARC reject).')
@@ -60,22 +57,6 @@ resource wwwCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = {
     TTL: ttl
     CNAMERecord: {
       cname: staticWebAppDefaultHostname
-    }
-  }
-}
-
-// dev -> the dev static web app, for integration testing a PR stack before it reaches main.
-// Same cname-delegation validation as www. Created only when a dev instance exists. The binding
-// on the other end is declared on the dev site itself (customDomain in infra/dev.bicepparam),
-// because that is the deployment which rebuilds dev; this record and that binding have to be
-// changed together when the dev site is recreated.
-resource devCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = if (!empty(devStaticWebAppDefaultHostname)) {
-  parent: zone
-  name: 'dev'
-  properties: {
-    TTL: ttl
-    CNAMERecord: {
-      cname: devStaticWebAppDefaultHostname
     }
   }
 }

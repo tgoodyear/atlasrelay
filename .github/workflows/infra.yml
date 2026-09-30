@@ -1,42 +1,35 @@
 name: Infrastructure
 
+# Checks only. The environment's deployment stack (infra/main.bicep) is deployed by a
+# subscription Owner with scripts/bootstrap.sh or scripts/provision.sh, never from CI.
 on:
   push:
     branches: [main]
     paths:
       - 'infra/**'
-      - 'scripts/check-params.sh'
+      - '.azure/env.example'
+      - 'scripts/*.sh'
+      - 'scripts/lib/**'
       - '.github/workflows/infra.yml'
   pull_request:
     branches: [main]
     paths:
       - 'infra/**'
-      - 'scripts/check-params.sh'
+      - '.azure/env.example'
+      - 'scripts/*.sh'
+      - 'scripts/lib/**'
       - '.github/workflows/infra.yml'
   workflow_dispatch:
 
-# Deployments to main are serialized; PR lint runs get their own group so they are never cancelled by a deploy.
 concurrency:
   group: infra-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions: {}
 
-env:
-  RESOURCE_GROUP: internetresearch
-  # Set by scripts/bootstrap.sh from the Bicep outputs. Until then this workflow only lints;
-  # once AZURE_BOOTSTRAPPED is set, missing secrets fail the run instead of skipping silently.
-  AZURE_READY: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
-  AZURE_BOOTSTRAPPED: ${{ vars.AZURE_BOOTSTRAPPED == 'true' }}
-  # Placeholders so the bootstrap-only parameter file compiles in lint; real values come from scripts/bootstrap.sh.
-  GITHUB_OIDC_SUBJECT_PREFIX: repo:placeholder@0/placeholder@0
-  BUDGET_START_DATE: 2000-01-01
-  # Lint only compiles the templates, so a placeholder address is enough there.
-  BUDGET_CONTACT_EMAIL_PLACEHOLDER: nobody@example.invalid
-
 jobs:
   lint:
-    name: Lint Bicep
+    name: Lint Bicep and scripts
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -44,63 +37,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - env:
-          BUDGET_CONTACT_EMAIL: ${{ env.BUDGET_CONTACT_EMAIL_PLACEHOLDER }}
+
+      # Every warning fails the build: bicep lint exits 0 on warnings, so its diagnostics are
+      # counted. Other lines (an upgrade notice from az) are printed and ignored.
+      - name: Build and lint the templates
         run: |
-          for f in infra/*.bicep; do az bicep build --file "$f" --stdout > /dev/null; done
-          for f in infra/*.bicepparam; do az bicep build-params --file "$f" --stdout > /dev/null; done
-          scripts/check-params.sh
+          status=0
+          for f in infra/*.bicep; do
+            az bicep build --file "$f" --stdout > /dev/null
+            out="$(az bicep lint --file "$f" 2>&1)" || status=1
+            [ -z "$out" ] || echo "$out"
+            if grep -qE ': (Warning|Error) ' <<< "$out"; then status=1; fi
+          done
+          exit $status
 
-  # The CI identity holds a custom role limited to deployments, the static site and storage, inside
-  # the resource group. Resource group, identity, RBAC, locks, monitoring and budget live in
-  # main.bicep and are only deployed by scripts/bootstrap.sh (subscription Owner).
-  deploy:
-    name: What-if and deploy app.bicep
-    needs: lint
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Azure secrets missing after bootstrap
-        if: env.AZURE_READY != 'true' && env.AZURE_BOOTSTRAPPED == 'true'
-        run: |
-          echo "::error::AZURE_BOOTSTRAPPED is set but AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_SUBSCRIPTION_ID are missing; re-run scripts/bootstrap.sh"
-          exit 1
+      - name: Check the parameters and settings
+        run: scripts/check-params.sh
 
-      - name: Skipping deployment (Azure not bootstrapped yet)
-        if: env.AZURE_READY != 'true'
-        run: echo "Run scripts/bootstrap.sh to provision Azure and set the GitHub secrets."
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.AZURE_READY == 'true'
-        with:
-          persist-credentials: false
-
-      - name: Azure login (OIDC via managed identity)
-        if: env.AZURE_READY == 'true'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # ResourceIdOnly: property diffs would print the storage connection string expression into the log.
-      - name: What-if
-        if: env.AZURE_READY == 'true'
-        run: |
-          az deployment group what-if \
-            --resource-group "$RESOURCE_GROUP" \
-            --template-file infra/app.bicep \
-            --parameters infra/app.bicepparam \
-            --result-format ResourceIdOnly
-
-      - name: Deploy
-        if: env.AZURE_READY == 'true'
-        run: |
-          az deployment group create \
-            --name "app-${GITHUB_SHA::7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --resource-group "$RESOURCE_GROUP" \
-            --template-file infra/app.bicep \
-            --parameters infra/app.bicepparam
+      - name: ShellCheck
+        run: shellcheck -S warning scripts/*.sh scripts/lib/*.sh
