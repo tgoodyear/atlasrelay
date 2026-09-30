@@ -74,7 +74,7 @@ referring site's origin, and any `utm_source`, `utm_medium` and `utm_campaign` f
 URL, redacted the same way and cut to 64 characters. A few actions are counted (opening the pledge
 form, making a pledge, posting a project, following a sign-in or atlas.ripe.net link) with the
 route, public project ids, the pledge method and the amount as a power-of-ten range. The
-[privacy page](https://www.atlasrelay.org/privacy) lists everything collected.
+[privacy page](https://atlasrelay.org/privacy) lists everything collected.
 
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.

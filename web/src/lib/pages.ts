@@ -8,8 +8,8 @@
 //
 // Nothing in this file may touch the DOM or Node APIs: vite.config.ts imports it at build time.
 
-/** The one canonical host. atlasrelay.org serves the same site; see docs/RUNBOOK.md. */
-export const SITE_ORIGIN = 'https://www.atlasrelay.org';
+/** The one canonical host. www.atlasrelay.org serves the same site; see docs/RUNBOOK.md. */
+export const SITE_ORIGIN = 'https://atlasrelay.org';
 export const SITE_NAME = 'Atlas Relay';
 export const DEFAULT_DESCRIPTION =
   'Atlas Relay connects Internet researchers who need RIPE Atlas measurement credits with Atlas users who have credits to share.';

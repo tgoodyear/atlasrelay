@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const SITE = 'https://www.atlasrelay.org';
+export const SITE = 'https://atlasrelay.org';
 const ENDPOINT = 'https://api.indexnow.org/indexnow';
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'public');
 // IndexNow accepts at most 10,000 URLs in one request.

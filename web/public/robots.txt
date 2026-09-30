@@ -3,4 +3,4 @@ Allow: /
 Disallow: /api/
 Disallow: /projects/*/edit
 
-Sitemap: https://www.atlasrelay.org/sitemap.xml
+Sitemap: https://atlasrelay.org/sitemap.xml

@@ -94,7 +94,7 @@ test('page view names follow the routes in App.tsx', () => {
 });
 
 test('campaign tags: utm_source, utm_medium and utm_campaign only', () => {
-  assert.deepEqual(campaignFrom(new URL('https://www.atlasrelay.org/?utm_source=ripe-atlas-list').search), { utm_source: 'ripe-atlas-list' });
+  assert.deepEqual(campaignFrom(new URL('https://atlasrelay.org/?utm_source=ripe-atlas-list').search), { utm_source: 'ripe-atlas-list' });
   assert.deepEqual(
     campaignFrom('?utm_source=Newsletter&utm_medium=Email&utm_campaign=Sept+2026&utm_term=dns&utm_content=a&gclid=x&fbclid=y&q=secret'),
     { utm_source: 'newsletter', utm_medium: 'email', utm_campaign: 'sept 2026' },
@@ -128,14 +128,14 @@ test('campaign values are lowercased, redacted and capped', () => {
 });
 
 test('the referrer is an origin, "internal" or "direct"', () => {
-  assert.equal(referrerOrigin('', 'www.atlasrelay.org'), 'direct');
-  assert.equal(referrerOrigin('https://news.example/item?id=1#c', 'www.atlasrelay.org'), 'https://news.example');
-  assert.equal(referrerOrigin('https://www.atlasrelay.org/projects', 'www.atlasrelay.org'), 'internal');
+  assert.equal(referrerOrigin('', 'atlasrelay.org'), 'direct');
+  assert.equal(referrerOrigin('https://news.example/item?id=1#c', 'atlasrelay.org'), 'https://news.example');
+  assert.equal(referrerOrigin('https://www.atlasrelay.org/projects', 'atlasrelay.org'), 'internal');
   assert.equal(referrerOrigin('https://atlasrelay.org/', 'www.atlasrelay.org'), 'internal');
   assert.equal(referrerOrigin('https://WWW.AtlasRelay.org/', 'atlasrelay.org'), 'internal');
   assert.equal(referrerOrigin('https://atlasrelay.org.example/', 'atlasrelay.org'), 'https://atlasrelay.org.example');
-  assert.equal(referrerOrigin('android-app://com.google.android.gm/', 'www.atlasrelay.org'), 'android-app://com.google.android.gm');
-  assert.equal(referrerOrigin('not a url', 'www.atlasrelay.org'), 'unknown');
+  assert.equal(referrerOrigin('android-app://com.google.android.gm/', 'atlasrelay.org'), 'android-app://com.google.android.gm');
+  assert.equal(referrerOrigin('not a url', 'atlasrelay.org'), 'unknown');
 });
 
 test('pledge amounts are sent to the nearest power of ten', () => {
@@ -150,9 +150,9 @@ test('pledge amounts are sent to the nearest power of ten', () => {
 });
 
 test('sign-in links and atlas.ripe.net links are counted, other links are not', () => {
-  const page = 'https://www.atlasrelay.org/projects/mf3k2x9a0abc1234';
+  const page = 'https://atlasrelay.org/projects/mf3k2x9a0abc1234';
   assert.deepEqual(linkAction('/.auth/login/github?post_login_redirect_uri=%2Fdashboard', page), { name: 'sign-in-clicked', properties: { provider: 'github' } });
-  assert.deepEqual(linkAction('https://www.atlasrelay.org/.auth/login/aad', page), { name: 'sign-in-clicked', properties: { provider: 'aad' } });
+  assert.deepEqual(linkAction('https://atlasrelay.org/.auth/login/aad', page), { name: 'sign-in-clicked', properties: { provider: 'aad' } });
   assert.deepEqual(linkAction('https://atlas.ripe.net/credits/transfer/?to=someone@example.org', page), {
     name: 'outbound-click',
     properties: { host: 'atlas.ripe.net', path: '/credits/transfer' },
@@ -170,7 +170,7 @@ test('sign-in links and atlas.ripe.net links are counted, other links are not', 
 
 test('page view and action properties survive the scrubber, and keys inside them do not', () => {
   const view = {
-    baseData: { name: '/', uri: 'https://www.atlasrelay.org/', properties: { referrerOrigin: 'direct', utm_source: 'ripe-atlas-list' } },
+    baseData: { name: '/', uri: 'https://atlasrelay.org/', properties: { referrerOrigin: 'direct', utm_source: 'ripe-atlas-list' } },
     data: { referrerOrigin: 'internal' },
   };
   scrubItem(view, 'web', 'load1');
