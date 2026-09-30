@@ -34,8 +34,8 @@ param dataStorageName string
 param dataTableEndpoint string
 param dataTableNames string[]
 
-@description('''Link the Function App to the static web app. Off only while an environment moves off
-managed functions: a site cannot be linked while it still has managed functions (docs/RUNBOOK.md).''')
+@description('''Link the Function App to the static web app. Off only while checking a new app
+directly before it takes over /api; an unlinked app answers every request as anonymous.''')
 param linkApi bool = true
 
 @description('App Insights connection string. Empty leaves telemetry off.')
