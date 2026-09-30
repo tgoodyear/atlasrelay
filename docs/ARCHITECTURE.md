@@ -320,7 +320,7 @@ so the function sets the same security headers itself.
 | Resource group `internetresearch` (westus2) | `infra/main.bicep` | |
 | Static Web App `swa-internetresearch` + `appsettings` (staging environments disabled) | `infra/app.bicep` | Free |
 | Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS |
-| Log Analytics `log-internetresearch` (0.1 GB/day cap, 30-day retention) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go |
+| Log Analytics `log-internetresearch` (0.1 GB/day cap; App Insights tables kept 90 days, other tables 30) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go |
 | Action group `ag-internetresearch`, five log search alerts, availability test `webtest-internetresearch-home` and its alert, workbook "Atlas Relay" | `infra/monitoring.bicep` | |
 | User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | |
 | Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write deployments, the static site and storage only, minus site deletion/invitations/user roles/token reset and storage deletion/key regeneration | `infra/main.bicep` | |

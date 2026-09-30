@@ -194,7 +194,8 @@ this, because `infra/app.bicepparam` binds nothing.
 ## Monitoring
 
 API and browser telemetry go to App Insights `appi-internetresearch`, which stores it in the Log
-Analytics workspace `log-internetresearch` (0.1 GB/day cap, 30-day retention).
+Analytics workspace `log-internetresearch` (0.1 GB/day cap). The App Insights tables (`App*`) keep
+90 days; the workspace default of 30 days applies to the rest.
 
 ### What is collected
 
