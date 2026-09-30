@@ -120,7 +120,7 @@ test('the page has text before the app mounts, with exactly one h1', () => {
 });
 
 test('copy stays within the house rules', () => {
-  const copy = [indexHtml, read('src/lib/pages.ts')].join('\n');
+  const copy = [indexHtml, read('src/lib/pages.ts'), read('src/pages/Privacy.tsx')].join('\n');
   assert.ok(!copy.includes('\u2014'), 'no em dashes');
   assert.ok(!/marketplace|exchange/i.test(copy), 'Atlas Relay is never a marketplace or an exchange');
 });
@@ -238,6 +238,7 @@ test('each route gets the shell with the matching head', () => {
   assert.equal(resolve('/').serves, '/index.html');
   assert.equal(resolve('/projects').serves, '/shell/projects.html');
   assert.equal(resolve('/how-it-works').serves, '/shell/how-it-works.html');
+  assert.equal(resolve('/privacy').serves, '/shell/privacy.html');
   for (const p of ['/projects/mf1abcd0000xyz12', '/projects/mf1abcd0000xyz12/edit']) assert.equal(resolve(p).serves, PROJECT_PAGE, p);
   for (const p of ['/dashboard', '/profile', '/projects/new']) assert.equal(resolve(p).serves, '/shell/app.html');
 });
@@ -256,7 +257,7 @@ test('SWA would accept the routes: no two rules normalize to the same route', ()
 });
 
 test('a trailing slash on a route gets the same page as the route without it', () => {
-  for (const p of ['/projects', '/projects/new', '/how-it-works', '/dashboard', '/profile', '/projects/mf1abcd0000xyz12']) {
+  for (const p of ['/projects', '/projects/new', '/how-it-works', '/privacy', '/dashboard', '/profile', '/projects/mf1abcd0000xyz12']) {
     assert.deepEqual(resolve(`${p}/`), resolve(p), `${p}/`);
   }
   assert.equal(server.parseProjectPath('/projects/mf1abcd0000xyz12/').kind, 'project');

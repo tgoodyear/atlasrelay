@@ -1,0 +1,47 @@
+// Traffic: page views and page loads per day, top pages, how visits arrived, and countries.
+// A page load is one visit in one tab. There are no cookies, so a returning visitor counts again.
+// Known bots and headless browsers are left out. "referrer" and "campaign" count page loads, by
+// the referring site's origin ("direct" when the browser sent none) and by utm_source / medium /
+// campaign. See docs/RUNBOOK.md, "Traffic".
+// Fuzzy, with the summarize inside the leg, so the query runs on a workspace with no page views.
+let notBot = (b: string) { not(b contains "bot" or b contains "crawler" or b contains "spider" or b startswith "HeadlessChrome") };
+let loads = union isfuzzy=true
+        (AppPageViews
+            | where notBot(ClientBrowser)
+            | summarize Views = tolong(sum(ItemCount)), First = min(TimeGenerated)
+                by SessionId, Path = coalesce(trim_end("/", tostring(parse_url(Url).Path)), "/"), Country = ClientCountryOrRegion,
+                Referrer = tostring(Properties.referrerOrigin), Source = tostring(Properties.utm_source),
+                Medium = tostring(Properties.utm_medium), Campaign = tostring(Properties.utm_campaign)),
+        (datatable(SessionId: string, Path: string, Country: string, Referrer: string, Source: string,
+            Medium: string, Campaign: string, Views: long, First: datetime)[]);
+let perLoad = loads
+    | summarize Views = sum(Views), First = min(First), Country = take_any(Country),
+        Referrer = take_anyif(Referrer, Referrer != "internal"), AnyReferrer = take_any(Referrer),
+        Source = take_any(Source), Medium = take_any(Medium), Campaign = take_any(Campaign)
+        by SessionId
+    | extend Referrer = case(isnotempty(Referrer), Referrer, AnyReferrer == "internal", "internal", "(not recorded)");
+union
+    (perLoad
+        | summarize PageLoads = count(), Views = sum(Views) by Item = format_datetime(startofday(First), "yyyy-MM-dd")
+        | extend Section = "1 day"),
+    (loads
+        | summarize PageLoads = dcount(SessionId), Views = sum(Views) by Item = Path
+        | top 15 by Views
+        | extend Section = "2 page"),
+    (perLoad
+        | summarize PageLoads = count(), Views = sum(Views) by Item = Referrer
+        | top 15 by PageLoads
+        | extend Section = "3 referrer"),
+    (perLoad
+        | where isnotempty(Source) or isnotempty(Medium) or isnotempty(Campaign)
+        | summarize PageLoads = count(), Views = sum(Views)
+            by Item = strcat(coalesce(Source, "-"), " / ", coalesce(Medium, "-"), " / ", coalesce(Campaign, "-"))
+        | top 15 by PageLoads
+        | extend Section = "4 campaign"),
+    (perLoad
+        | summarize PageLoads = count(), Views = sum(Views) by Item = Country
+        | top 15 by PageLoads
+        | extend Section = "5 country")
+// Days in date order, everything else by count.
+| order by Section asc, iff(Section == "1 day", 0, -PageLoads) asc, Item asc
+| project Section = substring(Section, 2), Item, PageLoads, Views

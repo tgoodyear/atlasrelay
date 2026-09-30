@@ -7,6 +7,7 @@ import Spinner from '../components/Spinner';
 import { api, ApiError, fmt, fmtDate, pingsFor, type Pledge, type Project, type PublicUser } from '../lib/api';
 import { loginUrl, useAuth } from '../lib/auth';
 import { META } from '../lib/pages';
+import { trackAction } from '../lib/telemetry';
 import { usePageMeta } from '../lib/usePageMeta';
 
 export default function ProjectDetail() {
@@ -235,7 +236,7 @@ export default function ProjectDetail() {
                 {project.deadline ? ` Needed by ${fmtDate(project.deadline)}.` : ''}
               </p>
               {canPledge && principal && (
-                <button className="btn btn-lg btn-amber" style={{ width: '100%' }} onClick={() => setShowPledge(true)}>Send credits</button>
+                <button className="btn btn-lg btn-amber" style={{ width: '100%' }} onClick={() => { trackAction('pledge-started', { projectId: project.id }); setShowPledge(true); }}>Send credits</button>
               )}
               {canPledge && !principal && (
                 <a className="btn btn-lg btn-amber" style={{ width: '100%' }} href={loginUrl('github', `/projects/${project.id}`)}>Sign in to send credits</a>

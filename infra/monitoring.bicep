@@ -7,8 +7,9 @@
 //   AppTraces            the API's log lines; lines written by api/src/lib/telemetry.ts are JSON
 //                        with an "event" field: "dependency" (RIPE Atlas and Table Storage calls),
 //                        "transfer" (the outcome of an API transfer) and "error"
-//   AppPageViews, AppBrowserTimings, AppExceptions, AppDependencies
-//                        from the browser (web/src/lib/telemetry.ts), AppRoleName "web"
+//   AppPageViews, AppBrowserTimings, AppExceptions, AppDependencies, AppEvents
+//                        from the browser (web/src/lib/telemetry.ts), AppRoleName "web"; AppEvents
+//                        holds the actions the workbook's Traffic tab counts
 //   AppAvailabilityResults  from the availability test below
 targetScope = 'resourceGroup'
 

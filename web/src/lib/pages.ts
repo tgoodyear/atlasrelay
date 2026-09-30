@@ -37,12 +37,15 @@ export function canonicalUrl(path: string): string {
 const PROJECTS_TEXT = 'Internet measurement research looking for RIPE Atlas credits. Pick one and send what you can spare.';
 const HOW_IT_WORKS_TEXT =
   'Atlas Relay is a donation board for RIPE Atlas credits. Nothing is bought or sold, and donors get nothing back. Credits move directly between RIPE Atlas accounts, and this site never holds credits or long-lived keys.';
+export const PRIVACY_TEXT =
+  'What Atlas Relay records about visitors and account holders, where it is stored, and for how long.';
 
 /** What each page puts in the head. Project pages build theirs from the project itself. */
 export const META = {
   home: { path: '/' },
   projects: { title: 'Projects', description: PROJECTS_TEXT, path: '/projects' },
   howItWorks: { title: 'How it works', description: HOW_IT_WORKS_TEXT, path: '/how-it-works' },
+  privacy: { title: 'Privacy', description: PRIVACY_TEXT, path: '/privacy' },
   // The template the API renders each project page from (api/src/lib/projectHtml.ts), and what it
   // serves as is, with noindex, when it cannot read the project. It carries no canonical tag
   // rather than a wrong one: the server or the app adds the project's own.
@@ -71,6 +74,7 @@ export interface Shell {
 export const SHELLS: Shell[] = [
   { file: 'shell/projects.html', meta: META.projects, heading: 'Projects', body: PROJECTS_TEXT },
   { file: 'shell/how-it-works.html', meta: META.howItWorks, heading: 'How it works', body: HOW_IT_WORKS_TEXT },
+  { file: 'shell/privacy.html', meta: META.privacy, heading: 'Privacy', body: PRIVACY_TEXT },
   { file: 'shell/project.html', meta: META.project, heading: 'Research project', body: DEFAULT_DESCRIPTION },
   { file: 'shell/app.html', meta: META.signIn, heading: SITE_NAME, body: DEFAULT_DESCRIPTION },
   { file: '404.html', meta: META.notFound, heading: 'Page not found', body: 'There is no page at this address.' },

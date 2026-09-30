@@ -10,7 +10,7 @@ import { isPublicProject } from './views';
 export { SITE_ORIGIN };
 
 /** Pages that exist whatever is in storage. Pages behind sign-in are left out. */
-export const STATIC_PATHS = ['/', '/projects', '/how-it-works'];
+export const STATIC_PATHS = ['/', '/projects', '/how-it-works', '/privacy'];
 
 /** The most URLs one sitemap file may list (sitemaps.org). */
 export const MAX_URLS = 50000;

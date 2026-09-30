@@ -9,6 +9,10 @@
  * - Every other string, exception messages and stacks included, has anything shaped like a UUID
  *   (every RIPE Atlas API key is one; this site's own ids are not) or an email address replaced.
  * - Any user id or account id the SDK might add is removed. The site never sets one.
+ *
+ * The functions at the end decide what telemetry.ts adds to page views and actions: three utm
+ * values from the landing URL, the referring site's origin, a pledge size to the nearest power of
+ * ten, and which sign-in and atlas.ripe.net links were followed.
  */
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -97,8 +101,103 @@ export function scrubItem(item: TelemetryItemLike, role: string, pageLoadId: str
 export function routeName(pathname: string): string {
   // React Router matches routes without regard to case, so /Projects is the projects page.
   const path = pathname.toLowerCase().replace(/\/+$/, '') || '/';
-  if (['/', '/projects', '/projects/new', '/dashboard', '/profile', '/how-it-works'].includes(path)) return path;
+  if (['/', '/projects', '/projects/new', '/dashboard', '/profile', '/how-it-works', '/privacy'].includes(path)) return path;
   if (/^\/projects\/[^/]+\/edit$/.test(path)) return '/projects/:id/edit';
   if (/^\/projects\/[^/]+$/.test(path)) return '/projects/:id';
   return '(not found)';
+}
+
+// ---------- where a visit came from, and what it did ----------
+
+const CAMPAIGN_KEYS = ['utm_source', 'utm_medium', 'utm_campaign'] as const;
+/** Longest campaign value kept, in characters, after redaction. */
+export const CAMPAIGN_MAX = 64;
+
+/**
+ * The campaign a link was tagged with, from the landing URL's query string. Only utm_source,
+ * utm_medium and utm_campaign are read, and each value is lowercased, redacted like any other
+ * text here, stripped of control characters and cut to CAMPAIGN_MAX. The URL itself is still sent
+ * without its query string.
+ */
+export function campaignFrom(search: string): Record<string, string> {
+  const params = new URLSearchParams(search);
+  const out: Record<string, string> = {};
+  for (const key of CAMPAIGN_KEYS) {
+    const value = params.get(key);
+    if (value === null) continue;
+    // Redact before cutting, so a cut cannot leave part of a key that no longer matches.
+    const clean = scrubText(value.toLowerCase())
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      .trim()
+      .slice(0, CAMPAIGN_MAX)
+      .trim();
+    if (clean) out[key] = clean;
+  }
+  return out;
+}
+
+/**
+ * How a page load arrived: "direct" when the browser gave no referrer, "internal" when it came from
+ * this site (www and the bare domain count as one site), and otherwise the referring site's origin.
+ * An app referrer such as android-app://com.google.android.gm keeps its scheme and host.
+ */
+export function referrerOrigin(referrer: string, siteHostname: string): string {
+  if (!referrer) return 'direct';
+  let url: URL;
+  try {
+    url = new URL(referrer);
+  } catch {
+    return 'unknown';
+  }
+  const bare = (host: string) => host.toLowerCase().replace(/^www\./, '');
+  if (url.hostname && bare(url.hostname) === bare(siteHostname)) return 'internal';
+  if (url.protocol === 'http:' || url.protocol === 'https:') return scrubText(url.origin);
+  return url.hostname ? scrubText(`${url.protocol}//${url.hostname}`) : 'unknown';
+}
+
+/**
+ * A pledge's size to the nearest power of ten. Pledges are public, amount, date and message next
+ * to the donor's name, so an exact amount would pick out one pledge row.
+ */
+export function amountBucket(credits: number): string {
+  if (!Number.isFinite(credits) || credits < 1) return 'unknown';
+  if (credits < 1_000) return '1-999';
+  if (credits < 10_000) return '1000-9999';
+  if (credits < 100_000) return '10000-99999';
+  if (credits < 1_000_000) return '100000-999999';
+  return '1000000+';
+}
+
+export type LinkAction =
+  | { name: 'sign-in-clicked'; properties: { provider: string } }
+  | { name: 'outbound-click'; properties: { host: string; path: string } };
+
+/**
+ * Whether following a link is an action worth counting: a sign-in link (/.auth/login/<provider>
+ * on this site), or a link to atlas.ripe.net. For the latter the path keeps at most three
+ * segments, with numbers (probe and measurement ids) replaced, and no query string.
+ */
+export function linkAction(href: string, pageHref: string): LinkAction | null {
+  let url: URL;
+  let page: URL;
+  try {
+    url = new URL(href, pageHref);
+    page = new URL(pageHref);
+  } catch {
+    return null;
+  }
+  if (url.origin === page.origin) {
+    const m = /^\/\.auth\/login\/([a-z0-9-]{1,20})\/?$/i.exec(url.pathname);
+    return m ? { name: 'sign-in-clicked', properties: { provider: m[1].toLowerCase() } } : null;
+  }
+  if (url.hostname.toLowerCase() === 'atlas.ripe.net') {
+    const segments = url.pathname
+      .split('/')
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((s) => (/^\d+$/.test(s) ? ':n' : s.toLowerCase()));
+    const path = scrubText(`/${segments.join('/')}`).slice(0, CAMPAIGN_MAX);
+    return { name: 'outbound-click', properties: { host: 'atlas.ripe.net', path } };
+  }
+  return null;
 }

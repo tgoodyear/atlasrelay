@@ -6,6 +6,7 @@ import Spinner from '../components/Spinner';
 import { api, ApiError, TAGS, pingsFor, type Tag } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { META } from '../lib/pages';
+import { trackAction } from '../lib/telemetry';
 import { usePageMeta } from '../lib/usePageMeta';
 
 export default function ProjectForm() {
@@ -86,6 +87,7 @@ export default function ProjectForm() {
     const body = { title, summary, description, creditsRequested: credits, tags, affiliation, homepageUrl, repoUrl, paperUrl, deadline, ...(editing ? { status, resultsSummary, resultsUrl } : {}) };
     try {
       const res = editing ? await api.updateProject(id!, body) : await api.createProject(body);
+      if (!editing) trackAction('project-posted', { projectId: res.project.id });
       navigate(`/projects/${res.project.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not save');

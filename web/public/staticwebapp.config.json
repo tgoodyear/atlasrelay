@@ -85,6 +85,10 @@
       "rewrite": "/shell/how-it-works.html"
     },
     {
+      "route": "/privacy",
+      "rewrite": "/shell/privacy.html"
+    },
+    {
       "route": "/dashboard",
       "rewrite": "/shell/app.html"
     },

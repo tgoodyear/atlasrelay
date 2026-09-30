@@ -219,10 +219,16 @@ Sign-in handles are never returned publicly. Static Web Apps fills `userDetails`
 address for some identity providers, and that value seeds both the handle and the initial display
 name, so `publicName()` reduces anything email-shaped to its local part before it leaves the API.
 
-Browser telemetry (page views, load times, errors and the page's API calls) goes to App Insights
-with no cookies, nothing stored in the browser, and no user id. Query strings, the referrer's path,
-and anything shaped like an API key or email address are removed before it is sent. See
-[Monitoring](RUNBOOK.md#monitoring).
+Browser telemetry (page views, load times, errors, the page's API calls and five named actions)
+goes to App Insights with no cookies, nothing stored in the browser, and no user id. Query strings,
+the referrer's path, and anything shaped like an API key or email address are removed before it is
+sent. Each page view carries the referring site's origin (or `direct` / `internal`) and, when the
+landing URL had them, `utm_source`, `utm_medium` and `utm_campaign`, lowercased, redacted the same
+way and cut to 64 characters. The actions (`pledge-started`, `pledge-completed`, `project-posted`,
+`sign-in-clicked`, `outbound-click`) carry public project ids, the pledge method, the amount to the
+nearest power of ten, the sign-in provider or an atlas.ripe.net path, and nothing about the person.
+The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same. See
+[Monitoring](RUNBOOK.md#monitoring) and [Traffic](RUNBOOK.md#traffic).
 
 ### Trust model
 - Requester identity is a GitHub/Microsoft account plus a self-declared RIPE email.
@@ -272,6 +278,7 @@ matching rule wins, and there is no navigation fallback.
 | `/projects/new`, `/dashboard`, `/profile` | `shell/app.html` (noindex) | 200 |
 | `/projects/*` | `project-page` function | 200 or 404, see below |
 | `/how-it-works` | `shell/how-it-works.html` | 200 |
+| `/privacy` | `shell/privacy.html` | 200 |
 | `/sitemap.xml` | `sitemap` function | 200, or 503 when storage fails |
 | anything else | `404.html` (noindex) | 404 |
 

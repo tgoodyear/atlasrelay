@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, fmt, type Project } from '../lib/api';
+import { trackAction } from '../lib/telemetry';
+import { amountBucket } from '../lib/telemetry-scrub';
 
 interface Props {
   project: Project;
@@ -74,6 +76,8 @@ export default function PledgeDialog({ project, onClose, onDone }: Props) {
       const res = await api.createPledge(project.id, { amount: n, method: sending, message, anonymous, ...(sending === 'api' ? { apiKey: apiKey.trim() } : {}) });
       setApiKey('');
       setWarning(res.warning ?? '');
+      // The amount to the nearest power of ten: the exact figure is public next to the donor's name.
+      trackAction('pledge-completed', { projectId: project.id, method: sending, amount: amountBucket(n) });
       if (sending === 'manual') {
         setRecipient(res.recipientEmail ?? '');
         setStep('manual-instructions');

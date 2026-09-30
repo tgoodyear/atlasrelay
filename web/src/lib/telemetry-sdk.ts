@@ -1,9 +1,9 @@
 // The Application Insights SDK, loaded on demand by telemetry.ts once the page is idle, so none of
 // it is in the bundle that renders the page. Only the parts in use are imported: the core, the
-// sender, page views and exceptions (analytics), and fetch tracking (dependencies). The full
+// sender, page views, custom events and exceptions (analytics), and fetch tracking (dependencies). The full
 // @microsoft/applicationinsights-web package would add remote configuration, SDK usage stats and
 // the cookie-based user and session plugin, none of which this site wants.
-import { AppInsightsCore, DEFAULT_BREEZE_PATH, parseConnectionString, type IConfig, type IConfiguration, type ITelemetryItem } from '@microsoft/applicationinsights-core-js';
+import { AppInsightsCore, DEFAULT_BREEZE_PATH, addPageHideEventListener, parseConnectionString, type IConfig, type IConfiguration, type ITelemetryItem } from '@microsoft/applicationinsights-core-js';
 import { Sender } from '@microsoft/applicationinsights-channel-js';
 import { AnalyticsPlugin } from '@microsoft/applicationinsights-analytics-js';
 import { AjaxPlugin } from '@microsoft/applicationinsights-dependencies-js';
@@ -42,7 +42,13 @@ export function init(connectionString: string, earlyErrors: unknown[]): void {
     enableCorsCorrelation: false,
     maxAjaxCallsPerView: 50,
   };
-  core.initialize(config, [plugin, new AjaxPlugin(), new Sender()]);
+  const sender = new Sender();
+  core.initialize(config, [plugin, new AjaxPlugin(), sender]);
+  // The Sender batches for up to 15 seconds. The full SDK flushes the batch when the page is hidden
+  // or left; with the core used directly that is this file's job. Without it, whatever was queued
+  // when the visitor closed the tab or followed a sign-in link was lost. pagehide and
+  // visibilitychange only: an unload handler would keep the page out of the back/forward cache.
+  addPageHideEventListener(() => sender.onunloadFlush());
   core.addTelemetryInitializer((item: ITelemetryItem) => {
     scrubItem(item as Parameters<typeof scrubItem>[0], ROLE, pageLoadId);
   });
@@ -50,8 +56,12 @@ export function init(connectionString: string, earlyErrors: unknown[]): void {
   for (const err of earlyErrors) trackError(err);
 }
 
-export function pageView(pathname: string): void {
-  analytics?.trackPageView({ name: routeName(pathname), uri: stripQuery(`${location.origin}${pathname}`) });
+export function pageView(pathname: string, properties: Record<string, string>): void {
+  analytics?.trackPageView({ name: routeName(pathname), uri: stripQuery(`${location.origin}${pathname}`), properties });
+}
+
+export function event(name: string, properties: Record<string, string>): void {
+  analytics?.trackEvent({ name, properties });
 }
 
 function trackError(err: unknown): void {

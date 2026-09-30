@@ -4,12 +4,13 @@
 #
 #   scripts/logs.sh api-errors          # the last day
 #   scripts/logs.sh transfers 7d        # 30m, 6h, 2d or ISO 8601 (PT6H)
+#   scripts/logs.sh traffic 7d          # page loads, pages, referrers, campaigns, countries
 #   scripts/logs.sh list                # the saved queries
 #
 # Needs az signed in with an account that can read the workspace, and jq. Uses SUBSCRIPTION_ID if
 # set, otherwise az's current subscription; RESOURCE_GROUP and WORKSPACE override the defaults.
 set -euo pipefail
-[ $# -ge 1 ] && [ $# -le 2 ] || { sed -n '2,10s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+[ $# -ge 1 ] && [ $# -le 2 ] || { sed -n '2,11s/^# \{0,1\}//p' "$0" >&2; exit 2; }
 NAME=$1
 SPAN=${2:-1d}
 RESOURCE_GROUP=${RESOURCE_GROUP:-internetresearch}

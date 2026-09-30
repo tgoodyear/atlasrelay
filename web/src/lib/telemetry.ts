@@ -1,10 +1,15 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
+import { campaignFrom, linkAction, referrerOrigin, routeName } from './telemetry-scrub';
 
 /**
  * Browser telemetry: page views (one per route), uncaught errors and unhandled promise rejections,
- * page load timings, and the API calls each page makes. Sent to the same Application Insights
- * resource as the API.
+ * page load timings, the API calls each page makes, and a few named actions (trackAction). Sent to
+ * the same Application Insights resource as the API.
+ *
+ * Each page view says how the visitor arrived: `referrerOrigin` is the referring site's origin,
+ * "direct" or "internal", and utm_source, utm_medium and utm_campaign from the landing URL ride
+ * along on every page view of that page load. docs/RUNBOOK.md, "Traffic", says how to read them.
  *
  * Off unless the build is given VITE_APPINSIGHTS_CONNECTION_STRING, so local and dev builds send
  * nothing. The production build gets it from the repository variable APPINSIGHTS_CONNECTION_STRING
@@ -20,9 +25,16 @@ const MAX_HELD = 20;
 
 type Sdk = typeof import('./telemetry-sdk');
 
+/** The actions counted in the Traffic reports. Properties never carry anything about the person. */
+export type Action = 'pledge-started' | 'pledge-completed' | 'project-posted' | 'sign-in-clicked' | 'outbound-click';
+
 let sdk: Sdk | null = null;
 let lastPath = '';
-const heldPages: string[] = [];
+// The first page view of a page load carries how the browser arrived; route changes after it are
+// navigation inside the site.
+let nextReferrer = 'direct';
+let campaign: Record<string, string> = {};
+const held: ((mod: Sdk) => void)[] = [];
 const heldErrors: unknown[] = [];
 
 function holdError(event: ErrorEvent): void {
@@ -43,9 +55,29 @@ function whenIdle(fn: () => void): void {
   else setTimeout(fn, 2000);
 }
 
+function send(fn: (mod: Sdk) => void): void {
+  if (sdk) fn(sdk);
+  else if (held.length < MAX_HELD) held.push(fn);
+}
+
+// Sign-in links and links to atlas.ripe.net, wherever they are on the page. Middle clicks open a
+// tab and count too.
+function onLinkClick(event: MouseEvent): void {
+  if (event.type === 'auxclick' && event.button !== 1) return;
+  const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+  if (!(anchor instanceof HTMLAnchorElement)) return;
+  const action = linkAction(anchor.href, location.href);
+  if (action) trackAction(action.name, action.properties);
+}
+
 /** Call once, before the app renders. */
 export function startTelemetry(): void {
   if (!CONNECTION_STRING) return;
+  // Read before the router can change the URL. The query string itself is never sent.
+  campaign = campaignFrom(location.search);
+  nextReferrer = referrerOrigin(document.referrer, location.hostname);
+  document.addEventListener('click', onLinkClick, true);
+  document.addEventListener('auxclick', onLinkClick, true);
   window.addEventListener('error', holdError);
   window.addEventListener('unhandledrejection', holdRejection);
   const load = () =>
@@ -56,12 +88,14 @@ export function startTelemetry(): void {
           stopHolding();
           mod.init(CONNECTION_STRING, heldErrors.splice(0));
           sdk = mod;
-          for (const path of heldPages.splice(0)) mod.pageView(path);
+          for (const fn of held.splice(0)) fn(mod);
         })
         .catch(() => {
           // A blocked or failed download costs the visitor nothing. Stop collecting for it.
           stopHolding();
-          heldPages.length = 0;
+          document.removeEventListener('click', onLinkClick, true);
+          document.removeEventListener('auxclick', onLinkClick, true);
+          held.length = 0;
           heldErrors.length = 0;
         });
     });
@@ -72,8 +106,19 @@ export function startTelemetry(): void {
 function trackPageView(pathname: string): void {
   if (!CONNECTION_STRING || pathname === lastPath) return;
   lastPath = pathname;
-  if (sdk) sdk.pageView(pathname);
-  else if (heldPages.length < MAX_HELD) heldPages.push(pathname);
+  const properties = { referrerOrigin: nextReferrer, ...campaign };
+  nextReferrer = 'internal';
+  send((mod) => mod.pageView(pathname, properties));
+}
+
+/**
+ * Count an action. `page` (the route it happened on) is added here. Pass only public ids, fixed
+ * strings and buckets; everything is scrubbed again on the way out (./telemetry-scrub).
+ */
+export function trackAction(name: Action, properties: Record<string, string> = {}): void {
+  if (!CONNECTION_STRING) return;
+  const withPage = { ...properties, page: routeName(location.pathname) };
+  send((mod) => mod.event(name, withPage));
 }
 
 /** Sends a page view whenever the route changes. Render once inside the router. */

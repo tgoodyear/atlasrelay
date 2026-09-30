@@ -7,6 +7,7 @@ import ProjectForm from './pages/ProjectForm';
 import Profile from './pages/Profile';
 import Dashboard from './pages/Dashboard';
 import HowItWorks from './pages/HowItWorks';
+import Privacy from './pages/Privacy';
 import NotFound from './pages/NotFound';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="profile" element={<Profile />} />
         <Route path="how-it-works" element={<HowItWorks />} />
+        <Route path="privacy" element={<Privacy />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
