@@ -9,6 +9,7 @@ import { totp } from './lib/totp.mjs';
 //   Pick an account      the account's tile, else "Use another account"
 //   Sign in (email)      the username
 //   Enter password       the password
+//   Verify your identity the authenticator app's code, when the account has a seed
 //   Enter code           a TOTP code, when the account has a seed (see lib/totp.mjs)
 //   Stay signed in?      No
 //   Permissions requested  Accept (a test tenant that lets users consent to apps)
@@ -26,10 +27,12 @@ interface Screen {
 
 const SCREENS: Screen[] = [
   { name: 'error', locator: (p) => p.locator('#usernameError, #passwordError, #idTD_Error, #errorText, [data-testid="error"]').filter({ hasText: /\S/ }) },
-  { name: 'mfa-registration', locator: (p) => p.locator('#idDiv_SAOTCS_Title, #ProofUpDescription, [data-testid="proofUpTitle"]').or(p.getByText(/More information required|Let's keep your account secure/i)) },
+  // The code prompt comes before the registration check: both can carry MFA wording.
+  { name: 'totp', locator: (p) => p.locator('input[name="otc"]') },
+  { name: 'mfa-method', locator: (p) => p.locator('[data-value="PhoneAppOTP"]') },
+  { name: 'mfa-registration', locator: (p) => p.locator('#ProofUpDescription, [data-testid="proofUpTitle"]').or(p.getByText(/More information required|Let's keep your account secure/i)) },
   { name: 'password-change', locator: (p) => p.locator('input[name="newpasswd"], #iPassword') },
   { name: 'pick-account', locator: (p) => p.locator('#tilesHolder, [data-test-id="accountList"], [data-testid="accountList"]') },
-  { name: 'totp', locator: (p) => p.locator('input[name="otc"]') },
   { name: 'password', locator: (p) => p.locator('input[name="passwd"], input[type="password"]') },
   { name: 'username', locator: (p) => p.locator('input[name="loginfmt"], input[type="email"]') },
   { name: 'stay-signed-in', locator: (p) => p.locator('#KmsiCheckboxField, #KmsiDescription, [data-testid="kmsiVideo"]').or(p.getByText(/^Stay signed in\?$/)) },
@@ -87,6 +90,11 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
         const text = (await page.locator('#usernameError, #passwordError, #idTD_Error, #errorText, [data-testid="error"]').first().innerText()).trim();
         throw new Error(`Microsoft sign-in refused the account: ${text.slice(0, 300)}`);
       }
+      case 'mfa-method':
+        // "Verify your identity" with more than one method: pick the code from an authenticator app.
+        if (!account.totp) throw new Error('Microsoft asks this account to verify with MFA, and it has no TOTP seed in the vault (docs/RUNBOOK.md).');
+        await page.locator('[data-value="PhoneAppOTP"]').first().click();
+        break;
       case 'mfa-registration':
         throw new Error('Microsoft asks this account to register for MFA. Turn security defaults off in the test tenant, or give the account a TOTP seed (docs/RUNBOOK.md).');
       case 'password-change':

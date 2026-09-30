@@ -100,7 +100,8 @@ scripts/bind-custom-domain.sh. Published at the apex (prod only). Empty until th
 param swaApexToken string = ''
 
 @description('''Deploy the full-flow test harness (testharness.bicep): a Container Apps job that signs
-test accounts into the site, with their passwords in a private Key Vault. Never in prod.''')
+test accounts into the site, with their passwords in a private Key Vault. Never in prod, whatever
+this says; main.bicepparam sets it for every other environment.''')
 param testHarness bool = toLower(environmentName) != 'prod'
 
 var env = toLower(environmentName)

@@ -422,8 +422,10 @@ from a fork. A job that only Azure can start, from an image the workflow names, 
 listening for GitHub work.
 
 Why the vault, not GitHub secrets: a GitHub secret reaches every step of the job that reads it,
-and any code that step runs. In the vault, the passwords are readable only from inside the network,
-by the test identity, and writable only by the Owner recorded as the operator.
+and any code that step runs. In the vault, the test identity reads the passwords from inside the
+network. The only other principal with access is the Owner recorded as the operator, who writes
+them (Key Vault Secrets Officer, which can read as well) and reaches the vault only while
+`scripts/set-test-users.sh` has opened it to their address.
 
 What is trusted: the CI identity can start the job with an image of its choosing, and that image
 runs as the test identity and can read the passwords. Only a workflow run on `main`, by the
