@@ -141,10 +141,65 @@ jobs:
           path: web/test-results
           retention-days: 7
 
+  # Full-flow tests (web/e2e/flows) against the whole application on the runner: the API bundle in
+  # the Functions host, Azurite, the built site behind the Static Web Apps emulator, and a stub of the
+  # RIPE Atlas API in place of atlas.ripe.net. No Azure identity and no secrets.
+  flows:
+    name: Full-flow tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Azure Functions Core Tools, from its GitHub release rather than npm (see CONTRIBUTING.md).
+      # Pinned by version and by the SHA-256 of the release asset.
+      FUNC_VERSION: 4.15.1
+      FUNC_SHA256: 9b982efb4047c717c9b1c26beb2269c2ac41b29bf8d21f4df1130c1586cc81cd
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # The whole lockfile: the harness runs Azurite and the SWA CLI from the root devDependencies.
+      - name: Install
+        run: npm ci
+
+      - name: Install Azure Functions Core Tools
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/func.zip" \
+            "https://github.com/Azure/azure-functions-core-tools/releases/download/${FUNC_VERSION}/Azure.Functions.Cli.linux-x64.${FUNC_VERSION}.zip"
+          echo "${FUNC_SHA256}  $RUNNER_TEMP/func.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/func.zip" -d "$RUNNER_TEMP/func"
+          chmod +x "$RUNNER_TEMP/func/func"
+          echo "FUNC=$RUNNER_TEMP/func/func" >> "$GITHUB_ENV"
+
+      - name: Install Chromium
+        run: npx -w web playwright install --with-deps --only-shell chromium
+
+      - name: Build
+        run: npm run build
+
+      - name: Run full-flow tests
+        run: npm run test:flows -w web
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: full-flow-traces
+          path: |
+            web/test-results
+            web/e2e-stack/*.log
+          retention-days: 7
+
   # Only this job holds an Azure identity, and only for pushes to main / manual runs.
   deploy:
     name: Deploy to Azure Static Web Apps
-    needs: [build, browser]
+    needs: [build, browser, flows]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     # The CI identity trusts jobs in this GitHub Environment only, and scripts/bootstrap.sh

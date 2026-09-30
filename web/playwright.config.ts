@@ -8,6 +8,9 @@ const PORT = 4173;
 
 export default defineConfig({
   testDir: 'e2e',
+  // e2e/flows runs against the whole stack (playwright.flows.config.ts) and e2e/smoke against a
+  // deployed site (playwright.smoke.config.ts), so neither belongs to this build-and-preview run.
+  testIgnore: ['flows/**', 'smoke/**'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

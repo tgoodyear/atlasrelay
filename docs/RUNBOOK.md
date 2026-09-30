@@ -195,6 +195,56 @@ npx swa deploy web/dist --api-location api-deploy --deployment-token "$TOKEN" --
 
 `scripts/teardown.sh dev` removes it again, the CNAME included.
 
+## Testing a deployed site
+
+Pull requests run the full-flow tests (`web/e2e/flows`, see [CONTRIBUTING.md](../CONTRIBUTING.md))
+against a copy of the whole application on the CI runner, with the emulator's sign-in and a stub
+in place of the RIPE Atlas API. A deployed site gets two more checks.
+
+### Smoke test
+
+`web/e2e/smoke/smoke.spec.ts` reads a live site without signing in or writing anything: each page
+and its head, the 404 pages, `robots.txt`, the sitemap and a project page from it, the security
+headers, the public API, and that the private API routes answer 401. It sends only GET and HEAD
+requests, and it blocks the browser's App Insights requests so a run is not counted as traffic.
+It is safe against prod:
+
+```bash
+npx -w web playwright install chromium   # once
+BASE_URL=https://atlasrelay.org npm run test:smoke -w web
+```
+
+The same file runs against the local stack in every full-flow run.
+
+### Manual checks
+
+Real sign-in and real transfers never run in CI. Check them by hand on a dev environment
+(`scripts/bootstrap.sh dev`, then upload the build to test as described under
+[Dev environment](#dev-environment)), not on prod: they create projects, pledges and profiles, and
+a transfer moves real credits. Use two browsers, or one normal and one private window, for the
+researcher and the donor.
+
+1. **GitHub sign-in.** Click **Sign in**, sign in with a real GitHub account, and expect
+   `/dashboard` with your username in the header. **Sign out** returns to the home page, signed out.
+2. **Microsoft sign-in.** From `/dashboard` signed out, click **Continue with Microsoft** and sign
+   in. Microsoft sends an email address as the username: post a project without changing the
+   display name, and check that the byline shows only the part before the `@`.
+3. **Profile.** Save a display name and the RIPE NCC Access email of a real atlas.ripe.net
+   account. That account is the researcher.
+4. **API transfer.** As the researcher, post a project asking for 1,000 credits. As the donor,
+   signed in with another account, create a key at https://atlas.ripe.net/keys/ with only
+   "Transfer credits to another user" and "Get information about your credits", valid for a day.
+   Pledge 100 credits with it. Expect **Check balance** to show the donor's balance, then
+   **Credits transferred** and a pledge marked **Transferred via API**. A minute or two later both
+   accounts' logs at https://atlas.ripe.net/credits/transactions/ show the 100 credits. Delete
+   the key.
+5. **Manual transfer.** Pledge 100 more by hand: the dialog shows the researcher's RIPE email.
+   Transfer the credits on https://atlas.ripe.net/credits/transfer/, click
+   **I've sent the credits**, and as the researcher click **Confirm received** once the credits
+   show up.
+6. **Clean up.** Delete both profiles on `/profile`, or remove the environment with
+   `scripts/teardown.sh dev`.
+
 ## Changing infrastructure
 
 Edit `infra/*.bicep` or `infra/main.bicepparam` and open a pull request. The Infrastructure
@@ -214,157 +264,10 @@ GitHub Environment. For prod it also deletes the zone and removes the repository
 Deploy workflow builds without deploying until prod is bootstrapped again. A new zone gets new
 name servers, and the registrar has to be updated.
 
-## Moving from the internetresearch resource group
+## History
 
-Until this change the project ran in resource group `internetresearch`, deployed with
-`az deployment sub create`. The new prod environment is built beside it and starts with empty
-tables; nothing is copied from the old storage account.
-
-| Old | New |
-| --- | --- |
-| `internetresearch` | `rg-atlasrelay-prod` |
-| `swa-internetresearch` | `swa-atlasrelay-prod` |
-| `swa-internetresearch-dev`, `stinternetresearchdevxw3` | `atlasrelay-dev` stack, not deployed by default |
-| `stinternetresearchxw3aja` | `statlasrelayprod<6 characters>` |
-| `log-internetresearch`, `appi-internetresearch` | `log-atlasrelay-prod`, `appi-atlasrelay-prod` |
-| `ag-internetresearch`, `alert-internetresearch-*`, `webtest-internetresearch-home` | `ag-atlasrelay-prod`, `alert-atlasrelay-prod-*`, `webtest-atlasrelay-prod-home` |
-| `id-internetresearch-ci` | `id-atlasrelay-prod-ci` |
-| "Atlas Credit Exchange CI Deployer (internetresearch)" | "Atlas Relay CI Deployer (prod)" |
-| zone `atlasrelay.org` in `internetresearch` | the same zone, moved to `rg-atlasrelay-prod` |
-
-The zone moves to the new group and keeps its name servers, so the delegation at Squarespace
-Domains stays as it is and no resolver ever sees a different set. Azure DNS would
-also accept a second `atlasrelay.org` zone in the new group, but it would get different name
-servers: the registrar would have to change, and until resolvers dropped the old delegation
-(up to its TTL), some visitors would be answered by the old zone and some by the new one. After
-the move, the prod stack's first deployment with `ATLASRELAY_DNS_ZONE` set takes the zone and its
-records over in place, since they have the same resource ids as the ones it declares.
-
-Once this change is merged, the Deploy workflow targets `swa-atlasrelay-prod` and the GitHub
-Environment `prod`, so its runs fail until step 2 has run.
-
-The new site shares the domain with the old one only if they are in different slices. When they
-are, the apex is validated on the new site while the old one still serves it, and `www` moves
-with a gap of about a minute. When they are not, both hostnames are down from step 6 until step 8
-validates them.
-
-Run from a checkout of `main`, as a subscription Owner, with `SUB` set to the subscription id:
-
-1. At least an hour ahead (the records' TTL is 3600 s), shorten the TTL of the two records that
-   will change:
-
-   ```bash
-   az network dns record-set a update -g internetresearch -z atlasrelay.org -n @ --set ttl=60 --subscription $SUB
-   az network dns record-set cname update -g internetresearch -z atlasrelay.org -n www --set ttl=60 --subscription $SUB
-   ```
-
-2. Deploy the new environment, without the domain yet. This also points the GitHub secrets and
-   variables at it:
-
-   ```bash
-   scripts/bootstrap.sh prod --subscription $SUB --alert-email <address>
-   ```
-
-3. Deploy the app, and wait for the run:
-
-   ```bash
-   gh workflow run deploy.yml --repo tgoodyear/atlasrelay --ref main
-   gh run watch --repo tgoodyear/atlasrelay      # pick the Deploy run just started
-   ```
-
-4. Check the new site on its own hostname. The sitemap is served by the API from the tables:
-
-   ```bash
-   HOST=$(scripts/settings.sh prod SWA_HOSTNAME); echo "$HOST"
-   curl -sI "https://$HOST/" | head -1                  # 200
-   curl -s "https://$HOST/sitemap.xml" | head -3         # XML, not an error
-   ```
-
-   Sign in on `https://$HOST` and open the dashboard. Note the slice in `$HOST` (the number
-   before `.azurestaticapps.net`). The old site is in slice 3.
-
-5. Move the zone into the new group. Name servers and records are unchanged, and the old site
-   keeps serving the domain:
-
-   ```bash
-   ZONE_ID=$(az network dns zone show -g internetresearch -n atlasrelay.org --subscription $SUB --query id -o tsv)
-   az resource move --destination-group rg-atlasrelay-prod --ids "$ZONE_ID" --subscription $SUB
-   az network dns zone show -g rg-atlasrelay-prod -n atlasrelay.org --subscription $SUB --query nameServers -o tsv
-   # still ns1-07.azure-dns.com, ns2-07.azure-dns.net, ns3-07.azure-dns.org, ns4-07.azure-dns.info
-   ```
-
-   If Azure refuses the move because of a lock, remove the two `no-delete` locks in
-   `internetresearch` first (`az lock list -g internetresearch --subscription $SUB`, then
-   `az lock delete --ids <id>`); step 11 would remove them anyway.
-
-6. Free or pre-validate the apex.
-   - New site not in slice 3: validate the apex on it now. The script saves the token and prints
-     the command that publishes it; run that command, then wait until `atlasrelay.org` is `Ready`
-     on the new site:
-
-     ```bash
-     ZONE_NAME=atlasrelay.org scripts/bind-custom-domain.sh prod --apex-only
-     az staticwebapp hostname list -n swa-atlasrelay-prod -g rg-atlasrelay-prod --subscription $SUB -o table
-     ```
-
-     Microsoft's zero-downtime instructions place the token at `_dnsauth` instead. If the apex
-     is still `Validating` after 15 minutes, publish it there as well (and delete that record
-     after step 10):
-
-     ```bash
-     az network dns record-set txt add-record -g rg-atlasrelay-prod -z atlasrelay.org -n _dnsauth \
-       -v "$(scripts/settings.sh prod ATLASRELAY_SWA_APEX_TOKEN)" --subscription $SUB
-     ```
-
-   - New site in slice 3: the hostnames have to leave the old site first. The domain is down from
-     here until step 8:
-
-     ```bash
-     az lock delete --name no-delete --subscription $SUB --resource \
-       "$(az staticwebapp show -n swa-internetresearch -g internetresearch --subscription $SUB --query id -o tsv)"
-     az staticwebapp hostname delete -n swa-internetresearch -g internetresearch --hostname www.atlasrelay.org --yes --subscription $SUB
-     az staticwebapp hostname delete -n swa-internetresearch -g internetresearch --hostname atlasrelay.org --yes --subscription $SUB
-     ```
-
-7. Point the domain at the new site. The stack takes over the zone and rewrites the apex A
-   record, the `www` CNAME and the apex TXT set (SPF, the Google token, the new site's apex token):
-
-   ```bash
-   scripts/settings.sh prod ATLASRELAY_DNS_TTL 60
-   scripts/settings.sh prod ATLASRELAY_DNS_ZONE atlasrelay.org
-   scripts/provision.sh prod
-   dig +short atlasrelay.org A @ns1-07.azure-dns.com       # the new site's address
-   dig +short www.atlasrelay.org CNAME @ns1-07.azure-dns.com
-   ```
-
-8. Bind both hostnames on the new site, and re-run until both are `Ready`:
-
-   ```bash
-   scripts/bind-custom-domain.sh prod
-   ```
-
-9. Make the apex the default domain in the portal: `swa-atlasrelay-prod`, **Custom domains**,
-   `atlasrelay.org`, **Set default** ([Canonical host](#canonical-host)).
-
-10. Check the domain, then put the TTL back:
-
-    ```bash
-    curl -sI https://atlasrelay.org/ | head -1                                   # 200
-    curl -sI 'https://www.atlasrelay.org/projects?status=all' | grep -iE '^(HTTP|location)'
-    curl -s https://atlasrelay.org/sitemap.xml | head -3
-    scripts/settings.sh prod ATLASRELAY_DNS_TTL 3600
-    scripts/provision.sh prod
-    ```
-
-11. Delete the old group. The script refuses while the zone is still in it, prints every
-    resource it will delete, removes the delete locks, deletes the group, the old custom role and
-    the `dev` CNAME that pointed at the old dev site, and asks for the group's name first:
-
-    ```bash
-    scripts/decommission-internetresearch.sh --subscription $SUB
-    ```
-
-Afterwards, remove `scripts/decommission-internetresearch.sh` and this section.
+Until #54 the project ran in a resource group named `internetresearch`, deployed with
+`az deployment sub create`. Prod moved into the `atlasrelay-prod` stack and the old group was deleted.
 
 ## Monitoring
 
