@@ -37,8 +37,8 @@ with `dev` in the names, no zone, and a `dev` CNAME in the prod zone (`infra/dns
 - Deployment stacks have no what-if.
 
 CI deploys no Bicep. The CI roles can read the resource group, the static web app and its linked
-backend, list the site's deployment token, and read the Function App and publish a package to it,
-and nothing else. Every infrastructure change is a stack deployment by a subscription Owner.
+backend, list the site's deployment token, and read the Function App and publish a package to it.
+They grant nothing else. Every infrastructure change is a stack deployment by a subscription Owner.
 
 No storage account accepts shared keys. The API signs in to storage with its managed identity, and
 the operator named in the setting `ATLASRELAY_OPERATOR_PRINCIPAL_ID` (whoever ran
@@ -288,11 +288,10 @@ Until this change the API ran as the site's managed functions and read the table
 storage account key, from the site's app setting `TABLES_CONNECTION_STRING`. Now it runs on the
 Function App in `infra/api.bicep`, linked to the site, and signs in with its managed identity.
 A site cannot be linked while it still has managed functions, so the site is uploaded without
-them and linked straight after. `/api` has no backend between those two commands, typically for
-a minute or two; the pages themselves keep serving. Everything else happens beside the running
-site.
+them and linked straight after. `/api` has no backend from the upload until the link has
+succeeded; the pages themselves keep serving. No other step interrupts the running site.
 
-Two settings hold prod in between, and are cleared again at the end:
+Two settings are set for the move and cleared again at the end:
 
 - `ATLASRELAY_STORAGE_SHARED_KEY=true` keeps the data account accepting its key, which the managed
   functions still use.
@@ -340,7 +339,7 @@ to the subscription id and `npm ci` done.
 
 5. Check the Function App directly. The public routes read the tables with the managed identity,
    so matching totals mean the identity and its roles work. Signed-in routes answer 401, even
-   with a forged principal, because the app ignores the header until it is linked:
+   with a forged principal, because Bicep set `IGNORE_CLIENT_PRINCIPAL=1` on the unlinked app:
 
    ```bash
    API="https://$(scripts/settings.sh prod FUNCTION_APP_HOSTNAME)"
@@ -401,8 +400,8 @@ to the subscription id and `npm ci` done.
    gh run watch --repo tgoodyear/atlasrelay      # pick the Deploy run just started
    ```
 
-9. Turn shared keys off, delete the site's old app settings, and renew both keys, which were
-   stored in those settings. `-o none` keeps the new keys off the screen:
+9. Turn shared keys off, delete the site's old app settings, and renew both keys, since
+   `TABLES_CONNECTION_STRING` held one of them. `-o none` keeps the new keys off the screen:
 
    ```bash
    scripts/settings.sh prod ATLASRELAY_STORAGE_SHARED_KEY ""
@@ -432,7 +431,8 @@ to the subscription id and `npm ci` done.
   `scripts/provision.sh prod`: the earlier templates put the site back on Free with its app
   settings, and delete the Function App and what came with it.
 - **From step 6 on**: put the managed functions back. `/api` is down from the first command until
-  the Deploy run in the last one uploads the managed API, about 15 minutes:
+  the Deploy run at the end uploads the managed API, which takes two stack deployments and a
+  Deploy run:
 
   ```bash
   scripts/settings.sh prod ATLASRELAY_STORAGE_SHARED_KEY true
@@ -621,9 +621,9 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
   parameter.
 - **Storage keys**: neither storage account accepts its keys, and nothing stores one, so there is
   nothing to rotate. Renewing them anyway changes nothing for the site.
-- **The API answers only the site**: a request straight to the Function App's hostname is refused,
-  with or without an `x-ms-client-principal` header. The Deploy workflow checks this after every
-  deploy; to check by hand:
+- **Direct requests to the Function App**: a request straight to the Function App's hostname is
+  refused, with or without an `x-ms-client-principal` header. The Deploy workflow checks this after
+  every deploy with a forged header; to check without one by hand:
 
   ```bash
   curl -s -o /dev/null -w '%{http_code}\n' "https://$(scripts/settings.sh prod FUNCTION_APP_HOSTNAME)/api/stats"   # 401 or 403

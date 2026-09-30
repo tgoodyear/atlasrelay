@@ -349,7 +349,7 @@ deletes nothing, and an Owner who needs to delete by hand deploys once with the 
 
 CI deploys no Bicep. Its roles can read the resource group, the site and its linked backend, list
 the deployment token the upload action needs, and read the Function App and publish a package to
-it, and nothing else. A compromised workflow run cannot change RBAC, re-federate the identity,
+it. They grant nothing else. A compromised workflow run cannot change RBAC, re-federate the identity,
 read or change app settings, touch storage, DNS or monitoring, or delete anything. It can replace
 the site's content and the API's code, which is what a deploy is.
 
@@ -367,8 +367,9 @@ no connection string with a key exists anywhere. Every caller signs in with Micr
 The API builds its table client from `TABLES_ENDPOINT` and the identity's client id
 (`api/src/lib/tables.ts`). It does not create tables in Azure, since the tables are declared in
 Bicep and its role cannot create them. `TABLES_CONNECTION_STRING` is only for local development
-and tests against Azurite; nothing in Azure sets it. App Insights still takes its connection
-string, which names the ingestion endpoint and is public once the browser bundle ships it.
+and tests against Azurite; nothing in Azure sets it. The Function App's settings still hold the
+App Insights connection string. It names the ingestion endpoint, and the browser bundle makes it
+public anyway.
 
 `infra/main.bicepparam` reads the environment's settings (`.azure/<env>/.env`, git-ignored) with
 `readEnvironmentVariable`; `.azure/env.example` lists them and `scripts/check-params.sh` checks
@@ -392,11 +393,13 @@ Why the Standard plan: only Standard can link a Function App, and a linked Funct
 lets the API sign in to storage with a managed identity (managed functions have none). Standard
 also allows custom OIDC providers, which RIPE NCC Access sign-in would need.
 
-Why Flex Consumption: it takes identity-based host storage with no Azure Files share (the
-Consumption and Premium plans need a share, which only takes a key), runs Node 22, scales to zero
-and is available in westus2. Microsoft's Static Web Apps pages list Consumption, Premium and
-Dedicated as the plans a linked Function App may use; Flex Consumption is not on that list, and
-the cutover in the runbook checks every route through the site before the old API is removed.
+Why Flex Consumption: it takes identity-based host storage with no Azure Files share (on the
+Consumption and Premium plans the share's connection needs a key), runs Node 22, scales to zero
+and is available in westus2. The table on Microsoft's Static Web Apps page for Azure Functions
+lists Consumption, Premium and Dedicated as the plans a linked Function App may use. Flex
+Consumption is not on that list. The runbook's cutover checks the Function App directly before the
+switch and the main routes through the site right after it, and its rollback puts the managed
+functions back.
 
 ## Repository layout
 
@@ -436,10 +439,10 @@ docs/     this spec, RIPE research notes, runbook
   its `/api/publish` endpoint with a Microsoft Entra token and wait for the deployment, read the
   SWA deployment token with `az staticwebapp secrets list` (masked, never stored), upload the
   site with `Azure/static-web-apps-deploy@v1` and an empty `api_location`, then check that direct
-  requests to the Function App's hostname, one with a forged `x-ms-client-principal`, are refused.
-  The API goes first, so a failed publish leaves the previous API and site together. Between the
-  publish and the upload, project pages from the new API name script files the old site does not
-  have yet, for about a minute.
+  requests to `/api/stats` and `/api/me` on the Function App's hostname, both with a forged
+  `x-ms-client-principal`, are refused. The API goes first, so a failed publish leaves the
+  previous API and site in place. Between the publish and the upload, project pages from the new
+  API reference script files the old site does not serve yet.
 - `deploy.yml`, job `indexnow` (after a deploy that uploaded, no Azure identity): runs
   `scripts/indexnow.mjs`, which reads the live `/sitemap.xml` and posts its URLs to IndexNow.
   It logs failures as warnings and is `continue-on-error`, so it cannot fail a deploy.
