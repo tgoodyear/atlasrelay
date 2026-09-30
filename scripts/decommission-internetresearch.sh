@@ -37,11 +37,13 @@ fi
 [ -n "$SUBSCRIPTION" ] || die "pass --subscription, or run: az login --tenant <tenant-id>"
 SUB=(--subscription "$SUBSCRIPTION")
 
-[ "$(az group exists -n "$OLD_RG" "${SUB[@]}")" = true ] || { echo "resource group $OLD_RG is already gone"; exit 0; }
-old_rg_id=$(az group show -n "$OLD_RG" "${SUB[@]}" --query id -o tsv)
+# A run stopped after the group was deleted resumes with what outlives it: the role and the secret.
+rg_exists=$(az group exists -n "$OLD_RG" "${SUB[@]}") || die "can't check resource group $OLD_RG"
+[ "$rg_exists" = true ] || echo "resource group $OLD_RG is already gone; finishing the rest"
 
 # The zone must have been moved out first. A zone of the same name elsewhere is the new one.
-zones=$(az network dns zone list "${SUB[@]}" --query "[?name=='$ZONE'].resourceGroup" -o tsv)
+zones=$(az network dns zone list "${SUB[@]}" --query "[?name=='$ZONE'].resourceGroup" -o tsv) ||
+  die "can't list DNS zones"
 if grep -qix "$OLD_RG" <<< "$zones"; then
   die "the $ZONE zone is still in $OLD_RG; move it to rg-atlasrelay-prod first (docs/RUNBOOK.md)"
 fi
@@ -49,7 +51,8 @@ az stack sub show -n atlasrelay-prod "${SUB[@]}" -o none 2> /dev/null ||
   die "no deployment stack atlasrelay-prod in $SUBSCRIPTION; deploy the new environment first"
 
 # The old dev site's CNAME was copied into the moved zone and would point at a deleted site.
-old_dev_host=$(az staticwebapp show -n "$OLD_DEV_SWA" -g "$OLD_RG" "${SUB[@]}" --query defaultHostname -o tsv 2> /dev/null || true)
+old_dev_host=""
+[ "$rg_exists" = false ] || old_dev_host=$(az staticwebapp show -n "$OLD_DEV_SWA" -g "$OLD_RG" "${SUB[@]}" --query defaultHostname -o tsv 2> /dev/null || true)
 zone_rg=$(head -1 <<< "$zones")
 dev_cname=""
 if [ -n "$old_dev_host" ] && [ -n "$zone_rg" ]; then
@@ -59,18 +62,21 @@ if [ -n "$old_dev_host" ] && [ -n "$zone_rg" ]; then
 fi
 
 role_ids=$(az role definition list "${SUB[@]}" --custom-role-only true --name "$OLD_ROLE" --query "[].id" -o tsv)
-locks=$(az lock list -g "$OLD_RG" "${SUB[@]}" --query "[].id" -o tsv)
+locks=""
+[ "$rg_exists" = false ] || locks=$(az lock list -g "$OLD_RG" "${SUB[@]}" --query "[].id" -o tsv)
 
 echo "Subscription $SUBSCRIPTION. This deletes:"
-echo
-echo "Resource group $OLD_RG and everything in it:"
-az resource list -g "$OLD_RG" "${SUB[@]}" --query "sort_by([], &type)[].{name:name, type:type}" -o table
-echo
-echo "Its budget(s):"
-az consumption budget list -g "$OLD_RG" "${SUB[@]}" --query "[].name" -o tsv 2> /dev/null | sed 's/^/  /' || true
-echo
-echo "The delete locks, removed first:"
-if [ -n "$locks" ]; then sed 's/^/  /' <<< "$locks"; else echo "  (none)"; fi
+if [ "$rg_exists" = true ]; then
+  echo
+  echo "Resource group $OLD_RG and everything in it:"
+  az resource list -g "$OLD_RG" "${SUB[@]}" --query "sort_by([], &type)[].{name:name, type:type}" -o table
+  echo
+  echo "Its budget(s):"
+  az consumption budget list -g "$OLD_RG" "${SUB[@]}" --query "[].name" -o tsv 2> /dev/null | sed 's/^/  /' || true
+  echo
+  echo "The delete locks, removed first:"
+  if [ -n "$locks" ]; then sed 's/^/  /' <<< "$locks"; else echo "  (none)"; fi
+fi
 echo
 echo "The custom role:"
 if [ -n "$role_ids" ]; then sed "s/^/  $OLD_ROLE  /" <<< "$role_ids"; else echo "  (not found)"; fi
@@ -90,13 +96,14 @@ if [ -n "$dev_cname" ]; then
   echo "deleting dev.$ZONE"
   az network dns record-set cname delete -g "$zone_rg" -z "$ZONE" -n dev "${SUB[@]}" --yes -o none
 fi
-echo "deleting resource group $OLD_RG (this takes a few minutes)"
-az group delete -n "$OLD_RG" "${SUB[@]}" --yes -o none
+if [ "$rg_exists" = true ]; then
+  echo "deleting resource group $OLD_RG (this takes a few minutes)"
+  az group delete -n "$OLD_RG" "${SUB[@]}" --yes -o none
+fi
 # Its role assignments went with the group, so the definition can go now.
 for id in $role_ids; do
   echo "deleting role definition $id"
-  az role definition delete "${SUB[@]}" --name "${id##*/}" --scope "$old_rg_id" -o none 2> /dev/null ||
-    az rest --method delete --url "https://management.azure.com$id?api-version=2022-04-01" -o none
+  az rest --method delete --url "https://management.azure.com$id?api-version=2022-04-01" -o none
 done
 if command -v gh > /dev/null && gh auth status > /dev/null 2>&1; then
   gh secret delete BUDGET_CONTACT_EMAIL --repo "$REPO" 2> /dev/null && echo "deleted secret BUDGET_CONTACT_EMAIL" || true

@@ -19,6 +19,7 @@ valid_env_name "$ENV_NAME"
 # The stack commands need az 2.61+ (--action-on-unmanage). grep reads the help to the end: with -q
 # it could quit early, and pipefail would count az's SIGPIPE as a failure.
 need_stack_az() {
+  command -v jq > /dev/null || die "jq is not installed"
   az stack sub create --help 2> /dev/null | grep -- --action-on-unmanage > /dev/null ||
     die "az $(az version --query '"azure-cli"' -o tsv 2> /dev/null) is too old for deployment stacks; upgrade to 2.61 or later"
 }
@@ -99,20 +100,20 @@ deploy_stack() (
     --description "Atlas Relay $ENV_NAME (scripts/bootstrap.sh, scripts/provision.sh)" \
     --yes --only-show-errors -o none
 )
-# The template's outputs become settings (SWA_NAME, CI_CLIENT_ID, ...). One query reads the names
-# and the values from the same object, so they pair up in order. The stack can return output
-# names with their case changed; main.bicep declares them all in upper case, so that is the name
-# saved, and a differently cased copy from an earlier run is dropped.
+# The template's outputs become settings (SWA_NAME, CI_CLIENT_ID, ...). jq reads each output as a
+# name and value pair. The stack can return output names with their case changed; main.bicep
+# declares them all in upper case, so that is the name saved, and a differently cased copy from an
+# earlier run is dropped. A failed read fails the step, so stale settings aren't kept.
 save_outputs() {
   local out k v raw
-  out=$(az stack sub show -n "$STACK" "${AZ_SUB[@]}" \
-    --query "[keys(outputs), values(outputs)[].value]" -o tsv) || return 1
+  out=$(az stack sub show -n "$STACK" "${AZ_SUB[@]}" --query outputs -o json) || return 1
+  out=$(jq -r 'to_entries[] | [.key, (.key | ascii_upcase), (.value.value // "" | tostring)] | @tsv' <<< "$out") ||
+    return 1
   while IFS=$'\t' read -r raw k v; do
     [ -n "$k" ] || continue
     aset "$k" "$v" || return 1
     [ "$raw" = "$k" ] || adel "$raw" || return 1
-  done < <(awk -F'\t' 'NR == 1 { n = split($0, k, "\t") }
-      NR == 2 { split($0, v, "\t"); for (i = 1; i <= n; i++) print k[i] "\t" toupper(k[i]) "\t" v[i] }' <<< "$out")
+  done <<< "$out"
 }
 # The budget exists only with an alert address. Azure accepts only the current month as the start
 # of a new budget and never lets it change afterwards, so ATLASRELAY_BUDGET_START follows the
@@ -125,7 +126,7 @@ sync_budget_start() {
   if out=$(az rest --method get --url "$url" --query properties.timePeriod.startDate -o tsv 2>&1); then
     [ -n "$out" ] || { echo "error: budget-atlasrelay-$ENV_NAME has no start date" >&2; return 1; }
     aset ATLASRELAY_BUDGET_START "${out:0:10}"
-  elif grep -qiE 'NotFound|could not be found' <<< "$out"; then
+  elif grep -qiE 'NotFound|"code": *"404"|does not exist|could not be found' <<< "$out"; then
     aset ATLASRELAY_BUDGET_START "$(date -u +%Y-%m-01)"
   else
     echo "error: can't read budget-atlasrelay-$ENV_NAME: $out" >&2
