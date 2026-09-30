@@ -337,8 +337,8 @@ delete a managed resource outside the stack, Owners included. That replaces the 
 locks the storage account and the site used to carry. Neither setting excludes any principal: CI
 deletes nothing, and an Owner who needs to delete by hand deploys once with the deny settings off.
 
-CI deploys no Bicep. Its role can read the site and list the deployment token the upload action
-needs, and nothing else, so a compromised workflow run cannot change RBAC, re-federate the
+CI deploys no Bicep. Its role can read the resource group and the site and list the deployment
+token the upload action needs, and nothing else, so a compromised workflow run cannot change RBAC, re-federate the
 identity, touch storage, keys, DNS or monitoring, or delete anything. It can replace the site's
 content, which is what a deploy is.
 

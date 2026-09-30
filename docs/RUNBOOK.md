@@ -4,7 +4,7 @@
 
 Everything in Azure is one deployment stack per environment, `atlasrelay-<env>`, at subscription
 scope, declared in `infra/main.bicep`. `prod` serves atlasrelay.org. `dev` is optional and is
-deployed from the same template. Environment names are 1 to 6 lowercase letters and digits.
+deployed from the same template. Environment names are 1 to 6 lowercase letters and digits, starting with a letter.
 
 | Resource | prod | Declared in |
 | --- | --- | --- |
@@ -33,8 +33,8 @@ with `dev` in the names, no zone, and a `dev` CNAME in the prod zone (`infra/dns
   the deny assignments.
 - Deployment stacks have no what-if.
 
-CI deploys no Bicep. The CI role can read the static web app and list its deployment token, and
-nothing else. Every infrastructure change is a stack deployment by a subscription Owner.
+CI deploys no Bicep. The CI role can read the resource group and the static web app and list the
+site's deployment token, and nothing else. Every infrastructure change is a stack deployment by a subscription Owner.
 
 ### Settings
 

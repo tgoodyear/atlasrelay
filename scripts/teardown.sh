@@ -73,8 +73,13 @@ read -r -p "Type the environment name to confirm: " answer
 
 if [ "$ENV_NAME" = prod ]; then
   gh variable set AZURE_BOOTSTRAPPED --repo "$REPO" --body false
+  # Only the ones that exist; any failure deleting one stops here, since the Deploy workflow
+  # decides from these secrets whether to log in.
+  present=$(gh secret list --repo "$REPO" --json name --jq '.[].name') || die "can't list the secrets of $REPO"
   for s in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
-    gh secret delete "$s" --repo "$REPO" 2> /dev/null && echo "deleted secret $s" || true
+    grep -Fxq "$s" <<< "$present" || continue
+    gh secret delete "$s" --repo "$REPO" || die "can't delete the secret $s from $REPO"
+    echo "deleted secret $s"
   done
 fi
 

@@ -50,15 +50,17 @@ if [ "$ENV_NAME" = prod ]; then ZONE_RG=$RG; else ZONE_RG=rg-atlasrelay-prod; fi
 [ "$APEX_ONLY" = false ] || [ "$ENV_NAME" = prod ] || die "--apex-only is for prod"
 [ "$MANAGED" = true ] || [ "$APEX_ONLY" = true ] || die "ATLASRELAY_DNS_ZONE is not set; only --apex-only works before the stack manages the zone"
 
-# Bind one hostname. An "already exists" response means a previous run got there first, which is
-# fine; anything else is fatal, so a failed binding can never be mistaken for a pending one.
+# Bind one hostname. A conflict counts as done only when this site already holds the hostname (a
+# previous run got there first). Azure answers the same way when another site holds it, and
+# anything else is fatal, so a failed binding can never be mistaken for a pending one.
 bind() {
   local host="$1" method="$2" out rc
   out="$(az staticwebapp hostname set -n "$SWA" -g "$RG" "${AZ_SUB[@]}" \
     --hostname "$host" --validation-method "$method" --no-wait -o none 2>&1)" && rc=0 || rc=$?
   if [[ $rc -eq 0 ]]; then
     echo "  requested: $host ($method)"
-  elif grep -qiE 'already exists|conflict|is already configured' <<<"$out"; then
+  elif grep -qiE 'already exists|conflict|is already configured' <<<"$out" &&
+    az staticwebapp hostname show -n "$SWA" -g "$RG" "${AZ_SUB[@]}" --hostname "$host" -o none 2>/dev/null; then
     echo "  already bound: $host"
   else
     echo "$out" >&2
@@ -105,15 +107,18 @@ else
   done
   if [[ -n "$token" && "$token" != "null" ]]; then
     echo "  token: $token"
-    if [ "$(aget ATLASRELAY_SWA_APEX_TOKEN)" != "$token" ]; then
-      aset ATLASRELAY_SWA_APEX_TOKEN "$token"
-      if [ "$MANAGED" = true ]; then
-        log "Publishing the token (scripts/provision.sh $ENV_NAME)"
-        provision
-      else
-        echo "  saved as ATLASRELAY_SWA_APEX_TOKEN. The stack does not manage $ZONE yet, so publish it by hand:"
-        echo "      az network dns record-set txt add-record ${AZ_SUB[*]} -g $ZONE_RG -z $ZONE -n @ -v $token"
-      fi
+    [ "$(aget ATLASRELAY_SWA_APEX_TOKEN)" = "$token" ] || aset ATLASRELAY_SWA_APEX_TOKEN "$token"
+    # Publish whenever the zone lacks it, so a run interrupted after saving it still gets there.
+    published="$(az network dns record-set txt show -g "$ZONE_RG" -z "$ZONE" -n @ "${AZ_SUB[@]}" \
+      --query "TXTRecords[].value[]" -o tsv 2>/dev/null || true)"
+    if grep -Fxq "$token" <<<"$published"; then
+      echo "  already published at the apex"
+    elif [ "$MANAGED" = true ]; then
+      log "Publishing the token (scripts/provision.sh $ENV_NAME)"
+      provision
+    else
+      echo "  saved as ATLASRELAY_SWA_APEX_TOKEN. The stack does not manage $ZONE yet, so publish it by hand:"
+      echo "      az network dns record-set txt add-record ${AZ_SUB[*]} -g $ZONE_RG -z $ZONE -n @ -v $token"
     fi
   else
     echo "  no token yet (an apex that is already validated has none); re-run this script to check again"
