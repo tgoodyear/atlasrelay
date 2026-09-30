@@ -1,4 +1,4 @@
-import { anonymous, expect, test, uid } from './fixtures';
+import { expect, test, uid } from './fixtures';
 
 // A researcher posts a project through the form, it is listed and served with its own head, and the
 // owner edits it.
@@ -17,7 +17,7 @@ function headOf(html: string) {
   };
 }
 
-test('researcher adds a RIPE email, posts a project, and edits it', async ({ person, browser }) => {
+test('researcher adds a RIPE email, posts a project, and edits it', async ({ person, signedOut }) => {
   const researcher = await person({ role: 'researcher', profile: 'name' });
   const { page } = researcher;
   const tag = uid();
@@ -65,7 +65,7 @@ test('researcher adds a RIPE email, posts a project, and edits it', async ({ per
   expect(href.searchParams.get('title')).toBe(`Report a project: ${title}`);
 
   // Somebody else sees it on the listing, in the sitemap, and in the page the project-page function renders.
-  const visitor = await anonymous(browser);
+  const visitor = await signedOut();
   await visitor.page.goto(`/projects?q=${tag}`);
   await expect(visitor.page.getByRole('link', { name: title })).toBeVisible();
   await visitor.page.getByRole('link', { name: title }).click();
@@ -87,7 +87,6 @@ test('researcher adds a RIPE email, posts a project, and edits it', async ({ per
     ogUrl: `https://atlasrelay.org/projects/${id}`,
     canonical: `https://atlasrelay.org/projects/${id}`,
   });
-  await visitor.context.close();
 
   // The owner edits it.
   const newTitle = `${title} (revised)`;
@@ -111,8 +110,8 @@ test('researcher adds a RIPE email, posts a project, and edits it', async ({ per
   expect((await other.request.patch(`/api/projects/${id}`, { data: { title: 'hijacked' } })).status()).toBe(403);
 });
 
-test('unknown pages and projects are 404s', async ({ browser }) => {
-  const { page, context } = await anonymous(browser);
+test('unknown pages and projects are 404s', async ({ signedOut }) => {
+  const { page } = await signedOut();
 
   // A well-formed id that does not exist: the project-page function answers 404, and so does the API.
   const missing = 'zzzzzzzzzzzz0000';
@@ -129,5 +128,4 @@ test('unknown pages and projects are 404s', async ({ browser }) => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(/not found/);
   }
   await expect(page.getByRole('link', { name: 'Back to the front page' })).toBeVisible();
-  await context.close();
 });

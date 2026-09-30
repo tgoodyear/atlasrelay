@@ -1,8 +1,8 @@
-import { anonymous, expect, postProject, recordResponses, test } from './fixtures';
+import { expect, postProject, recordResponses, test } from './fixtures';
 
 // Who can see what: an anonymous pledge's name, and the researcher's RIPE NCC Access email.
 
-test('an anonymous pledge shows as Anonymous to everyone but the donor and the owner', async ({ person, browser }) => {
+test('an anonymous pledge shows as Anonymous to everyone but the donor and the owner', async ({ person, signedOut }) => {
   const researcher = await person({ role: 'researcher' });
   const donor = await person({ role: 'donor' });
   const project = await postProject(researcher);
@@ -29,7 +29,7 @@ test('an anonymous pledge shows as Anonymous to everyone but the donor and the o
   await expect(ownerView).toContainText('not shown publicly');
 
   // Everybody else sees Anonymous, on the page and in the API.
-  const visitor = await anonymous(browser);
+  const visitor = await signedOut();
   const seen = recordResponses(visitor.page);
   await visitor.page.goto(`/projects/${project.id}`);
   const publicView = visitor.page.locator('.pledge').filter({ hasText: '120 credits' });
@@ -41,16 +41,15 @@ test('an anonymous pledge shows as Anonymous to everyone but the donor and the o
   await other.page.goto(`/projects/${project.id}`);
   await expect(other.page.locator('.pledge').filter({ hasText: '120 credits' }).locator('strong')).toHaveText('Anonymous');
   await expect(other.page.locator('body')).not.toContainText(donor.name);
-  await visitor.context.close();
 });
 
-test('the RIPE NCC Access email reaches only a donor who starts a pledge', async ({ person, browser }) => {
+test('the RIPE NCC Access email reaches only a donor who starts a pledge', async ({ person, signedOut }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher);
   const email = researcher.email;
 
   // Anonymous visitor: pages, listing, sitemap, project page head and every API response.
-  const visitor = await anonymous(browser);
+  const visitor = await signedOut();
   const anonSeen = recordResponses(visitor.page);
   for (const path of ['/', '/projects', `/projects/${project.id}`]) {
     await visitor.page.goto(path);
@@ -84,5 +83,4 @@ test('the RIPE NCC Access email reaches only a donor who starts a pledge', async
   expect(JSON.stringify(created.project)).not.toContain(email);
   expect(JSON.stringify(created.pledge)).not.toContain(email);
   expect(await (await donor.request.get(`/api/projects/${project.id}`)).text()).not.toContain(email);
-  await visitor.context.close();
 });

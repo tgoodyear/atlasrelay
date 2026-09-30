@@ -1,5 +1,5 @@
 import { fmtCompact } from '../../src/lib/api';
-import { anonymous, expect, postProject, test } from './fixtures';
+import { expect, postProject, test } from './fixtures';
 
 // A donor pledges to transfer by hand on atlas.ripe.net: the site shows them where to send the
 // credits, the donor marks the pledge sent, and the researcher confirms it arrived.
@@ -9,7 +9,7 @@ interface Stats {
   fundedProjects: number;
 }
 
-test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ person, browser }) => {
+test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ person, signedOut }) => {
   const researcher = await person({ role: 'researcher' });
   const donor = await person({ role: 'donor' });
   const project = await postProject(researcher, { creditsRequested: 700 });
@@ -40,7 +40,7 @@ test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ 
   await expect(page.locator('dl.kv')).toContainText('Pending700');
 
   // The public sees the pledge and the name, and never the researcher's address.
-  const visitor = await anonymous(browser);
+  const visitor = await signedOut();
   await visitor.page.goto(`/projects/${project.id}`);
   await expect(visitor.page.locator('.pledge').filter({ hasText: donor.name })).toContainText('Pledged');
   await expect(visitor.page.locator('body')).not.toContainText(researcher.email);
@@ -77,7 +77,7 @@ test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ 
   await expect(page.getByText('This project is not accepting more credits.')).toHaveCount(0);
 
   // The home page figures moved. A fresh visitor, because the browser caches /api/stats.
-  const home = await anonymous(browser);
+  const home = await signedOut();
   const statsResponse = home.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/stats');
   await home.page.goto('/');
   const stats = ((await (await statsResponse).json()) as { stats: Stats }).stats;
@@ -90,8 +90,6 @@ test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ 
   await home.page.goto(`/projects?status=funded&q=${encodeURIComponent(project.title)}`);
   await expect(home.page.getByRole('link', { name: project.title })).toBeVisible();
 
-  await visitor.context.close();
-  await home.context.close();
 });
 
 test('a donor can cancel a manual pledge, and cannot hold two at once', async ({ person }) => {

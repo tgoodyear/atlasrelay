@@ -1,4 +1,4 @@
-import { acceptDialogs, allRows, anonymous, expect, postProject, row, signInAgain, test, type Person } from './fixtures';
+import { acceptDialogs, allRows, expect, postProject, row, signInAgain, test, type Person } from './fixtures';
 
 // "Delete my profile" removes the profile and the RIPE NCC Access email, closes the owner's open
 // projects, and leaves projects and pledges in place under the name Anonymous (docs/ARCHITECTURE.md,
@@ -15,7 +15,7 @@ async function deleteProfile(p: Person): Promise<string[]> {
   return dialogs;
 }
 
-test('deleting a profile removes it and its email, and anonymizes what stays', async ({ person, browser }) => {
+test('deleting a profile removes it and its email, and anonymizes what stays', async ({ person, signedOut }) => {
   const researcher = await person({ role: 'researcher' });
   const donor = await person({ role: 'donor' });
   const project = await postProject(researcher, { creditsRequested: 500 });
@@ -31,7 +31,7 @@ test('deleting a profile removes it and its email, and anonymizes what stays', a
   expect(await row('users', 'user', donor.id)).toBeNull();
   expect(await row('pledges', project.id, pledgeId)).toMatchObject({ donorName: 'Anonymous', amount: 200, status: 'confirmed' });
 
-  const visitor = await anonymous(browser);
+  const visitor = await signedOut();
   await visitor.page.goto(`/projects/${project.id}`);
   await expect(visitor.page.locator('.pledge').filter({ hasText: '200 credits' }).locator('strong')).toHaveText('Anonymous');
   await expect(visitor.page.locator('body')).not.toContainText(donor.name);
@@ -65,5 +65,4 @@ test('deleting a profile removes it and its email, and anonymizes what stays', a
   expect(me).toMatchObject({ atlasEmail: '', hasAtlasEmail: false });
   const my = await (await researcher.request.get('/api/my')).json();
   expect(my.projects.map((p: { id: string }) => p.id)).toContain(project.id);
-  await visitor.context.close();
 });

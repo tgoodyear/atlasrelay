@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
-import { anonymous, expect, postProject, test } from './fixtures';
+import { expect, postProject, test } from './fixtures';
 
 // axe-core on the main pages, signed out and signed in, against WCAG 2.1 A and AA.
 
@@ -13,15 +13,14 @@ async function checkPage(page: Page, label: string): Promise<void> {
   expect(summary, `${label}\n${summary.join('\n')}`).toEqual([]);
 }
 
-test('signed-out pages have no axe violations', async ({ browser, person }) => {
+test('signed-out pages have no axe violations', async ({ signedOut, person }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher);
-  const { page, context } = await anonymous(browser);
+  const { page } = await signedOut();
   for (const path of ['/', '/projects', `/projects/${project.id}`, '/how-it-works', '/privacy', '/dashboard', '/no-such-page']) {
     await page.goto(path);
     await checkPage(page, path);
   }
-  await context.close();
 });
 
 test('signed-in pages and the pledge dialog have no axe violations', async ({ person }) => {

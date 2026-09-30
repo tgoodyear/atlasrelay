@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import type { Page } from '@playwright/test';
-import { anonymous, expect, test, uid } from './fixtures';
+import { expect, test, uid } from './fixtures';
 
 // Signing in through the emulator's own sign-in page, the way a person does it locally: the header
 // link and the sign-in prompt lead to /.auth/login/<provider>, the emulator asks who to be, and the
@@ -25,8 +25,8 @@ async function completeMockSignIn(page: Page, provider: string, userId: string, 
   await page.locator('#submit').click();
 }
 
-test('sign in with GitHub, set up a profile and sign out', async ({ browser }) => {
-  const { page, request } = await anonymous(browser);
+test('sign in with GitHub, set up a profile and sign out', async ({ signedOut }) => {
+  const { page, request } = await signedOut();
   await serveEmulatorAssets(page);
   const id = `e2e${uid()}`;
   const handle = `gh-${id}`;
@@ -69,8 +69,8 @@ test('sign in with GitHub, set up a profile and sign out', async ({ browser }) =
   expect((await request.get('/api/me')).status()).toBe(401);
 });
 
-test('sign in with Microsoft from the sign-in prompt', async ({ browser }) => {
-  const { page, request } = await anonymous(browser);
+test('sign in with Microsoft from the sign-in prompt', async ({ signedOut }) => {
+  const { page, request } = await signedOut();
   await serveEmulatorAssets(page);
   const id = `e2e${uid()}`;
   const email = `ms.${id}@example.org`;

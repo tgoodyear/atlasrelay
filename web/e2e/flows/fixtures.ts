@@ -64,8 +64,14 @@ export async function localOnly(context: BrowserContext): Promise<void> {
   await context.route(/^https?:\/\/(?!localhost[:/]|127\.0\.0\.1[:/])/, (route) => route.abort('blockedbyclient'));
 }
 
+export interface Visitor {
+  context: BrowserContext;
+  page: Page;
+  request: APIRequestContext;
+}
+
 /** A browser context with nobody signed in. */
-export async function anonymous(browser: Browser): Promise<{ context: BrowserContext; page: Page; request: APIRequestContext }> {
+async function createVisitor(browser: Browser): Promise<Visitor> {
   const context = await browser.newContext({ baseURL: BASE_URL });
   await localOnly(context);
   return { context, page: await context.newPage(), request: context.request };
@@ -198,6 +204,8 @@ export function recordResponses(page: Page): () => Promise<string[]> {
 interface Fixtures {
   /** Sign in a new, unique person in their own browser context. Contexts are closed after the test. */
   person: (opts?: PersonOptions) => Promise<Person>;
+  /** A new browser context with nobody signed in. Contexts are closed after the test. */
+  signedOut: () => Promise<Visitor>;
 }
 
 export const test = base.extend<Fixtures>({
@@ -209,6 +217,15 @@ export const test = base.extend<Fixtures>({
       return p;
     });
     for (const p of made) await p.context.close();
+  },
+  signedOut: async ({ browser }, use) => {
+    const made: Visitor[] = [];
+    await use(async () => {
+      const v = await createVisitor(browser);
+      made.push(v);
+      return v;
+    });
+    for (const v of made) await v.context.close();
   },
 });
 

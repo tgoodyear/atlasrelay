@@ -1,8 +1,8 @@
-import { anonymous, expect, postProject, test } from './fixtures';
+import { expect, postProject, test } from './fixtures';
 
 // The owner reports what came of the work, and the project shows it.
 
-test('researcher posts results and the project shows them', async ({ person, browser }) => {
+test('researcher posts results and the project shows them', async ({ person, signedOut }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher, { creditsRequested: 300 });
   const statsBefore = (await (await researcher.request.get('/api/stats')).json()).stats;
@@ -26,7 +26,7 @@ test('researcher posts results and the project shows them', async ({ person, bro
   await expect(page.locator('.pill-navy', { hasText: 'Results' })).toBeVisible();
 
   // Visitors see it too, and the listing filter finds it.
-  const visitor = await anonymous(browser);
+  const visitor = await signedOut();
   await visitor.page.goto(`/projects/${project.id}`);
   await expect(visitor.page.getByText(summary)).toBeVisible();
   await visitor.page.goto(`/projects?status=results&q=${encodeURIComponent(project.title)}`);
@@ -40,5 +40,4 @@ test('researcher posts results and the project shows them', async ({ person, bro
   await page.getByLabel('Link to the results').fill('');
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.getByText('The owner posted results here and has since removed them.')).toBeVisible();
-  await visitor.context.close();
 });
