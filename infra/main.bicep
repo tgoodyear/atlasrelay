@@ -56,11 +56,12 @@ param githubOidcSubjectPrefix string
 param logDailyCapGb string = '0.1'
 
 @description('''Accept the data storage account's key. Off: only Microsoft Entra identities reach the data.
-On only while an environment moves off managed functions (docs/RUNBOOK.md).''')
+Leave off: the API and operators sign in with Entra ID and nothing reads the key.''')
 param storageSharedKeyAccess bool = false
 
-@description('''Link the Function App to the static web app as its API. Off only while an environment
-moves off managed functions (docs/RUNBOOK.md).''')
+@description('''Link the Function App to the static web app as its API.
+Off only to relink a lost identity provider ("Direct requests to the Function App" in
+docs/RUNBOOK.md) or to check a new app directly; an unlinked app answers every request as anonymous.''')
 param linkApi bool = true
 
 @description('Object id of the Owner who works on the tables by hand. Empty: nobody has data access.')

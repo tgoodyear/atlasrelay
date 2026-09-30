@@ -10,7 +10,7 @@ param stagingEnvironmentPolicy = 'Disabled'
 param githubRepo = readEnvironmentVariable('ATLASRELAY_GITHUB_REPO', 'tgoodyear/atlasrelay')
 param githubOidcSubjectPrefix = readEnvironmentVariable('ATLASRELAY_GITHUB_OIDC_SUBJECT_PREFIX')
 param logDailyCapGb = '0.1'
-// The next two are for moving an environment off managed functions only (docs/RUNBOOK.md).
+// Normally unset. See storageSharedKeyAccess and linkApi in main.bicep.
 param storageSharedKeyAccess = bool(readEnvironmentVariable('ATLASRELAY_STORAGE_SHARED_KEY', 'false'))
 param linkApi = !bool(readEnvironmentVariable('ATLASRELAY_API_UNLINKED', 'false'))
 param operatorPrincipalId = readEnvironmentVariable('ATLASRELAY_OPERATOR_PRINCIPAL_ID', '')
