@@ -85,6 +85,10 @@
       "rewrite": "/shell/how-it-works.html"
     },
     {
+      "route": "/privacy",
+      "rewrite": "/shell/privacy.html"
+    },
+    {
       "route": "/dashboard",
       "rewrite": "/shell/app.html"
     },
@@ -106,7 +110,7 @@
     }
   },
   "globalHeaders": {
-    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.in.applicationinsights.azure.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://*.in.applicationinsights.azure.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     "x-content-type-options": "nosniff",
     "referrer-policy": "strict-origin-when-cross-origin",
     "permissions-policy": "camera=(), microphone=(), geolocation=()",

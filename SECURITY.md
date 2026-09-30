@@ -69,7 +69,12 @@ id.
 **Telemetry carries no user ids, API keys or email addresses.** The site records page views, page load times, browser
 errors and the API calls each page makes in Azure Application Insights. It sets no cookies, stores
 nothing in the browser, and removes query strings and anything shaped like an API key or email
-address before sending. The API's own logs get the same treatment.
+address before sending. The API's own logs get the same treatment. Page views also carry the
+referring site's origin, and any `utm_source`, `utm_medium` and `utm_campaign` from the landing
+URL, redacted the same way and cut to 64 characters. A few actions are counted (opening the pledge
+form, making a pledge, posting a project, following a sign-in or atlas.ripe.net link) with the
+route, public project ids, the pledge method and the amount as a power-of-ten range. The
+[privacy page](https://www.atlasrelay.org/privacy) lists everything collected.
 
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.

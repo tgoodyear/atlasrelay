@@ -58,10 +58,12 @@ export default function HowItWorks() {
             Your RIPE NCC Access email is never shown on a public page. It is shown to a signed-in
             donor at the point they begin a manual pledge to your project, because they need it to
             transfer the credits, and each such donor appears by name on your project. No advertising
-            service receives anything, and there are no tracking cookies. The site does send
-            operational telemetry to Azure Application Insights, which is what tells us the API is
-            working: request paths, status codes, timings and errors, kept for 30 days. That stream
-            carries no profile fields, no RIPE NCC Access email and no API key.
+            service receives anything, and there are no tracking cookies. It does send usage statistics
+            and operational telemetry to Azure Application Insights, kept for 30 days: the pages
+            opened, the referring site, campaign tags on the link followed, a few actions such as
+            making a pledge, load times, errors, and API request paths, status codes and timings.
+            That stream carries no profile fields, no RIPE NCC Access email and no API key. The{' '}
+            <Link to="/privacy">privacy page</Link> has the details.
           </p>
           <p className="muted">
             RIPE Atlas API keys are never stored. A key you paste is used for a single transfer
@@ -69,8 +71,9 @@ export default function HowItWorks() {
           </p>
           <p className="muted">
             You can delete your profile, including your RIPE email, at any time from your{' '}
-            <Link to="/profile">profile page</Link>. Projects and pledges remain, carrying only the
-            display name you chose, because other people rely on that record.
+            <Link to="/profile">profile page</Link>. Projects and pledges remain and show as
+            Anonymous, because other people rely on that record. If any cannot be renamed at the
+            time, the profile page says so and it is finished by hand once you report it.
           </p>
         </div></div>
 

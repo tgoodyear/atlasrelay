@@ -202,7 +202,7 @@ Analytics workspace `log-internetresearch` (0.1 GB/day cap, 30-day retention).
 | --- | --- | --- |
 | Functions host | `AppRequests` | One row per API request: function name, status, duration. |
 | `api/src/lib/telemetry.ts` | `AppTraces` | JSON log lines with an `event` field: `dependency` for every RIPE Atlas and Table Storage call (operation, status, duration), `transfer` for the outcome of every API transfer, and `error`. |
-| `web/src/lib/telemetry.ts` | `AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, all with role `web` | Page views by route, page load timings, uncaught errors and unhandled promise rejections, and the API calls each page makes. |
+| `web/src/lib/telemetry.ts` | `AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, `AppEvents`, all with role `web` | Page views by route, with the referring site and any utm tags; page load timings; uncaught errors and unhandled promise rejections; the API calls each page makes; and the actions listed under [Traffic](#traffic). |
 | Availability test | `AppAvailabilityResults` | The home page, requested from 3 locations every 15 minutes. |
 
 Nothing sent contains a request or response body, a RIPE Atlas API key, an email address, a user
@@ -210,7 +210,10 @@ id or a query string. The API replaces anything shaped like a UUID (every RIPE A
 or an email address in every log line, and logs an unexpected error by class, code and status,
 never by message. The browser drops query strings and fragments from URLs, cuts the referrer to
 its origin, applies the same replacement, sets no cookies and writes nothing to local or session
-storage. `api/test/telemetry.test.ts` and `web/test/telemetry.test.ts` check these rules.
+storage. The only values it takes from a query string are `utm_source`, `utm_medium` and
+`utm_campaign`, lowercased, put through the same replacement and cut to 64 characters.
+`api/test/telemetry.test.ts` and `web/test/telemetry.test.ts` check these rules. The public page
+`/privacy` describes the same collection for visitors; change it with them.
 
 The Functions host does not record dependencies for Node apps, so RIPE Atlas and Table Storage
 calls are log lines rather than `AppDependencies` rows. `api/host.json` turns sampling off, so
@@ -224,13 +227,19 @@ so local and dev builds send nothing. The Deploy workflow passes the repository 
 `APPINSIGHTS_CONNECTION_STRING`, which `scripts/bootstrap.sh` sets from the Bicep output. The
 SDK loads once the page has finished loading, so the first page's own API calls are not in
 `AppDependencies`. Later calls are, and their `traceparent` header gives the API request the same
-operation id.
+operation id. It sends in batches and sends what is queued when the page is hidden or left, so an
+action followed by a navigation still arrives. A sign-in link clicked before the SDK has loaded
+starts the download at once and waits up to 1.5 seconds for it, so the click and the first page
+view are sent before the page is replaced. A visitor who closes the tab before the SDK loads is
+not counted.
 
 ### Where to look
 
-The workbook **Atlas Relay** (App Insights `appi-internetresearch`, Workbooks) shows traffic, page
-load times, API latency and failures, errors, availability, RIPE Atlas and Table Storage calls,
-and transfer outcomes.
+The workbook **Atlas Relay** (App Insights `appi-internetresearch`, Workbooks) has two tabs.
+**Operations** shows page load times, API latency and failures, errors, availability, RIPE Atlas
+and Table Storage calls, and transfer outcomes. **Traffic** shows visits, pages, referring sites,
+campaigns, countries, devices, the pledge funnel and projects posted per week; see
+[Traffic](#traffic).
 
 From a terminal, `scripts/logs.sh` runs a saved query from `ops/queries` against the workspace
 and prints a table. `scripts/logs.sh list` names the queries. It needs `az` and `jq`; set
@@ -241,7 +250,61 @@ scripts/logs.sh api-errors          # 5xx by function, and API error lines (last
 scripts/logs.sh transfers 7d        # API transfers and their outcome
 scripts/logs.sh ripe-atlas 6h       # RIPE Atlas calls by path and result
 scripts/logs.sh browser-exceptions  # browser errors by message
+scripts/logs.sh traffic 7d          # page loads per day, top pages, referrers, campaigns, countries
+scripts/logs.sh actions 30d         # the pledge funnel and other actions
 ```
+
+### Traffic
+
+The Traffic tab, `scripts/logs.sh traffic` and `scripts/logs.sh actions` read `AppPageViews` and
+`AppEvents` (role `web`), and `AppRequests` and `AppTraces` for the API's own counts.
+
+- **Page load**: one visit in one browser tab, counted by the random id each page load gets
+  (`SessionId`). Reloading, opening a second tab or coming back tomorrow starts a new one. With no
+  cookies and no user id there is no count of unique or returning visitors, and there cannot be one
+  without adding them.
+- **Page view**: one route shown. Moving around the site adds page views to the same page load.
+- **Referring site** (`Properties.referrerOrigin`): on the first page view of a page load, the
+  origin of the page that linked here. `direct` means the browser sent no referrer: a typed or
+  bookmarked address, a link in an email or chat app, or a site that withholds referrers.
+  `internal` marks later page views, and page loads that started from another page of this site.
+  Someone coming back from a first-time GitHub or Microsoft sign-in may show up with github.com or
+  a Microsoft login host as the referrer. Page views from before this was recorded show
+  `(not recorded)`.
+- **Campaign** (`Properties.utm_source`, `utm_medium`, `utm_campaign`): copied from the landing URL
+  onto every page view of that page load. Tag the links you post, for example
+  `https://www.atlasrelay.org/?utm_source=ripe-atlas-list`, and the page loads they bring count
+  under that source. Other query parameters are never read.
+- **Country, device, browser**: App Insights works out the location from the IP address when the
+  data arrives and stores the address as `0.0.0.0`. Device is Mobile for iOS and Android and
+  Desktop otherwise; `ClientType` reads "PC" for every browser, so it is not used.
+- **Bots**: browsers whose name contains bot, crawler or spider, and headless Chrome, are left out
+  of every count and shown on one tile. Crawlers that do not run JavaScript never appear at all.
+
+Actions are `AppEvents` rows. Each also carries `page`, the route it happened on.
+
+| Event | Sent when | Properties |
+| --- | --- | --- |
+| `pledge-started` | "Send credits" opens the pledge form | `projectId` |
+| `pledge-completed` | The API accepted a pledge: RIPE Atlas accepted an API transfer, or a manual pledge was recorded and the donor shown the address. Whether a manual donor then sends is not tracked. | `projectId`, `method` (`api` or `manual`), `amount` (`1-999`, `1000-9999`, ... `1000000+`) |
+| `project-posted` | A new project was saved | `projectId` |
+| `sign-in-clicked` | A `/.auth/login/...` link was followed | `provider` (`github` or `aad`) |
+| `outbound-click` | A link to atlas.ripe.net was clicked or middle-clicked | `host`, `path` (up to three segments, numbers as `:n`) |
+
+A project page view is a page view named `/projects/:id`; its `Url` holds the project id, so there
+is no separate event for it. Pledge amounts are sent as a power-of-ten range because the exact
+amount, date and name of every pledge are public, and an exact amount would match one pledge row.
+
+The browser only counts visitors whose browser loaded the telemetry and could reach App Insights;
+content blockers stop both. The API counts (201 answers from `pledges-create` and
+`projects-create`, and `transfer` lines with outcome `confirmed` or `unrecorded`) include everyone,
+so quote those for how many pledges and projects there were. The funnel compares browser counts
+with browser counts, and `actions` shows the API count beside them. Never add the two.
+
+What these numbers cannot tell you: unique or returning visitors, time on the site, visits from
+browsers that block App Insights or do not run JavaScript, and what people searched for. Google
+Search Console has search queries. Static Web Apps Free keeps no access logs, so there is no
+server-side count of page requests to compare with.
 
 ### Alerts
 
@@ -272,7 +335,8 @@ The alerts, availability test, action group and workbook are declared in `infra/
 a module of `infra/platform.bicep`. The CI role has no `Microsoft.Insights` write permission, so
 only `scripts/bootstrap.sh`, run as an Owner, deploys them. The alert queries, the workbook and
 `ops/queries` read the JSON field names that `api/src/lib/telemetry.ts` writes, so change them
-together.
+together. The Traffic tab reads the page view properties and event names that
+`web/src/lib/telemetry.ts` sends, and its action table is `ops/queries/actions.kql` word for word.
 
 `infra/workbooks/atlasrelay.json` is the workbook in the portal's own format. To change it, edit
 the workbook in the portal, open the Advanced Editor, copy the Gallery Template JSON into that
@@ -360,11 +424,11 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and re-run th
 
 - **Pages and status codes**: the build writes one HTML file per kind of page from
   `web/index.html` (`web/src/lib/pages.ts`, run from `web/vite.config.ts`): `index.html` for the
-  home page, `shell/projects.html`, `shell/how-it-works.html`, `shell/project.html` (the
-  template for project pages), `shell/app.html` for the pages behind sign-in, and `404.html`.
-  Each has its own title and description, and a line of text inside `#root` for clients that do
-  not run JavaScript. The home, projects and how-it-works files carry a canonical URL, and the
-  sign-in and not-found files carry `noindex` instead. `staticwebapp.config.json` rewrites each
+  home page, `shell/projects.html`, `shell/how-it-works.html`, `shell/privacy.html`,
+  `shell/project.html` (the template for project pages), `shell/app.html` for the pages behind
+  sign-in, and `404.html`. Each has its own title and description, and a line of text inside
+  `#root` for clients that do not run JavaScript. The home, projects, how-it-works and privacy
+  files carry a canonical URL, and the sign-in and not-found files carry `noindex` instead. `staticwebapp.config.json` rewrites each
   route to its file. There is no navigation fallback, so any other path gets `404.html` with a
   404 status. Adding a route to `web/src/App.tsx` means adding a rule for it too;
   `web/test/seo.test.ts` fails until you do.
@@ -392,7 +456,7 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and re-run th
   with the same page and a 200, and the canonical tag names the path without it. The project page
   function does the same for `/projects/<id>/`.
 - **Sitemap**: `/sitemap.xml` is rewritten to `GET /api/sitemap`, which lists the home page, the
-  project list, the how-it-works page and every project an operator has not taken down
+  project list, the how-it-works and privacy pages and every project an operator has not taken down
   (`moderationClosed`). Responses may be cached for an hour. If storage fails it answers 503.
 - **IndexNow**: after a production deploy, the `indexnow` job in `deploy.yml` reads the live
   sitemap and posts its URLs to `https://api.indexnow.org/indexnow`. The key is the name and the

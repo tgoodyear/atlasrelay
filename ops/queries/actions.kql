@@ -1,0 +1,57 @@
+// The pledge funnel and other actions as the browser reported them, beside the API's own counts.
+// Steps: a project page viewed, "Send credits" clicked (pledge-started), a pledge made
+// (pledge-completed, by method), a project posted, then sign-in and atlas.ripe.net links followed.
+// PageLoads is the number of page loads in which the step happened (no cookies, so a page load is
+// the nearest thing to a visit), Events the number of times, and PctOfViews the share of project
+// page loads that reached the step. Api counts 201 answers from pledges-create and projects-create
+// and "transfer" log lines with outcome confirmed or unrecorded (by hand = the rest); it includes
+// visitors whose browser sent no telemetry, so it can be higher. The two columns are never added.
+// Fuzzy, with the summarize inside each leg, so the query runs before any action has been sent.
+let notBot = (b: string) { not(b contains "bot" or b contains "crawler" or b contains "spider" or b startswith "HeadlessChrome") };
+let browser = union isfuzzy=true
+        (AppPageViews
+            | where Name == "/projects/:id" and notBot(ClientBrowser)
+            | summarize Events = tolong(sum(ItemCount)) by SessionId, Name = "project-viewed", Method = "", Detail = ""),
+        (AppEvents
+            | where AppRoleName == "web" and notBot(ClientBrowser)
+            | summarize Events = tolong(sum(ItemCount))
+                by SessionId, Name, Method = tostring(Properties.method),
+                Detail = strcat(tostring(Properties.provider), tostring(Properties.path))),
+        (datatable(SessionId: string, Name: string, Method: string, Detail: string, Events: long)[]);
+let api = union isfuzzy=true
+        (AppRequests
+            | where Name in ("pledges-create", "projects-create") and ResultCode == "201"
+            | summarize Count = tolong(sum(ItemCount)) by Name),
+        (AppTraces
+            | where Message has '"event":"transfer"'
+            | extend e = parse_json(Message)
+            | where tostring(e.event) == "transfer" and tostring(e.outcome) in ("confirmed", "unrecorded")
+            | summarize Count = count() by Name = "api-transfer"),
+        (datatable(Name: string, Count: long)[]);
+let apiCount = (n: string) { toscalar(api | where Name == n | summarize sum(Count)) };
+let pledged = apiCount("pledges-create");
+let transferred = apiCount("api-transfer");
+let steps = datatable(Order: int, Step: string, Name: string, Method: string)[
+    1, "Project page viewed", "project-viewed", "*",
+    2, "Pledge started (Send credits)", "pledge-started", "*",
+    3, "Pledge completed", "pledge-completed", "*",
+    4, "Pledge completed by API transfer", "pledge-completed", "api",
+    5, "Pledge completed by hand", "pledge-completed", "manual",
+    6, "Project posted", "project-posted", "*"];
+let viewed = toscalar(browser | where Name == "project-viewed" | summarize dcount(SessionId));
+let funnel = steps
+    | join kind=leftouter browser on Name
+    | extend Match = isnotempty(SessionId) and (Method == "*" or Method == Method1)
+    | summarize PageLoads = dcountif(SessionId, Match), Events = sumif(Events, Match) by Order, Step
+    | extend PctOfViews = iff(Order <= 5 and viewed > 0, round(100.0 * PageLoads / viewed, 1), real(null)),
+        Api = case(Order == 3, pledged, Order == 4, transferred, Order == 5, pledged - transferred,
+            Order == 6, apiCount("projects-create"), long(null));
+let links = browser
+    | where Name in ("sign-in-clicked", "outbound-click")
+    | summarize PageLoads = dcount(SessionId), Events = sum(Events) by Name, Detail
+    | extend Order = toint(iff(Name == "sign-in-clicked", 7, 8)),
+        Step = strcat(iff(Name == "sign-in-clicked", "Sign-in link followed: ", "atlas.ripe.net link followed: "), Detail),
+        PctOfViews = real(null), Api = long(null);
+union funnel, links
+| order by Order asc, PageLoads desc
+| project Step, PageLoads, Events, PctOfViews, Api
