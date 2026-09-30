@@ -2,8 +2,8 @@
 # Checks infra/main.bicepparam against the settings it reads, without Azure:
 # 1. It compiles for prod and for dev, with placeholder settings, so a parameter that main.bicep
 #    rejects (a bad default, an environment name the storage account can't hold) fails here.
-# 2. Every setting it reads is listed in .azure/env.example, and every setting listed there is
-#    either read by it or written by scripts/bootstrap.sh or the stack's outputs.
+# 2. Every setting it reads, and every stack output, is listed in .azure/env.example, and every
+#    setting listed there is read by it, written by the scripts (aset), or a stack output.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 status=0
@@ -23,6 +23,13 @@ fi
 missing=$(comm -23 <(echo "$output_keys") <(echo "$example_keys"))
 if [ -n "$missing" ]; then
   echo "stack outputs missing from .azure/env.example: $(tr '\n' ' ' <<< "$missing")" >&2
+  status=1
+fi
+script_keys=$(grep -ho 'aset [A-Z_][A-Z0-9_]*' scripts/*.sh scripts/lib/*.sh | cut -d' ' -f2)
+known=$(printf '%s\n%s\n%s\n' "$read_keys" "$output_keys" "$script_keys" | grep -v '^$' | sort -u)
+unknown=$(comm -23 <(echo "$example_keys") <(echo "$known"))
+if [ -n "$unknown" ]; then
+  echo "settings in .azure/env.example that nothing reads or writes: $(tr '\n' ' ' <<< "$unknown")" >&2
   status=1
 fi
 [ $status -eq 0 ] && echo "infra/main.bicepparam compiles for prod and dev; .azure/env.example lists its settings"

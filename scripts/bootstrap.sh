@@ -95,9 +95,8 @@ aset ATLASRELAY_GITHUB_REPO "$REPO"
 aset ATLASRELAY_GITHUB_OIDC_SUBJECT_PREFIX "$prefix"
 [ -z "$DOMAIN" ] || aset ATLASRELAY_DNS_ZONE "$DOMAIN"
 if [ -n "$EMAIL" ]; then
+  # The budget's start date is worked out on every deployment (sync_budget_start).
   aset ATLASRELAY_ALERT_EMAIL "$EMAIL"
-  # A budget's start date can never change: set it once.
-  [ -n "$(aget ATLASRELAY_BUDGET_START)" ] || aset ATLASRELAY_BUDGET_START "$(date -u +%Y-%m-01)"
 fi
 [ -n "$(aget ATLASRELAY_ALERT_EMAIL)" ] || echo "  no --alert-email: the stack deploys no action group and no alerts"
 

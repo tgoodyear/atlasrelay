@@ -114,10 +114,29 @@ save_outputs() {
   done < <(awk -F'\t' 'NR == 1 { n = split($0, k, "\t") }
       NR == 2 { split($0, v, "\t"); for (i = 1; i <= n; i++) print k[i] "\t" toupper(k[i]) "\t" v[i] }' <<< "$out")
 }
+# The budget exists only with an alert address. Azure accepts only the current month as the start
+# of a new budget and never lets it change afterwards, so ATLASRELAY_BUDGET_START follows the
+# budget: its own start date while it exists, the current month when it is about to be created
+# (again). Any error other than "not found" stops here, so a deployment never re-bases a period.
+sync_budget_start() {
+  [ -n "$(aget ATLASRELAY_ALERT_EMAIL)" ] || return 0
+  local url out
+  url="https://management.azure.com/subscriptions/$(aget AZURE_SUBSCRIPTION_ID)/resourceGroups/rg-atlasrelay-$ENV_NAME/providers/Microsoft.Consumption/budgets/budget-atlasrelay-$ENV_NAME?api-version=2023-11-01"
+  if out=$(az rest --method get --url "$url" --query properties.timePeriod.startDate -o tsv 2>&1); then
+    [ -n "$out" ] || { echo "error: budget-atlasrelay-$ENV_NAME has no start date" >&2; return 1; }
+    aset ATLASRELAY_BUDGET_START "${out:0:10}"
+  elif grep -qiE 'NotFound|could not be found' <<< "$out"; then
+    aset ATLASRELAY_BUDGET_START "$(date -u +%Y-%m-01)"
+  else
+    echo "error: can't read budget-atlasrelay-$ENV_NAME: $out" >&2
+    return 1
+  fi
+}
 # A new custom role can take a minute or two to replicate before it can be assigned
 # (RoleDefinitionDoesNotExist). The deployment is idempotent, so retry.
 provision() {
   local attempt
+  sync_budget_start || die "could not work out the budget's start date"
   for attempt in 1 2 3; do
     deploy_stack && save_outputs && return 0
     [ "$attempt" = 3 ] && die "provisioning failed three times"
