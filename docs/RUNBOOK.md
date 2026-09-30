@@ -23,6 +23,17 @@ deployed from the same template. Environment names are 1 to 6 lowercase letters 
 
 Every resource is tagged `project=atlasrelay` and `environment=<env>`. `dev` gets the same set
 with `dev` in the names, no zone, and a `dev` CNAME in the prod zone (`infra/dns-subdomain.bicep`).
+It also gets the full-flow test harness, which is never deployed in prod
+([Full-flow tests on dev](#full-flow-tests-on-dev)):
+
+| Resource (dev only) | dev | Declared in |
+| --- | --- | --- |
+| Virtual network with subnets `snet-cae` and `snet-pe`, private DNS zone `privatelink.vaultcore.azure.net` | `vnet-atlasrelay-dev` | `infra/testharness.bicep` |
+| Key Vault for the test accounts, no public network access, with a private endpoint | `kv-atlasrelay-dev-<3 characters>`, `pe-atlasrelay-dev-kv` | `infra/testharness.bicep` |
+| Test identity: reads the vault's secrets, writes the results | `id-atlasrelay-dev-e2e` | `infra/testharness.bicep` |
+| Storage account for test results, container `results`, Entra ID only | `stare2edev<6 characters>` | `infra/testharness.bicep` |
+| Container Apps environment in `snet-cae`, and the test job | `cae-atlasrelay-dev`, `caj-atlasrelay-dev-e2e` | `infra/testharness.bicep` |
+| Custom role for the CI identity, and its read access to the results | "Atlas Relay e2e runner (dev)" | `infra/testharness-rbac.bicep` |
 
 `scripts/bootstrap.sh` and `scripts/provision.sh` deploy the stack with
 `--action-on-unmanage deleteResources` and `--deny-settings-mode denyDelete`:
@@ -38,7 +49,8 @@ with `dev` in the names, no zone, and a `dev` CNAME in the prod zone (`infra/dns
 
 CI deploys no Bicep. The CI roles can read the resource group, the static web app and its linked
 backend, list the site's deployment token, and read the Function App and publish a package to it.
-They grant nothing else. Every infrastructure change is a stack deployment by a subscription Owner.
+They grant nothing else. In dev, CI can also start the test job and read its results and logs.
+Every infrastructure change is a stack deployment by a subscription Owner.
 
 No storage account accepts shared keys. The API signs in to storage with its managed identity, and
 the operator named in the setting `ATLASRELAY_OPERATOR_PRINCIPAL_ID` (whoever ran
@@ -211,13 +223,14 @@ TOKEN=$(az staticwebapp secrets list -n swa-atlasrelay-dev -g rg-atlasrelay-dev 
 npx swa deploy web/dist --deployment-token "$TOKEN" --env production
 ```
 
-`scripts/teardown.sh dev` removes it again, the CNAME included.
+`scripts/teardown.sh dev` removes it again, the CNAME and the test harness included.
 
 ## Testing a deployed site
 
 Pull requests run the full-flow tests (`web/e2e/flows`, see [CONTRIBUTING.md](../CONTRIBUTING.md))
 against a copy of the whole application on the CI runner, with the emulator's sign-in and a stub
-in place of the RIPE Atlas API. A deployed site gets two more checks.
+in place of the RIPE Atlas API. A deployed site gets three more checks: the smoke test, the
+full-flow tests on dev with real Microsoft sign-in, and a short list of manual checks.
 
 ### Smoke test
 
@@ -234,19 +247,164 @@ BASE_URL=https://atlasrelay.org npm run test:smoke -w web
 
 The same file runs against the local stack in every full-flow run.
 
+### Full-flow tests on dev
+
+`e2e-real/` signs two test accounts into https://dev.atlasrelay.org through the real Microsoft
+sign-in page and runs the flow there, with the page steps the local full-flow tests use
+(`web/e2e/ui.ts`): the researcher saves a profile and posts a project, the donor pledges to
+transfer by hand and marks the credits sent, the researcher confirms them and posts results, and a
+signed-out visitor sees the funded project without the researcher's email. No credits move. The
+tests delete both profiles before and after each run; the site cannot delete a project, so each
+run leaves one closed project shown as Anonymous.
+
+The tests run in Azure. `.github/workflows/e2e-dev.yml`:
+
+1. builds the test image from `e2e-real/Dockerfile` and pushes it to
+   `ghcr.io/tgoodyear/atlasrelay-e2e`, tagged with the commit;
+2. in the GitHub Environment `dev`, signs in to Azure as the dev CI identity (OIDC) and starts the
+   Container Apps job `caj-atlasrelay-dev-e2e` with that image, pinned by digest;
+3. waits for the execution (the job gives a run 20 minutes, and never retries);
+4. downloads the results from the storage account's `results` container, uploads them as the
+   run's artifact, and fails the run unless every test passed.
+
+Inside the job, `e2e-real/run.mjs` reads the accounts from the Key Vault
+`kv-atlasrelay-dev-<3 characters>` as the job's identity, through the vault's private endpoint,
+signs both accounts in once (`e2e-real/global-setup.ts`, outside any trace or report), runs the
+suite, and replaces the passwords and the site's session cookies with `[redacted]` in the output
+and in every result file, trace archives included, before uploading. GitHub never holds the
+passwords, and the CI identity has no role on the vault.
+
+#### Setting it up
+
+Once per dev environment, as the Owner:
+
+1. Bootstrap dev and put a build on it ([Dev environment](#dev-environment)). For `dev`,
+   `scripts/bootstrap.sh` also deploys the harness, gives you write access to the vault's secrets
+   (the setting `ATLASRELAY_OPERATOR_PRINCIPAL_ID`), makes the GitHub Environment `dev` wait for your
+   approval, stores the identifiers the workflow reads as variables of that environment, and sets
+   the repository variable `DEV_ENABLED=true`.
+2. Create the test tenant and its two users:
+   - At https://entra.microsoft.com, **Manage tenants**, **Create**, a Microsoft Entra ID
+     tenant. It needs no subscription and holds nothing but the two users.
+   - In the new tenant, **Overview**, **Properties**, **Manage security defaults**: off, so the
+     users are not asked to register for MFA.
+   - **Users**, **New user**: a researcher and a donor, for example
+     `researcher@<tenant>.onmicrosoft.com` and `donor@<tenant>.onmicrosoft.com`, each with a long
+     random password.
+   - Sign in once with each at https://dev.atlasrelay.org/login/microsoft in a private window.
+     Microsoft may ask for a new password (set one, and use that below) and whether the site may
+     read the profile (accept).
+3. Store the accounts in the vault:
+
+   ```bash
+   scripts/set-test-users.sh dev
+   ```
+
+   It asks for the two usernames and passwords (the passwords without echo), or takes them from
+   `E2E_RESEARCHER_USERNAME`, `E2E_RESEARCHER_PASSWORD`, `E2E_DONOR_USERNAME` and
+   `E2E_DONOR_PASSWORD`. The vault normally refuses every connection from outside its network.
+   The script adds a rule for this machine's public IPv4 address (`--ip` to give it), turns public
+   access on with every other address denied, writes the four secrets through Key Vault's REST
+   API, then removes the rule and turns public access off, even if a step failed or you pressed
+   Ctrl-C. If closing fails, it prints a warning; `scripts/provision.sh dev` closes the vault too,
+   since the template declares public access off. Run it again to change a
+   password.
+4. Run the workflow once (below). The first run pushes the image as a private package, and the
+   run job stops with "cannot be pulled anonymously". Make the package public: on GitHub, your
+   profile, **Packages**, `atlasrelay-e2e`, **Package settings**, **Change visibility**,
+   **Public**. It holds only the test code in this repository. Then re-run the failed job.
+
+#### Running it
+
+The workflow runs after every push to `main` that changes `web/`, `api/`, `infra/`, `e2e-real/`
+or the workflow, and by hand:
+
+```bash
+gh workflow run e2e-dev.yml --ref main
+```
+
+Only the owner can make it run:
+
+- It has no pull request trigger of any kind, so neither a pull request nor a fork can start it.
+  Only the owner can merge to `main` (the "Protect main" ruleset).
+- Every job runs only when the repository is `tgoodyear/atlasrelay`, the actor is `tgoodyear` and
+  the ref is `main`.
+- The job that gets an Azure token runs in the GitHub Environment `dev`, which only `main` may use
+  and which waits for the owner's approval, with no bypass for administrators. On the run's page,
+  **Review deployments**, tick `dev`, **Approve and deploy**. The dev CI identity trusts only jobs
+  in that environment (its federated credential's subject ends in `:environment:dev`).
+- While dev does not exist (`DEV_ENABLED` is not `true`), the workflow prints a notice and does
+  nothing else.
+
+To let runs start without the approval, run `scripts/bootstrap.sh dev --no-approval`. Removing the
+reviewer in the repository's **Settings**, **Environments**, `dev` works too, but the next
+`scripts/bootstrap.sh dev` without `--no-approval` puts it back.
+
+#### Reading the results
+
+The run's summary page lists each test and its outcome. The artifact `e2e-dev-gh-<run id>-<attempt>`
+holds:
+
+- `summary.json`: the outcome, the counts, each test with its error, the image and commit, and
+  which files were redacted;
+- `report.json`: the Playwright report;
+- `console.txt`: the suite's output;
+- `test-results/`: for a failed test, screenshots, `error-context.md` (the page as the test saw
+  it) and `trace.zip` (open it with `npx playwright show-trace trace.zip`);
+- `job-logs.tsv`, when the execution did not succeed: the job's console and system logs from Log
+  Analytics, which covers a container that never started. The logs take a few minutes to arrive;
+  re-run the job if the file is empty.
+
+The same files stay in the `results` container, under `runs/<run id>/`, for 30 days.
+
+Microsoft sign-in errors name the page they stopped on: "register for MFA" means security defaults
+are on in the test tenant; "change its password" means the password expired or was reset, so sign
+in by hand, set a new one and run `scripts/set-test-users.sh dev` again.
+
+#### Accounts with MFA
+
+If the test tenant has to require MFA, give each account an authenticator app with a TOTP seed
+(**Security info**, **Add sign-in method**, **Authenticator app**, **I want to use a different
+authenticator app**, **Can't scan image?** shows the secret key) and store the seed with the
+account:
+
+```bash
+E2E_RESEARCHER_TOTP=<secret key> E2E_DONOR_TOTP=<secret key> scripts/set-test-users.sh dev
+```
+
+The sign-in then answers the code prompt with a code computed from the seed (`e2e-real/lib/totp.mjs`).
+Pass the seeds through a prompt of your own (`read -rs`) rather than typing them into the command
+line, so they stay out of the shell history.
+
+#### A real RIPE Atlas transfer (not enabled)
+
+`e2e-real/specs/ripe-transfer.spec.ts` is a skipped placeholder. The comment in it describes the
+test: a RIPE Atlas API key with only the transfer permission, stored in the same vault as
+`e2e-donor-ripe-transfer-key`, and a one-credit API pledge to a second real RIPE Atlas account.
+Until then, API transfers are a manual check.
+
+#### Removing it
+
+`scripts/teardown.sh dev` removes the harness with the rest of dev: the network, the vault (purged
+after it is deleted, so the same name can be used again at once), the job, the environment and the
+results. It deletes the repository variable `DEV_ENABLED` first and the GitHub Environment `dev`
+with its variables. The test tenant and the GHCR package are outside Azure and stay; delete them by
+hand if dev will not come back.
+
 ### Manual checks
 
-Real sign-in and real transfers never run in CI. Check them by hand on a dev environment
-(`scripts/bootstrap.sh dev`, then upload the build to test as described under
+Real transfers never run in CI, and GitHub sign-in is not automated. Check them by hand on a dev
+environment (`scripts/bootstrap.sh dev`, then upload the build to test as described under
 [Dev environment](#dev-environment)), not on prod: they create projects, pledges and profiles, and
 a transfer moves real credits. Use two browsers, or one normal and one private window, for the
-researcher and the donor.
+researcher and the donor. Microsoft sign-in, the profile, a manual pledge, confirming it and
+posting results are covered by the full-flow tests on dev.
 
 1. **GitHub sign-in.** Click **Sign in**, sign in with a real GitHub account, and expect
    `/dashboard` with your username in the header. **Sign out** returns to the home page, signed out.
-2. **Microsoft sign-in.** From `/dashboard` signed out, click **Continue with Microsoft** and sign
-   in. Microsoft sends an email address as the username: post a project without changing the
-   display name, and check that the byline shows only the part before the `@`.
+2. **Microsoft username.** Microsoft sends an email address as the username. Sign in with
+   **Continue with Microsoft**, post a project without changing the display name, and check that
+   the byline shows only the part before the `@`.
 3. **Profile.** Save a display name and the RIPE NCC Access email of a real atlas.ripe.net
    account. That account is the researcher.
 4. **API transfer.** As the researcher, post a project asking for 1,000 credits. As the donor,
@@ -256,10 +414,9 @@ researcher and the donor.
    **Credits transferred** and a pledge marked **Transferred via API**. A minute or two later both
    accounts' logs at https://atlas.ripe.net/credits/transactions/ show the 100 credits. Delete
    the key.
-5. **Manual transfer.** Pledge 100 more by hand: the dialog shows the researcher's RIPE email.
-   Transfer the credits on https://atlas.ripe.net/credits/transfer/, click
-   **I've sent the credits**, and as the researcher click **Confirm received** once the credits
-   show up.
+5. **Manual transfer.** Pledge 100 more by hand, transfer the credits on
+   https://atlas.ripe.net/credits/transfer/ to the email the dialog shows, and check both accounts'
+   transaction logs.
 6. **Clean up.** Delete both profiles on `/profile`, or remove the environment with
    `scripts/teardown.sh dev`.
 
@@ -277,8 +434,8 @@ Removing a resource from the templates deletes it on that deployment. A new sett
 `infra/main.bicepparam` as a `readEnvironmentVariable` and in `.azure/env.example`;
 `scripts/check-params.sh` fails when the two disagree.
 
-`scripts/teardown.sh <env>` deletes an environment: its stack, resource group, custom role and
-GitHub Environment. For prod it also deletes the zone and removes the repository secrets, so the
+`scripts/teardown.sh <env>` deletes an environment: its stack, resource group, custom roles and
+GitHub Environment, and purges the test vault of a non-prod environment. For prod it also deletes the zone and removes the repository secrets, so the
 Deploy workflow builds without deploying until prod is bootstrapped again. A new zone gets new
 name servers, and the registrar has to be updated.
 

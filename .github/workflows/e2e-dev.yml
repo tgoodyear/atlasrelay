@@ -1,0 +1,251 @@
+name: Full-flow tests on dev
+
+# Signs two test accounts into the dev site through the real Microsoft sign-in and runs the full
+# flow there (e2e-real/). The tests run in Azure, as the Container Apps job E2E_JOB_NAME, which reads
+# the accounts' passwords from a Key Vault that has no public network access. This workflow builds
+# the test image, starts the job with it, waits, and collects the redacted results. It never holds
+# the passwords. docs/RUNBOOK.md, "Full-flow tests on dev".
+#
+# Only the owner can make it run:
+# - It runs after a push to main (only the owner can merge under the "Protect main" ruleset) that
+#   touches code the flow depends on, or by hand. There is no pull request trigger of any kind, so
+#   a fork or a pull request cannot start it.
+# - Every job checks the repository, the actor and the branch.
+# - The job that gets an Azure token runs in the GitHub Environment dev, which only main may use and
+#   which waits for the owner's approval. The CI identity trusts that environment and nothing else.
+# - While dev does not exist (the repository variable DEV_ENABLED is not true), it only prints a
+#   notice.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'api/**'
+      - 'infra/**'
+      - 'e2e-real/**'
+      - '.github/workflows/e2e-dev.yml'
+  workflow_dispatch:
+
+# One run at a time: two runs would sign the same accounts in and delete each other's profiles.
+concurrency:
+  group: e2e-dev
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}-e2e
+
+jobs:
+  not-enabled:
+    name: dev is not bootstrapped
+    if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Skip
+        run: echo "::notice::The dev environment does not exist (repository variable DEV_ENABLED is not true), so there is nothing to test. scripts/bootstrap.sh dev sets it."
+
+  image:
+    name: Build the test image
+    if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the Playwright versions agree
+        run: node --test e2e-real/test/versions.test.mjs
+
+      - name: Build and push
+        id: push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="${IMAGE,,}"
+          tag="$image:sha-$GITHUB_SHA"
+          docker build --pull -f e2e-real/Dockerfile \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$tag" .
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$tag"
+          docker logout ghcr.io
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$tag")"
+          [[ $digest == "$image@sha256:"* ]] || { echo "::error::no registry digest for $tag"; exit 1; }
+          echo "image=$digest" >> "$GITHUB_OUTPUT"
+          echo "pushed $digest"
+
+  run:
+    name: Run the tests in Azure
+    needs: image
+    if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # The CI identity trusts jobs in this GitHub Environment only; scripts/bootstrap.sh restricts it
+    # to main and makes it wait for the owner's approval.
+    environment: dev
+    timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # Variables of the GitHub Environment dev, set by scripts/bootstrap.sh dev.
+      RESOURCE_GROUP: ${{ vars.E2E_RESOURCE_GROUP }}
+      JOB_NAME: ${{ vars.E2E_JOB_NAME }}
+      RESULTS_ACCOUNT: ${{ vars.E2E_RESULTS_ACCOUNT }}
+      RESULTS_CONTAINER: ${{ vars.E2E_RESULTS_CONTAINER }}
+      LOG_WORKSPACE_ID: ${{ vars.E2E_LOG_WORKSPACE_ID }}
+      SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      IMAGE_REF: ${{ needs.image.outputs.image }}
+      API: 2025-07-01
+    steps:
+      - name: Check the settings
+        run: |
+          for v in RESOURCE_GROUP JOB_NAME RESULTS_ACCOUNT RESULTS_CONTAINER LOG_WORKSPACE_ID SUBSCRIPTION_ID IMAGE_REF; do
+            [ -n "${!v}" ] || { echo "::error::$v is empty; run scripts/bootstrap.sh dev"; exit 1; }
+          done
+
+      # The job pulls the image without credentials, so the package has to be public. A new GHCR
+      # package is private until the owner changes it (docs/RUNBOOK.md).
+      - name: Check the image is public
+        run: |
+          repo="${IMAGE_REF#ghcr.io/}"; repo="${repo%@*}"; digest="${IMAGE_REF#*@}"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r '.token // empty')"
+          if ! curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/${repo}/manifests/${digest}"; then
+            echo "::error::ghcr.io/${repo} cannot be pulled anonymously. Make the package public once (docs/RUNBOOK.md, Full-flow tests on dev)."
+            exit 1
+          fi
+
+      - name: Azure login (OIDC via managed identity)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The job's own container definition with the image swapped for the one just built, pinned by
+      # digest, and a run id the results are filed under. Everything else (the environment variables
+      # naming the vault and the secrets, CPU, memory) comes from the job as Bicep declared it.
+      - name: Start the job
+        id: start
+        run: |
+          job_url="https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$JOB_NAME"
+          run_id="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          az rest --method get --url "$job_url?api-version=$API" -o json > job.json
+          jq --arg image "$IMAGE_REF" --arg run "$run_id" --arg sha "$GITHUB_SHA" '
+            def setenv($n; $v): (.env // []) | map(select(.name != $n)) + [{name: $n, value: $v}];
+            {containers: [.properties.template.containers[]
+              | .image = $image
+              | .env = (setenv("E2E_RUN_ID"; $run))
+              | .env = (setenv("E2E_IMAGE"; $image))
+              | .env = (setenv("E2E_GIT_SHA"; $sha))]}' job.json > start.json
+          execution="$(az rest --method post --url "$job_url/start?api-version=$API" --body @start.json --query name -o tsv)"
+          [ -n "$execution" ] || { echo "::error::the job did not return an execution name"; exit 1; }
+          {
+            echo "execution=$execution"
+            echo "run_id=$run_id"
+            echo "job_url=$job_url"
+          } >> "$GITHUB_OUTPUT"
+          echo "started $execution (run $run_id) with $IMAGE_REF"
+
+      # The job's replica timeout is 20 minutes; a start can wait a few minutes for capacity.
+      - name: Wait for the execution
+        id: wait
+        env:
+          EXECUTION: ${{ steps.start.outputs.execution }}
+          JOB_URL: ${{ steps.start.outputs.job_url }}
+        run: |
+          deadline=$(( $(date +%s) + 30 * 60 ))
+          status=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            status="$(az rest --method get --url "$JOB_URL/executions/$EXECUTION?api-version=$API" --query properties.status -o tsv 2> /dev/null || true)"
+            case "$status" in
+              Succeeded|Failed|Stopped|Degraded) break ;;
+            esac
+            echo "$(date -u +%H:%M:%S) ${status:-pending}"
+            sleep 20
+          done
+          case "$status" in
+            Succeeded|Failed|Stopped|Degraded) ;;
+            *)
+              echo "::error::execution $EXECUTION did not finish in 30 minutes (last status: ${status:-unknown}); stopping it"
+              az rest --method post --url "$JOB_URL/executions/$EXECUTION/stop?api-version=$API" -o none || true
+              status=TimedOut ;;
+          esac
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "execution $EXECUTION: $status"
+
+      - name: Download the results
+        if: always() && steps.start.outputs.run_id != ''
+        env:
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+        run: |
+          mkdir -p results
+          az storage blob download-batch --auth-mode login --account-name "$RESULTS_ACCOUNT" \
+            --source "$RESULTS_CONTAINER" --pattern "runs/$RUN_ID/*" --destination results \
+            --only-show-errors -o none || echo "::warning::could not download the results"
+          [ -f "results/runs/$RUN_ID/summary.json" ] || echo "::warning::the run uploaded no summary.json"
+
+      # The console output is in the results when the run got that far. This covers a container that
+      # never started or died early. Log Analytics takes a few minutes to receive the lines.
+      - name: Read the job's logs
+        if: always() && steps.start.outputs.execution != '' && steps.wait.outputs.status != 'Succeeded'
+        env:
+          EXECUTION: ${{ steps.start.outputs.execution }}
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+        run: |
+          mkdir -p "results/runs/$RUN_ID"
+          # column_ifexists: the tables' columns have changed between Container Apps versions.
+          query="union isfuzzy=true
+            (ContainerAppConsoleLogs | extend Source = 'console'),
+            (ContainerAppSystemLogs | extend Source = 'system')
+            | where tostring(column_ifexists('ContainerGroupName', '')) startswith '$EXECUTION'
+              or tostring(column_ifexists('ReplicaName', '')) startswith '$EXECUTION'
+              or tostring(column_ifexists('ExecutionName', '')) == '$EXECUTION'
+            | project TimeGenerated, Source, Text = tostring(column_ifexists('Log', ''))
+            | order by TimeGenerated asc"
+          body="$(jq -n --arg q "$query" '{query: $q, timespan: "PT6H"}')"
+          az rest --method post --resource https://api.loganalytics.io \
+            --url "https://api.loganalytics.io/v1/workspaces/$LOG_WORKSPACE_ID/query" --body "$body" \
+            --query 'tables[0].rows[]' -o tsv > "results/runs/$RUN_ID/job-logs.tsv" ||
+            echo "::warning::could not read the job's logs"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.start.outputs.run_id != ''
+        with:
+          name: e2e-dev-${{ steps.start.outputs.run_id }}
+          path: results/runs/${{ steps.start.outputs.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Verdict
+        if: always() && steps.start.outputs.run_id != ''
+        env:
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+          STATUS: ${{ steps.wait.outputs.status }}
+        run: |
+          summary="results/runs/$RUN_ID/summary.json"
+          {
+            echo "### Full-flow tests on dev"
+            echo
+            echo "Execution status: ${STATUS:-unknown}"
+            if [ -f "$summary" ]; then
+              jq -r '"Result: \(.status) (\(.stats.expected) passed, \(.stats.unexpected) failed, \(.stats.skipped) skipped)",
+                "", "| Test | Outcome |", "| --- | --- |",
+                (.tests[] | "| \(.title | gsub("\\|"; "/")) | \(.outcome) |")' "$summary"
+            else
+              echo "No summary.json: the run did not finish its upload. See job-logs.tsv in the artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$STATUS" = Succeeded ] || { echo "::error::the job execution ended $STATUS"; exit 1; }
+          [ "$(jq -r .status "$summary" 2> /dev/null)" = passed ] || { echo "::error::the tests did not pass"; exit 1; }
+          echo "passed"

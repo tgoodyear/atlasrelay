@@ -1,0 +1,7 @@
+# Build context for e2e-real/Dockerfile (the repository root): only what the image copies.
+*
+!e2e-real/
+!web/e2e/ui.ts
+e2e-real/node_modules
+e2e-real/results
+e2e-real/test

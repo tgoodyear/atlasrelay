@@ -26,3 +26,5 @@ param dnsApexTxtValues = {
   'atlasrelay.org': ['google-site-verification=PmPeiS951f6LV0yLSeciOw2VCg8GoDdKAQTllGN6fkQ']
 }
 param swaApexToken = readEnvironmentVariable('ATLASRELAY_SWA_APEX_TOKEN', '')
+// The full-flow test harness is on by default outside prod (main.bicep never deploys it in prod).
+param testHarness = readEnvironmentVariable('AZURE_ENV_NAME') != 'prod' && readEnvironmentVariable('ATLASRELAY_TEST_HARNESS', 'true') == 'true'

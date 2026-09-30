@@ -124,6 +124,7 @@ resource budget 'Microsoft.Consumption/budgets@2023-11-01' = if (!empty(budgetSt
 
 output workspaceId string = logs.id
 output workspaceName string = logs.name
+output workspaceCustomerId string = logs.properties.customerId
 output appInsightsId string = appInsights.id
 output appInsightsName string = appInsights.name
 output appInsightsConnectionString string = appInsights.properties.ConnectionString

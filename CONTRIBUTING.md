@@ -51,6 +51,13 @@ The stack uses ports 4380 (site), 7171 (API), 4390 (RIPE Atlas stub) and 10100 t
 and click around, run `npm run e2e:stack -w web`, then open http://localhost:4380. With
 `E2E_REUSE_STACK=1`, `test:flows` uses that stack instead of starting its own.
 
+The page steps the full-flow tests share live in `web/e2e/ui.ts`. The tests in `e2e-real/` use
+them too: they run the same flow on the dev environment with real Microsoft sign-in, in Azure,
+after a merge (docs/RUNBOOK.md, "Full-flow tests on dev"). A pull request cannot run them.
+`npm test` covers their redaction, TOTP and summary code, and checks that the test image and
+`web/package.json` use the same Playwright version; the Full-flow test image workflow builds the
+image on a pull request that changes it.
+
 Infrastructure lives in `infra/*.bicep`. CI builds and lints it but deploys none of it: a
 subscription owner deploys each environment's stack with `scripts/provision.sh` after the merge
 (see [docs/RUNBOOK.md](docs/RUNBOOK.md#changing-infrastructure)). Before pushing a change there,
