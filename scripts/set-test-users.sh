@@ -79,17 +79,30 @@ fi
 
 # ---------- open the vault to this address, and close it on the way out ----------
 
+# Every address rule on the vault. The template declares none, so any rule found is removed.
+ip_rules() {
+  az keyvault show -n "$KV" -g "$RG" "${AZ_SUB[@]}" --query "properties.networkAcls.ipRules[].value" -o tsv
+}
+remove_ip_rules() {
+  local rule
+  for rule in $(ip_rules); do
+    az keyvault network-rule remove -n "$KV" -g "$RG" "${AZ_SUB[@]}" --ip-address "$rule" -o none || return 1
+  done
+}
+
 close() {
-  local status=$? state
+  local status=$? state rules
   trap - EXIT INT TERM
   echo "closing $KV"
-  az keyvault network-rule remove -n "$KV" -g "$RG" "${AZ_SUB[@]}" --ip-address "$IP/32" -o none 2> /dev/null || true
   az keyvault update -n "$KV" -g "$RG" "${AZ_SUB[@]}" --public-network-access Disabled -o none || true
+  remove_ip_rules || true
   state=$(az keyvault show -n "$KV" -g "$RG" "${AZ_SUB[@]}" --query properties.publicNetworkAccess -o tsv 2> /dev/null || true)
-  if [ "$state" = Disabled ]; then
-    echo "$KV: public network access disabled"
+  rules=$(ip_rules 2> /dev/null || echo unknown)
+  if [ "$state" = Disabled ] && [ -z "$rules" ]; then
+    echo "$KV: public network access disabled, no address rules"
   else
-    echo "WARNING: $KV may still admit $IP. Run scripts/provision.sh $ENV_NAME, which closes it." >&2
+    echo "WARNING: $KV is not closed (public network access: ${state:-unknown}; address rules: ${rules:-none})." >&2
+    echo "Run scripts/provision.sh $ENV_NAME, which closes it." >&2
     status=1
   fi
   exit "$status"
@@ -97,10 +110,13 @@ close() {
 trap close EXIT
 trap 'exit 130' INT TERM
 
+# A rule left behind by an earlier run that could not clean up would admit that address too.
+remove_ip_rules || die "can't remove the address rules already on $KV"
 echo "opening $KV to $IP for this run"
 az keyvault network-rule add -n "$KV" -g "$RG" "${AZ_SUB[@]}" --ip-address "$IP/32" -o none
 az keyvault update -n "$KV" -g "$RG" "${AZ_SUB[@]}" --public-network-access Enabled \
   --default-action Deny --bypass None -o none
+[ "$(ip_rules)" = "$IP/32" ] || [ "$(ip_rules)" = "$IP" ] || die "$KV admits other addresses than $IP"
 
 token=$(az account get-access-token --tenant "$(aget AZURE_TENANT_ID)" --resource https://vault.azure.net \
   --query accessToken -o tsv) || die "can't get a Key Vault token"

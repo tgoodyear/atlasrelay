@@ -117,12 +117,22 @@ for g in $groups; do
   echo "deleting resource group $g"
   az group delete -n "$g" "${AZ_SUB[@]}" --yes -o none
 done
+# A deleted vault shows up in the soft-deleted list after a short delay. Once purged, it leaves the
+# resume file, so a teardown run again later does not wait for it.
 for v in $vaults; do
-  deleted=$(az keyvault list-deleted "${AZ_SUB[@]}" --resource-type vault --query "[?name=='$v'].name" -o tsv) ||
-    die "can't list deleted vaults"
-  [ -n "$deleted" ] || continue
+  deleted=""
+  for _ in $(seq 1 30); do
+    deleted=$(az keyvault list-deleted "${AZ_SUB[@]}" --resource-type vault --query "[?name=='$v'].name" -o tsv) ||
+      die "can't list deleted vaults"
+    [ -z "$deleted" ] || break
+    sleep 10
+  done
+  [ -n "$deleted" ] ||
+    die "the Key Vault $v is not listed as deleted yet; run scripts/teardown.sh $ENV_NAME again in a few minutes to purge it"
   echo "purging the deleted Key Vault $v"
   az keyvault purge --name "$v" "${AZ_SUB[@]}" -o none
+  grep -iv "/providers/Microsoft.KeyVault/vaults/$v\$" "$resume" > "$resume.tmp" || true
+  mv "$resume.tmp" "$resume"
 done
 for id in $roles; do
   if ! out=$(az resource show --ids "$id" -o none 2>&1); then

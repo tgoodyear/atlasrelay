@@ -9,9 +9,12 @@ const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
 test('the Dockerfile, e2e-real and web use one Playwright version', () => {
   const web = JSON.parse(read('../../web/package.json')).devDependencies['@playwright/test'];
   const ours = JSON.parse(read('../package.json')).dependencies['@playwright/test'];
+  const locked = JSON.parse(read('../package-lock.json')).packages['node_modules/@playwright/test'];
   const from = read('../Dockerfile').match(/^FROM mcr\.microsoft\.com\/playwright:v([0-9.]+)-noble@sha256:[0-9a-f]{64}$/m);
   assert.match(web, /^\d+\.\d+\.\d+$/, 'web/package.json pins @playwright/test exactly');
   assert.equal(ours, web, 'e2e-real/package.json');
+  assert.equal(locked?.version, web, 'e2e-real/package-lock.json');
+  assert.ok(locked?.integrity, 'e2e-real/package-lock.json has an integrity hash');
   assert.ok(from, 'the Dockerfile pins the Playwright image by tag and digest');
   assert.equal(from[1], web, 'the Dockerfile base image');
 });

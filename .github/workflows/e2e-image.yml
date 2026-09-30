@@ -10,6 +10,8 @@ on:
       - 'e2e-real/**'
       - 'web/e2e/ui.ts'
       - 'web/package.json'
+      # versions.test.mjs checks the job's default image in here against the Dockerfile.
+      - 'infra/testharness.bicep'
       - '.github/workflows/e2e-image.yml'
   workflow_dispatch:
 
@@ -30,6 +32,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Check the Playwright versions agree
+        run: node --test e2e-real/test/versions.test.mjs
 
       - name: Build
         run: docker build --pull -f e2e-real/Dockerfile -t atlasrelay-e2e:check .
