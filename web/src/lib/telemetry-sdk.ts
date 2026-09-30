@@ -12,6 +12,7 @@ import { routeName, scrubItem, stripQuery } from './telemetry-scrub';
 const ROLE = 'web';
 
 let analytics: AnalyticsPlugin | null = null;
+let channel: Sender | null = null;
 
 export function init(connectionString: string, earlyErrors: unknown[]): void {
   const cs = parseConnectionString(connectionString);
@@ -49,6 +50,7 @@ export function init(connectionString: string, earlyErrors: unknown[]): void {
   // when the visitor closed the tab or followed a sign-in link was lost. pagehide and
   // visibilitychange only: an unload handler would keep the page out of the back/forward cache.
   addPageHideEventListener(() => sender.onunloadFlush());
+  channel = sender;
   core.addTelemetryInitializer((item: ITelemetryItem) => {
     scrubItem(item as Parameters<typeof scrubItem>[0], ROLE, pageLoadId);
   });
@@ -62,6 +64,11 @@ export function pageView(pathname: string, properties: Record<string, string>): 
 
 export function event(name: string, properties: Record<string, string>): void {
   analytics?.trackEvent({ name, properties });
+}
+
+/** Send what is queued now, the way it is sent when the page is left (a beacon where possible). */
+export function flush(): void {
+  channel?.onunloadFlush();
 }
 
 function trackError(err: unknown): void {

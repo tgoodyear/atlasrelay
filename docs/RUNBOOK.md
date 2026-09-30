@@ -228,7 +228,10 @@ so local and dev builds send nothing. The Deploy workflow passes the repository 
 SDK loads once the page has finished loading, so the first page's own API calls are not in
 `AppDependencies`. Later calls are, and their `traceparent` header gives the API request the same
 operation id. It sends in batches and sends what is queued when the page is hidden or left, so an
-action followed by a navigation (a sign-in link) still arrives.
+action followed by a navigation still arrives. A sign-in link clicked before the SDK has loaded
+starts the download at once and waits up to 1.5 seconds for it, so the click and the first page
+view are sent before the page is replaced. A visitor who closes the tab before the SDK loads is
+not counted.
 
 ### Where to look
 

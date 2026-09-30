@@ -36,6 +36,9 @@ let nextReferrer = 'direct';
 let campaign: Record<string, string> = {};
 const held: ((mod: Sdk) => void)[] = [];
 const heldErrors: unknown[] = [];
+let loading: Promise<Sdk | null> | null = null;
+// How long a sign-in click may wait for the SDK before the browser follows the link anyway.
+const SIGN_IN_WAIT_MS = 1500;
 
 function holdError(event: ErrorEvent): void {
   if (heldErrors.length < MAX_HELD) heldErrors.push(event.error ?? event.message);
@@ -60,6 +63,33 @@ function send(fn: (mod: Sdk) => void): void {
   else if (held.length < MAX_HELD) held.push(fn);
 }
 
+function stopCollecting(): void {
+  stopHolding();
+  document.removeEventListener('click', onLinkClick, true);
+  document.removeEventListener('auxclick', onLinkClick, true);
+  held.length = 0;
+  heldErrors.length = 0;
+}
+
+/** Download and start the SDK, once. Resolves to null when it could not be loaded. */
+function loadSdk(): Promise<Sdk | null> {
+  loading ??= import('./telemetry-sdk')
+    .then((mod) => {
+      // The SDK installs its own handlers for both events from here on.
+      stopHolding();
+      mod.init(CONNECTION_STRING, heldErrors.splice(0));
+      sdk = mod;
+      for (const fn of held.splice(0)) fn(mod);
+      return mod;
+    })
+    .catch(() => {
+      // A blocked or failed download costs the visitor nothing. Stop collecting for it.
+      stopCollecting();
+      return null;
+    });
+  return loading;
+}
+
 // Sign-in links and links to atlas.ripe.net, wherever they are on the page. Middle clicks open a
 // tab and count too.
 function onLinkClick(event: MouseEvent): void {
@@ -67,7 +97,29 @@ function onLinkClick(event: MouseEvent): void {
   const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
   if (!(anchor instanceof HTMLAnchorElement)) return;
   const action = linkAction(anchor.href, location.href);
-  if (action) trackAction(action.name, action.properties);
+  if (!action) return;
+  trackAction(action.name, action.properties);
+  // A sign-in link replaces this page. Before the SDK has started, whatever is held here (the
+  // first page view, this click) exists only in memory and would go with it. Hold the navigation
+  // until the SDK has taken the queue and sent it, for at most SIGN_IN_WAIT_MS. Links that open a
+  // new tab, and clicks that the browser turns into one, leave this page alive and need nothing.
+  const replacesPage =
+    event.type === 'click' && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey &&
+    (!anchor.target || anchor.target === '_self');
+  if (sdk || action.name !== 'sign-in-clicked' || !replacesPage || event.defaultPrevented) return;
+  event.preventDefault();
+  const href = anchor.href;
+  let gone = false;
+  const go = () => {
+    if (gone) return;
+    gone = true;
+    location.assign(href);
+  };
+  setTimeout(go, SIGN_IN_WAIT_MS);
+  void loadSdk().then((mod) => {
+    mod?.flush();
+    go();
+  });
 }
 
 /** Call once, before the app renders. */
@@ -80,25 +132,7 @@ export function startTelemetry(): void {
   document.addEventListener('auxclick', onLinkClick, true);
   window.addEventListener('error', holdError);
   window.addEventListener('unhandledrejection', holdRejection);
-  const load = () =>
-    whenIdle(() => {
-      import('./telemetry-sdk')
-        .then((mod) => {
-          // The SDK installs its own handlers for both events from here on.
-          stopHolding();
-          mod.init(CONNECTION_STRING, heldErrors.splice(0));
-          sdk = mod;
-          for (const fn of held.splice(0)) fn(mod);
-        })
-        .catch(() => {
-          // A blocked or failed download costs the visitor nothing. Stop collecting for it.
-          stopHolding();
-          document.removeEventListener('click', onLinkClick, true);
-          document.removeEventListener('auxclick', onLinkClick, true);
-          held.length = 0;
-          heldErrors.length = 0;
-        });
-    });
+  const load = () => whenIdle(() => void loadSdk());
   if (document.readyState === 'complete') load();
   else window.addEventListener('load', load, { once: true });
 }
