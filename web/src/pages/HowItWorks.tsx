@@ -72,7 +72,8 @@ export default function HowItWorks() {
           <p className="muted">
             You can delete your profile, including your RIPE email, at any time from your{' '}
             <Link to="/profile">profile page</Link>. Projects and pledges remain and show as
-            Anonymous, because other people rely on that record.
+            Anonymous, because other people rely on that record. If any cannot be renamed at the
+            time, the profile page says so and it is finished by hand once you report it.
           </p>
         </div></div>
 

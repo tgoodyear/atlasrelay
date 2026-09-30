@@ -43,8 +43,9 @@ export default function Privacy() {
           </p>
           <p className="muted">
             No id links one visit to the next. The statistics set no cookies, store nothing in your
-            browser, and give you no user or tracking id. Each page load gets a random id that is
-            gone when you close the tab. Anything shaped like an email address or a RIPE Atlas API
+            browser, and give you no user or tracking id. Each page load gets a random id that ties
+            that page load's data together. It is stored with that data for the 30 days below, but
+            your browser does not keep it, and the next page load gets a new one. Anything shaped like an email address or a RIPE Atlas API
             key is removed before sending. There is no advertising and no other analytics service.
             If your browser blocks Application Insights, the site works the same.
           </p>
@@ -83,7 +84,8 @@ export default function Privacy() {
             <strong>Delete my profile</strong> on your <Link to="/profile">profile page</Link> removes
             your profile and your RIPE NCC Access email and closes your open projects. Your projects
             and pledges stay on the site and show as Anonymous. They keep the internal account id, so
-            signing in again with the same account reconnects you to them.
+            signing in again with the same account reconnects you to them. If some of them cannot be
+            closed or renamed at the time, the page says so; report it and it is finished by hand.
           </p>
         </div></div>
 
