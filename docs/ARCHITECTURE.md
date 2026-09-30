@@ -267,7 +267,7 @@ Authorization is enforced twice: `staticwebapp.config.json` route rules require 
 the site reaches them: linking the Function App to the site adds an identity provider, "Azure
 Static Web Apps (Linked)", to the app's App Service authentication, and it refuses every request
 the site did not send, a forged header included. The Deploy workflow checks this after every
-deploy. While an environment's app is not linked (only while moving off managed functions), Bicep
+deploy. While an environment's app is not linked (only while relinking it or checking a new app), Bicep
 sets `IGNORE_CLIENT_PRINCIPAL=1` and the API treats every request as anonymous. Static Web Apps only supports a wildcard
 at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code only
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and

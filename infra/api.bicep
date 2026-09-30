@@ -8,7 +8,7 @@
 //
 // Linking puts an identity provider named "Azure Static Web Apps (Linked)" on the Function App,
 // which refuses any request the site did not send. Until the link exists (linkApi false, only
-// while an environment moves off managed functions) the app is public, so it ignores the
+// while relinking or checking a new app) the app is public, so it ignores the
 // x-ms-client-principal header and treats every request as anonymous (api/src/lib/auth.ts).
 targetScope = 'resourceGroup'
 
@@ -34,8 +34,9 @@ param dataStorageName string
 param dataTableEndpoint string
 param dataTableNames string[]
 
-@description('''Link the Function App to the static web app. Off only while checking a new app
-directly before it takes over /api; an unlinked app answers every request as anonymous.''')
+@description('''Link the Function App to the static web app.
+Off only to relink a lost identity provider ("Direct requests to the Function App" in
+docs/RUNBOOK.md) or to check a new app directly; an unlinked app answers every request as anonymous.''')
 param linkApi bool = true
 
 @description('App Insights connection string. Empty leaves telemetry off.')

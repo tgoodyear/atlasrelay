@@ -32,7 +32,7 @@ param swaLocation string = 'westus2'
 param stagingEnvironmentPolicy string = 'Disabled'
 
 @description('''Accept the storage account key. Off: only Microsoft Entra identities can reach the data.
-On only while an environment moves off managed functions (docs/RUNBOOK.md).''')
+Leave off: the API and operators sign in with Entra ID and nothing reads the key.''')
 param storageSharedKeyAccess bool = false
 
 @description('Object id of the Owner who works on the tables by hand (moderation, exports). Empty: nobody.')
