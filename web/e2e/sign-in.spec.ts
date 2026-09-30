@@ -10,8 +10,14 @@ interface Envelope {
 }
 
 interface Stubs {
-  /** Everything that happened, in order: "event:<name>:<provider>" per event posted, "login:<provider>". */
+  /**
+   * Everything that happened, in order: "event:<name>:<provider>" per event posted, "answered:<name>"
+   * once the ingestion stub has replied to it, "login:<provider>" when the browser asks for the
+   * sign-in URL.
+   */
   log: string[];
+  /** When each log entry was made (Date.now()), by entry. */
+  at: Record<string, number>;
 }
 
 function envelopes(body: string): Envelope[] {
@@ -32,21 +38,41 @@ function envelopes(body: string): Envelope[] {
   }
 }
 
-async function stub(page: Page, opts: { ingestion?: 'accept' | 'abort'; sdkDelayMs?: number; sdk?: 'abort' } = {}): Promise<Stubs> {
-  const stubs: Stubs = { log: [] };
+interface StubOptions {
+  ingestion?: 'accept' | 'abort';
+  /** How long the ingestion stub takes to answer a request that carries sign-in-clicked. */
+  signInReplyDelayMs?: number;
+  sdkDelayMs?: number;
+  sdk?: 'abort';
+}
+
+async function stub(page: Page, opts: StubOptions = {}): Promise<Stubs> {
+  const stubs: Stubs = { log: [], at: {} };
+  const record = (entry: string) => {
+    stubs.log.push(entry);
+    stubs.at[entry] ??= Date.now();
+  };
   await page.route('**/*.in.applicationinsights.azure.com/**', async (route) => {
     if (opts.ingestion === 'abort') return route.abort('blockedbyclient');
+    let signIn = false;
     for (const e of envelopes(route.request().postData() ?? '')) {
       const base = e.data?.baseData;
-      if (e.data?.baseType === 'EventData') stubs.log.push(`event:${base?.name}:${base?.properties?.provider ?? ''}`);
-      else if (e.data?.baseType) stubs.log.push(e.data.baseType);
+      if (e.data?.baseType === 'EventData') record(`event:${base?.name}:${base?.properties?.provider ?? ''}`);
+      else if (e.data?.baseType) record(e.data.baseType);
+      if (base?.name === 'sign-in-clicked') signIn = true;
     }
-    return route.fulfill({ status: 200, contentType: 'application/json', body: '{"itemsReceived":1,"itemsAccepted":1,"errors":[]}' });
+    if (signIn && opts.signInReplyDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.signInReplyDelayMs));
+    try {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"itemsReceived":1,"itemsAccepted":1,"errors":[]}' });
+    } catch {
+      // The page has already gone (the timeout test), so the reply has nowhere to go.
+    }
+    if (signIn) record('answered:sign-in-clicked');
   });
   await page.route('**/.auth/me', (route) => route.fulfill({ json: { clientPrincipal: null } }));
   await page.route('**/.auth/login/**', (route) => {
     const provider = /\/\.auth\/login\/([^/?]+)/.exec(route.request().url())?.[1];
-    stubs.log.push(`login:${provider}`);
+    record(`login:${provider}`);
     return route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Identity provider</title>' });
   });
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { error: 'not in this test' } }));
@@ -82,6 +108,32 @@ test('a click before the SDK has loaded waits for it, then sends and follows the
   const event = stubs.log.indexOf('event:sign-in-clicked:aad');
   expect(event, stubs.log.join(' ')).toBeGreaterThanOrEqual(0);
   expect(event).toBeLessThan(stubs.log.indexOf('login:aad'));
+});
+
+test('a slow ingestion reply holds the link until it arrives', async ({ page }) => {
+  const stubs = await stub(page, { signInReplyDelayMs: 600 });
+  await page.goto('/');
+  await expect.poll(() => stubs.log).toContain('PageviewData');
+  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.waitForURL('**/.auth/login/github**');
+  await expect.poll(() => stubs.log).toContain('login:github');
+  expect(stubs.log.indexOf('answered:sign-in-clicked'), stubs.log.join(' ')).toBeGreaterThanOrEqual(0);
+  expect(stubs.log.indexOf('answered:sign-in-clicked')).toBeLessThan(stubs.log.indexOf('login:github'));
+});
+
+test('an ingestion reply slower than 1.5 s does not hold the link longer', async ({ page }) => {
+  const stubs = await stub(page, { signInReplyDelayMs: 5000 });
+  await page.goto('/');
+  await expect.poll(() => stubs.log).toContain('PageviewData');
+  const start = Date.now();
+  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.waitForURL('**/.auth/login/github**', { timeout: 4000 });
+  await expect.poll(() => stubs.log).toContain('login:github');
+  const held = stubs.at['login:github'] - start;
+  expect(stubs.log).toContain('event:sign-in-clicked:github');
+  expect(stubs.log).not.toContain('answered:sign-in-clicked');
+  expect(held).toBeGreaterThanOrEqual(1400);
+  expect(held).toBeLessThan(2500);
 });
 
 for (const blocked of ['ingestion', 'sdk'] as const) {
