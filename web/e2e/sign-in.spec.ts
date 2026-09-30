@@ -121,8 +121,24 @@ test('a slow ingestion reply holds the link until it arrives', async ({ page }) 
   expect(stubs.log.indexOf('answered:sign-in-clicked')).toBeLessThan(stubs.log.indexOf('login:github'));
 });
 
-test('an ingestion reply slower than 1.5 s does not hold the link longer', async ({ page }) => {
-  const stubs = await stub(page, { signInReplyDelayMs: 5000 });
+test('an ingestion reply slower than 1.5 s does not hold the link longer, and its request outlives the page', async ({ page }) => {
+  const stubs = await stub(page, { signInReplyDelayMs: 2500 });
+  // Whether each fetch to the ingestion endpoint asked for keepalive, the flag that lets a request
+  // finish after the page that made it has gone. Playwright's stub cannot show that itself: it
+  // answers a request even after the browser has dropped it.
+  const keepalive: boolean[] = [];
+  await page.exposeFunction('recordKeepalive', (flag: boolean) => keepalive.push(flag));
+  await page.addInitScript(() => {
+    const original = window.fetch;
+    window.fetch = (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes('.in.applicationinsights.azure.com/')) {
+        const flag = input instanceof Request ? input.keepalive : !!init?.keepalive;
+        void (window as unknown as { recordKeepalive: (flag: boolean) => Promise<void> }).recordKeepalive(flag);
+      }
+      return original(input, init);
+    };
+  });
   await page.goto('/');
   await expect.poll(() => stubs.log).toContain('PageviewData');
   const start = Date.now();
@@ -133,7 +149,8 @@ test('an ingestion reply slower than 1.5 s does not hold the link longer', async
   expect(stubs.log).toContain('event:sign-in-clicked:github');
   expect(stubs.log).not.toContain('answered:sign-in-clicked');
   expect(held).toBeGreaterThanOrEqual(1400);
-  expect(held).toBeLessThan(2500);
+  expect(held).toBeLessThan(2300);
+  expect(keepalive).toEqual([true]);
 });
 
 for (const blocked of ['ingestion', 'sdk'] as const) {

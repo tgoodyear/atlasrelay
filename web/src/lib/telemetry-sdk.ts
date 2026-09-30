@@ -44,8 +44,6 @@ export function init(connectionString: string, earlyErrors: unknown[]): void {
     maxAjaxCallsPerView: 50,
   };
   const sender = new Sender();
-  // So that sendNow can tell when its request has finished.
-  config.extensionConfig = { [sender.identifier]: { enableSendPromise: true } };
   core.initialize(config, [plugin, new AjaxPlugin(), sender]);
   // The Sender batches for up to 15 seconds. The full SDK flushes the batch when the page is hidden
   // or left; with the core used directly that is this file's job. Without it, whatever was queued
@@ -75,19 +73,29 @@ export function flush(): void {
 }
 
 /**
- * Send what is queued now, as an ordinary request, and resolve once it has finished (or failed).
- * Never rejects. The caller decides how long to wait.
+ * Send what is queued now as a keepalive request, which the browser finishes even after the page
+ * has been replaced, and resolve once it has finished or failed. Never rejects; the caller decides
+ * how long to wait. Resolves at once when nothing was queued, or when the SDK used a beacon
+ * instead (browsers without keepalive, or a batch over the keepalive size limit), since a beacon
+ * outlives the page too.
  */
 export function sendNow(): Promise<void> {
   const sender = channel;
   if (!sender) return Promise.resolve();
-  return new Promise((resolve) => {
-    try {
-      sender.flush(true, () => resolve());
-    } catch {
-      resolve();
-    }
-  });
+  // The unload path makes one call to the global fetch, with keepalive, and does not wait for the
+  // response. Catch that call's promise so the caller can.
+  let request: Promise<Response> | undefined;
+  const original = window.fetch;
+  window.fetch = (...args: Parameters<typeof fetch>) => (request = original.apply(window, args));
+  try {
+    sender.onunloadFlush();
+  } catch {
+    // Nothing was sent; the caller goes on regardless.
+  } finally {
+    window.fetch = original;
+  }
+  const started = request as Promise<Response> | undefined;
+  return started ? started.then(() => undefined, () => undefined) : Promise.resolve();
 }
 
 function trackError(err: unknown): void {

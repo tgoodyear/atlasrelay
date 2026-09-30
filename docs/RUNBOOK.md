@@ -231,7 +231,8 @@ SDK loads once the page has finished loading, so the first page's own API calls 
 operation id. It sends in batches, and sends what is queued when the page is hidden or left. A
 sign-in click does not rely on that, because a request made while the page is being replaced may
 never arrive. The browser follows the link once the click has been sent, or after 1.5 seconds,
-whichever comes first. A click before the SDK has loaded starts the download at once, within the
+whichever comes first. The click goes as a keepalive request, so if time runs out it still
+finishes after the page has gone. A click before the SDK has loaded starts the download at once, within the
 same 1.5 seconds. If the SDK or the ingestion endpoint is blocked, the link is followed anyway.
 Ctrl-, Cmd- and middle-clicks open a tab and are not held. A visitor who closes the tab before the
 SDK loads is not counted. `web/e2e/sign-in.spec.ts` checks this in a browser.

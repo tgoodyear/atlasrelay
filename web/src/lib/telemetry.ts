@@ -115,8 +115,8 @@ function onLinkClick(event: MouseEvent): void {
     if (gone) return;
     gone = true;
     clearTimeout(timer);
-    // If time ran out first, whatever is still queued goes by the unload path, which outlives the
-    // page. After a finished request there is nothing left and this sends nothing.
+    // The request sendNow started carries on after the page has gone. Anything queued since goes
+    // the same way; usually there is nothing and this sends nothing.
     if (sdk) quietly(() => sdk?.flush());
     location.assign(href);
   };
