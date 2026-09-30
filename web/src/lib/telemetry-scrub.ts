@@ -125,9 +125,9 @@ export function campaignFrom(search: string): Record<string, string> {
   for (const key of CAMPAIGN_KEYS) {
     const value = params.get(key);
     if (value === null) continue;
-    // Redact before cutting, so a cut cannot leave part of a key that no longer matches.
-    const clean = scrubText(value.toLowerCase())
-      .replace(/[\x00-\x1f\x7f]/g, '')
+    // Control characters go first, so one cannot split a key that removing it would rejoin, and
+    // redaction comes before the cut, so a cut cannot leave part of a key that no longer matches.
+    const clean = scrubText(value.toLowerCase().replace(/[\x00-\x1f\x7f]/g, ''))
       .trim()
       .slice(0, CAMPAIGN_MAX)
       .trim();

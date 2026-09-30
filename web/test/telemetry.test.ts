@@ -122,6 +122,9 @@ test('campaign values are lowercased, redacted and capped', () => {
   const cut = campaignFrom(`?utm_campaign=${'x'.repeat(60)}${KEY}`);
   assert.equal(cut.utm_campaign.length, CAMPAIGN_MAX);
   assert.equal(cut.utm_campaign.includes('aaaa'), false);
+  // A control character inside a key or an address does not hide it from redaction.
+  const split = campaignFrom(`?utm_campaign=${'x'.repeat(40)}${KEY.slice(0, 10)}%0A${KEY.slice(10)}&utm_source=someone%0A@example.org`);
+  assert.deepEqual(split, { utm_campaign: `${'x'.repeat(40)}[uuid]`, utm_source: '[email]' });
 });
 
 test('the referrer is an origin, "internal" or "direct"', () => {
