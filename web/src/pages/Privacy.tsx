@@ -44,7 +44,7 @@ export default function Privacy() {
           <p className="muted">
             No id links one visit to the next. The statistics set no cookies, store nothing in your
             browser, and give you no user or tracking id. Each page load gets a random id that ties
-            that page load's data together. It is stored with that data for the 30 days below, but
+            that page load's data together. It is stored with that data for the 90 days below, but
             your browser does not keep it, and the next page load gets a new one. Anything shaped like an email address or a RIPE Atlas API
             key is removed before sending. There is no advertising and no other analytics service.
             If your browser blocks Application Insights, the site works the same.
@@ -94,7 +94,7 @@ export default function Privacy() {
           <p className="muted">
             Microsoft Azure hosts the site. The account, project and pledge records and the usage
             statistics and logs are stored in Azure's West US 2 region, in Washington state, USA.
-            Usage statistics and logs are deleted after 30 days. Your profile is kept until you
+            Usage statistics and logs are deleted after 90 days. Your profile is kept until you
             delete it, and projects and pledges are kept after that, as described above.
           </p>
         </div></div>
@@ -129,7 +129,7 @@ export default function Privacy() {
             <a href="https://github.com/tgoodyear/atlasrelay/blob/main/SECURITY.md" target="_blank" rel="noreferrer">SECURITY.md</a>{' '}
             describes. You can delete your profile yourself, as described above.
           </p>
-          <p className="small muted">Last updated 29 September 2026.</p>
+          <p className="small muted">Last updated 30 September 2026.</p>
         </div></div>
       </div>
     </div>

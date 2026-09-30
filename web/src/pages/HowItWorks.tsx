@@ -59,7 +59,7 @@ export default function HowItWorks() {
             donor at the point they begin a manual pledge to your project, because they need it to
             transfer the credits, and each such donor appears by name on your project. No advertising
             service receives anything, and there are no tracking cookies. It does send usage statistics
-            and operational telemetry to Azure Application Insights, kept for 30 days: the pages
+            and operational telemetry to Azure Application Insights, kept for 90 days: the pages
             opened, the referring site, campaign tags on the link followed, a few actions such as
             making a pledge, load times, errors, and API request paths, status codes and timings.
             That stream carries no profile fields, no RIPE NCC Access email and no API key. The{' '}
