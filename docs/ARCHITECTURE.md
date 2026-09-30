@@ -387,6 +387,15 @@ docs/     this spec, RIPE research notes, runbook
   telemetry) and API, then stage a self-contained `api-deploy/` folder (npm workspaces hoist the
   API's runtime dependencies to the repo root, and the SWA action uploads the API folder
   verbatim), smoke-load the API entry point, upload both as artifacts. Runs on PRs too.
+- `deploy.yml`, job `browser` (no Azure identity): Playwright tests in `web/e2e` against a
+  `vite preview` of the site; they answer `/api`, `/.auth` and App Insights requests themselves.
+- `deploy.yml`, job `flows` (no Azure identity, no secrets): full-flow Playwright tests in
+  `web/e2e/flows` against the whole application on the runner. Azure Functions Core Tools comes
+  from its GitHub release, pinned by version and SHA-256. `web/e2e/flows/harness/stack.ts` starts
+  Azurite in memory, the Functions host with the built API bundle, the Static Web Apps emulator
+  serving `web/dist`, and a stub of the RIPE Atlas API that the API reaches through
+  `ATLAS_API_BASE`. Traces and the stack's logs are uploaded when it fails. `deploy` needs `build`,
+  `browser` and `flows`.
 - `deploy.yml`, job `deploy` (push to `main` / manual only, in the GitHub Environment `prod`):
   download artifacts, `azure/login` (OIDC, managed identity), read the SWA deployment token with
   `az staticwebapp secrets list` (masked, never stored), then

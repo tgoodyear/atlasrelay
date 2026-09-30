@@ -34,6 +34,23 @@ npx -w web playwright install chromium   # once
 npm run test:e2e -w web
 ```
 
+If you change the API, a page, or anything a donor or researcher does, run the full-flow tests.
+They start the whole application on your machine: Azurite with empty tables, the Functions host
+running the built API, the built site behind the Static Web Apps emulator, and a stub of the RIPE
+Atlas API (`web/e2e/flows/harness/ripe-stub.ts`) in place of atlas.ripe.net. Tests sign in
+through the emulator as made-up GitHub and Microsoft users, and every API key they use is a fake
+one starting `00000000-0000-4000-8000-`. They need a fresh build and `func`:
+
+```bash
+npm run build
+npm run test:flows -w web                 # or FUNC=/path/to/func npm run test:flows -w web
+```
+
+The stack uses ports 4380 (site), 7171 (API), 4390 (RIPE Atlas stub) and 10100 to 10102
+(Azurite), so it can run beside `npm run dev`. Its logs are in `web/e2e-stack/`. To keep it up
+and click around, run `npm run e2e:stack -w web`, then open http://localhost:4380. With
+`E2E_REUSE_STACK=1`, `test:flows` uses that stack instead of starting its own.
+
 Infrastructure lives in `infra/*.bicep`. CI builds and lints it but deploys none of it: a
 subscription owner deploys each environment's stack with `scripts/provision.sh` after the merge
 (see [docs/RUNBOOK.md](docs/RUNBOOK.md#changing-infrastructure)). Before pushing a change there,

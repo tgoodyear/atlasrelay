@@ -195,6 +195,56 @@ npx swa deploy web/dist --api-location api-deploy --deployment-token "$TOKEN" --
 
 `scripts/teardown.sh dev` removes it again, the CNAME included.
 
+## Testing a deployed site
+
+Pull requests run the full-flow tests (`web/e2e/flows`, see [CONTRIBUTING.md](../CONTRIBUTING.md))
+against a copy of the whole application on the CI runner, with the emulator's sign-in and a stub
+in place of the RIPE Atlas API. A deployed site gets two more checks.
+
+### Smoke test
+
+`web/e2e/smoke/smoke.spec.ts` reads a live site without signing in or writing anything: each page
+and its head, the 404 pages, `robots.txt`, the sitemap and a project page from it, the security
+headers, the public API, and that the private API routes answer 401. It sends only GET and HEAD
+requests, and it blocks the browser's App Insights requests so a run is not counted as traffic.
+It is safe against prod:
+
+```bash
+npx -w web playwright install chromium   # once
+BASE_URL=https://atlasrelay.org npm run test:smoke -w web
+```
+
+The same file runs against the local stack in every full-flow run.
+
+### Manual checks
+
+Real sign-in and real transfers never run in CI. Check them by hand on a dev environment
+(`scripts/bootstrap.sh dev`, then upload the build to test as described under
+[Dev environment](#dev-environment)), not on prod: they create projects, pledges and profiles, and
+a transfer moves real credits. Use two browsers, or one normal and one private window, for the
+researcher and the donor.
+
+1. **GitHub sign-in.** Click **Sign in**, sign in with a real GitHub account, and expect
+   `/dashboard` with your username in the header. **Sign out** returns to the home page, signed out.
+2. **Microsoft sign-in.** From `/dashboard` signed out, click **Continue with Microsoft** and sign
+   in. Microsoft sends an email address as the username: post a project without changing the
+   display name, and check that the byline shows only the part before the `@`.
+3. **Profile.** Save a display name and the RIPE NCC Access email of a real atlas.ripe.net
+   account. That account is the researcher.
+4. **API transfer.** As the researcher, post a project asking for 1,000 credits. As the donor,
+   signed in with another account, create a key at https://atlas.ripe.net/keys/ with only
+   "Transfer credits to another user" and "Get information about your credits", valid for a day.
+   Pledge 100 credits with it. Expect **Check balance** to show the donor's balance, then
+   **Credits transferred** and a pledge marked **Transferred via API**. A minute or two later both
+   accounts' logs at https://atlas.ripe.net/credits/transactions/ show the 100 credits. Delete
+   the key.
+5. **Manual transfer.** Pledge 100 more by hand: the dialog shows the researcher's RIPE email.
+   Transfer the credits on https://atlas.ripe.net/credits/transfer/, click
+   **I've sent the credits**, and as the researcher click **Confirm received** once the credits
+   show up.
+6. **Clean up.** Delete both profiles on `/profile`, or remove the environment with
+   `scripts/teardown.sh dev`.
+
 ## Changing infrastructure
 
 Edit `infra/*.bicep` or `infra/main.bicepparam` and open a pull request. The Infrastructure
