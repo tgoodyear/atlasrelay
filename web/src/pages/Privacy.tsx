@@ -113,9 +113,7 @@ export default function Privacy() {
         <div className="card"><div className="card-body">
           <h2>Other services</h2>
           <p className="muted">
-            The site's fonts come from Google Fonts, so your browser requests them from
-            fonts.googleapis.com and fonts.gstatic.com, and Google receives your IP address and
-            browser details with those requests. Signing in takes you to GitHub or Microsoft, and
+            The site serves its own fonts, so no font service sees your visit. Signing in takes you to GitHub or Microsoft, and
             links to RIPE Atlas take you to atlas.ripe.net; their own privacy terms apply there.
           </p>
         </div></div>

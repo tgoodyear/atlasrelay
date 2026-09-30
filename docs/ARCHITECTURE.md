@@ -405,8 +405,8 @@ docs/     this spec, RIPE research notes, runbook
 
 ## Security notes
 
-- Global headers: CSP (self, Google Fonts, and the App Insights ingestion endpoints for browser
-  telemetry), HSTS, `X-Content-Type-Options`,
+- Global headers: CSP (self, including the self-hosted fonts, and the App Insights ingestion
+  endpoints for browser telemetry), HSTS, `X-Content-Type-Options`,
   `Referrer-Policy`, `Permissions-Policy`.
 - Input validation on every write; string lengths, enums, URL scheme allow-list
   (`https:` only), integer ranges.
