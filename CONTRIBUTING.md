@@ -34,9 +34,10 @@ npx -w web playwright install chromium   # once
 npm run test:e2e -w web
 ```
 
-Infrastructure lives in `infra/*.bicep`. Changes to `app.bicep` deploy through
-CI; the resource group, identity, roles, locks, monitoring and DNS are deployed
-only by a subscription owner running `scripts/bootstrap.sh`.
+Infrastructure lives in `infra/*.bicep`. CI builds and lints it but deploys none of it: a
+subscription owner deploys each environment's stack with `scripts/provision.sh` after the merge
+(see [docs/RUNBOOK.md](docs/RUNBOOK.md#changing-infrastructure)). Before pushing a change there,
+run `scripts/check-params.sh` and `az bicep lint --file` on the templates you touched.
 
 ## Security
 

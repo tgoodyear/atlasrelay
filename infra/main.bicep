@@ -1,27 +1,28 @@
-// Atlas Relay – subscription-scoped entry point, run once by a subscription Owner
-// (scripts/bootstrap.sh). Everything Azure is declared here or in the modules below:
+// Atlas Relay: one environment (prod, dev, ...), deployed as the subscription-scope deployment
+// stack atlasrelay-<env> by scripts/bootstrap.sh and scripts/provision.sh, with parameters from
+// infra/main.bicepparam (which reads the environment's settings, .azure/<env>/.env).
 //
-//   identity.bicep  CI managed identity + GitHub federated credential(s)          (Owner-only)
-//   platform.bicep  Log Analytics + App Insights, monthly budget                    (Owner-only)
-//   monitoring.bicep  alerts, availability test, workbook (from platform.bicep)      (Owner-only)
-//   dns.bicep       public DNS zone for the project domain                          (Owner-only)
-//   rbac.bicep      least-privilege role assignment for CI, delete locks           (Owner-only)
-//   app.bicep       storage + tables, static web app + app settings                 (CI deploys this)
+//   app.bicep         storage + tables, static web app + app settings
+//   platform.bicep    Log Analytics + App Insights (App* tables kept 90 days), the monthly budget
+//   monitoring.bicep  action group, log search alerts, availability test, workbook
+//   identity.bicep    CI managed identity + GitHub federated credential
+//   rbac.bicep        CI custom role (read the site, list its deployment token) + assignment
+//   dns.bicep         public DNS zone for the domain (prod only)
+//   dns-subdomain.bicep  <env>.<domain> CNAME in the prod zone (other environments)
 //
-// Deploy with scripts/bootstrap.sh (it supplies the GitHub OIDC subject prefix and the budget start
-// date that main.bicepparam requires from the environment).
+// The stack runs with --action-on-unmanage deleteResources (a resource dropped from this template
+// is deleted on the next deployment) and --deny-settings-mode denyDelete (nobody deletes a managed
+// resource outside the stack). CI deploys no Bicep: it only uploads the site with the deployment
+// token its role lets it read.
 targetScope = 'subscription'
 
-@description('Resource group that holds every resource')
-param resourceGroupName string = 'internetresearch'
+@description('Environment name: 1-6 lowercase letters and digits, e.g. prod or dev (AZURE_ENV_NAME).')
+@minLength(1)
+@maxLength(6)
+param environmentName string
 
 @description('Region for the resource group, storage, identity and monitoring')
 param location string = 'westus2'
-
-@description('Base name used for resources')
-@minLength(3)
-@maxLength(20)
-param baseName string = 'internetresearch'
 
 @description('Static Web Apps is only offered in a handful of regions.')
 @allowed([
@@ -33,23 +34,12 @@ param baseName string = 'internetresearch'
 ])
 param swaLocation string = 'westus2'
 
-@description('Free or Standard. Standard ($9/mo) unlocks custom OIDC providers.')
+@description('Free or Standard. Standard unlocks custom OIDC providers.')
 @allowed([
   'Free'
   'Standard'
 ])
 param swaSku string = 'Free'
-
-@description('GitHub repository (owner/name); used for tags and documentation')
-param githubRepo string = 'tgoodyear/atlasrelay'
-
-@description('''OIDC subject prefix GitHub issues for this repository. Repositories created after
-2026-07-15 use the immutable form "repo:OWNER@OWNER-ID/REPO@REPO-ID"; older ones use "repo:OWNER/REPO".
-Read it with: gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix''')
-param githubOidcSubjectPrefix string
-
-@description('Also trust pull_request runs (they would share production data). Off by default.')
-param enablePullRequestFederation bool = false
 
 @description('Allow pull-request preview environments on the static web app')
 @allowed([
@@ -58,13 +48,18 @@ param enablePullRequestFederation bool = false
 ])
 param stagingEnvironmentPolicy string = 'Disabled'
 
-@description('Application Insights + Log Analytics for API logs (free tier, daily cap enforced)')
-param enableApplicationInsights bool = true
+@description('GitHub repository (owner/name) that deploys this environment; used for tags')
+param githubRepo string = 'tgoodyear/atlasrelay'
+
+@description('''OIDC subject prefix GitHub issues for the repository. Repositories created after
+2026-07-15 use the immutable form "repo:OWNER@OWNER-ID/REPO@REPO-ID"; older ones "repo:OWNER/REPO".
+scripts/bootstrap.sh reads it from the GitHub API.''')
+param githubOidcSubjectPrefix string
 
 @description('Daily ingestion cap for Log Analytics in GB')
 param logDailyCapGb string = '0.1'
 
-@description('Which storage key the API uses (0 = key1, 1 = key2)')
+@description('Which storage key the API uses (0 = key1, 1 = key2). Flip during key rotation.')
 @allowed([
   0
   1
@@ -74,50 +69,51 @@ param storageKeyIndex int = 0
 @description('Extra app settings merged into the managed-functions configuration')
 param additionalAppSettings object = {}
 
-@description('Public DNS zone to create, e.g. atlasrelay.org. Empty string skips DNS entirely.')
-param dnsZoneName string = ''
+@description('Address that receives alerts and budget notifications. Empty skips the action group, the alerts and the budget.')
+param alertEmail string = ''
 
-@description('''
-Default hostname of the dev static web app, which gets dev.<zone>. Empty leaves that record
-uncreated. The dev instance is deployed separately by infra/dev.bicepparam against app.bicep, and
-its hostname is not an output of this deployment, so it has to be passed in:
-  az staticwebapp show -n swa-<baseName>-dev -g <rg> --query defaultHostname -o tsv
-then supplied to the Owner-only subscription deployment. Leave it empty when no dev instance
-exists; a stale value here would point dev.<zone> at a site that is gone.
-''')
-param devStaticWebAppDefaultHostname string = ''
-
-@description('Extra apex TXT values (e.g. the Static Web Apps domain-validation token)')
-param dnsApexTxtValues array = []
-
-@description('Monthly budget (alerts only) in USD for the resource group')
+@description('Monthly budget (alerts only) in USD')
 param budgetAmount int = 120
 
-@description('Email that receives budget alerts')
-param budgetContactEmail string
+@description('First day of the budget period (YYYY-MM-01), fixed once the budget exists. Empty skips the budget.')
+param budgetStartDate string = ''
 
-@description('First day of the budget period (YYYY-MM-01). Must be the current month on first creation; reuse the existing value afterwards.')
-param budgetStartDate string
+@description('''The domain, e.g. atlasrelay.org. In prod the stack owns the public zone of that name;
+in any other environment it adds <env>.<domain> to the prod zone. Empty skips DNS.''')
+param dnsZoneName string = ''
 
-@description('Email that receives monitoring alerts. Defaults to the budget contact.')
-param alertEmail string = budgetContactEmail
+@description('Resource group of the prod zone, used by the other environments for their CNAME')
+param dnsZoneResourceGroup string = 'rg-atlasrelay-prod'
 
-@description('Page the availability test requests, e.g. https://atlasrelay.org/. Empty skips the test.')
-param availabilityTestUrl string = ''
+@description('TTL in seconds for the records this environment writes')
+param dnsTtl int = 3600
 
-@description('Tags applied to every resource')
-param tags object = {
+@description('TXT values published at the apex, keyed by zone name (site-verification tokens)')
+param dnsApexTxtValues object = {}
+
+@description('''The apex domain-validation token Static Web Apps issued to this site, recorded by
+scripts/bind-custom-domain.sh. Published at the apex (prod only). Empty until the apex is bound.''')
+param swaApexToken string = ''
+
+var env = toLower(environmentName)
+var isProd = env == 'prod'
+var baseName = 'atlasrelay-${env}'
+var tags = {
   project: 'atlasrelay'
+  environment: env
   repo: githubRepo
 }
+// The availability test requests the domain once the apex is bound (its token is recorded), and
+// the site's own hostname before that. Only prod has one.
+var apexBound = !empty(dnsZoneName) && !empty(swaApexToken)
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
-  name: resourceGroupName
+  name: 'rg-${baseName}'
   location: location
   tags: tags
 }
 
-// ---------- CI identity (Owner-only; CI cannot modify its own trust) ----------
+// ---------- CI identity ----------
 
 module identity 'identity.bicep' = {
   name: 'identity'
@@ -126,56 +122,12 @@ module identity 'identity.bicep' = {
     identityName: 'id-${baseName}-ci'
     location: location
     githubOidcSubjectPrefix: githubOidcSubjectPrefix
-    enablePullRequestFederation: enablePullRequestFederation
+    githubEnvironment: env
     tags: tags
   }
 }
 
-// Least-privilege role for CI: only what deploying app.bicep needs, inside this group.
-// No identity, RBAC, locks, monitoring or budget write access; no key regeneration or deletes.
-// The name seed and roleName keep the project's original name on purpose: changing the seed would
-// create a second role, and the display name only changes when bootstrap runs.
-resource ciRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
-  name: guid(subscription().id, rg.id, 'atlas-credit-exchange-ci-deployer')
-  properties: {
-    roleName: 'Atlas Credit Exchange CI Deployer (${resourceGroupName})'
-    description: 'Deploy infra/app.bicep (static site, storage) and read the Static Web App deployment token.'
-    type: 'CustomRole'
-    assignableScopes: [rg.id]
-    permissions: [
-      {
-        actions: [
-          '*/read'
-          'Microsoft.Resources/deployments/*'
-          'Microsoft.Web/staticSites/*'
-          'Microsoft.Storage/storageAccounts/*'
-        ]
-        notActions: [
-          'Microsoft.Web/staticSites/delete'
-          // Custom domains carry the certificate the live site is served on, and CI deploys
-          // app.bicep on every merge that touches infra/**. A binding written with the wrong
-          // validation method returns 200, does nothing, and is recoverable only by deleting and
-          // recreating it on a locked site (docs/RUNBOOK.md). infra/app.bicepparam leaves
-          // customDomain empty; this is what makes that a rule instead of a comment.
-          // The dev binding (infra/dev.bicepparam) is deployed by an Owner, not by this identity.
-          'Microsoft.Web/staticSites/customDomains/write'
-          'Microsoft.Web/staticSites/customDomains/delete'
-          'Microsoft.Web/staticSites/createinvitation/action'
-          'Microsoft.Web/staticSites/authproviders/users/write'
-          'Microsoft.Web/staticSites/authproviders/users/delete'
-          'Microsoft.Web/staticSites/resetapikey/action'
-          'Microsoft.Storage/storageAccounts/delete'
-          'Microsoft.Storage/storageAccounts/regeneratekey/action'
-          'Microsoft.Storage/storageAccounts/rotateKey/action'
-        ]
-        dataActions: []
-        notDataActions: []
-      }
-    ]
-  }
-}
-
-// ---------- monitoring + budget (Owner-only) ----------
+// ---------- monitoring + budget ----------
 
 module platform 'platform.bicep' = {
   name: 'platform'
@@ -183,74 +135,106 @@ module platform 'platform.bicep' = {
   params: {
     baseName: baseName
     location: location
-    enableApplicationInsights: enableApplicationInsights
     logDailyCapGb: logDailyCapGb
+    budgetName: 'budget-${baseName}'
     budgetAmount: budgetAmount
-    budgetContactEmail: budgetContactEmail
     budgetStartDate: budgetStartDate
     alertEmail: alertEmail
-    availabilityTestUrl: availabilityTestUrl
     tags: tags
   }
 }
 
-// ---------- application resources (also deployed by CI from infra/app.bicepparam) ----------
+// Alerts, the availability test and the workbook. A module of main.bicep rather than of
+// platform.bicep because the availability test requests the site, and the site's app settings
+// need the App Insights component first.
+module monitoring 'monitoring.bicep' = {
+  name: 'monitoring'
+  scope: rg
+  params: {
+    baseName: baseName
+    location: location
+    tags: tags
+    workspaceId: platform.outputs.workspaceId
+    appInsightsId: platform.outputs.appInsightsId
+    alertEmail: alertEmail
+    availabilityTestUrl: !isProd ? '' : (apexBound ? 'https://${dnsZoneName}/' : 'https://${app.outputs.staticWebAppHostname}/')
+  }
+}
+
+// ---------- application resources ----------
 
 module app 'app.bicep' = {
   name: 'app'
   scope: rg
   params: {
     baseName: baseName
+    storageName: 'statlasrelay${env}${take(uniqueString(subscription().id, env), 6)}'
     location: location
     swaLocation: swaLocation
     swaSku: swaSku
     stagingEnvironmentPolicy: stagingEnvironmentPolicy
-    enableApplicationInsights: enableApplicationInsights
-    appInsightsName: enableApplicationInsights ? platform.outputs.appInsightsName : 'appi-${baseName}'
+    appInsightsConnectionString: platform.outputs.appInsightsConnectionString
     storageKeyIndex: storageKeyIndex
     additionalAppSettings: additionalAppSettings
     tags: tags
   }
 }
 
-// ---------- DNS (Owner-only; CI has no Microsoft.Network permissions) ----------
-
-module dns 'dns.bicep' = if (!empty(dnsZoneName)) {
-  name: 'dns'
-  scope: rg
-  params: {
-    zoneName: dnsZoneName
-    staticWebAppDefaultHostname: app.outputs.staticWebAppHostname
-    devStaticWebAppDefaultHostname: devStaticWebAppDefaultHostname
-    staticWebAppInboundIp: app.outputs.staticWebAppInboundIp
-    apexTxtValues: dnsApexTxtValues
-    tags: tags
-  }
-}
-
-// ---------- RBAC + locks (Owner-only) ----------
+// ---------- CI role ----------
 
 module rbac 'rbac.bicep' = {
   name: 'rbac'
   scope: rg
   params: {
+    environmentName: env
     principalId: identity.outputs.principalId
-    roleDefinitionId: ciRole.id
-    storageAccountName: app.outputs.storageAccountName
-    staticWebAppName: app.outputs.staticWebAppName
   }
 }
 
-output resourceGroupName string = rg.name
-output storageAccountName string = app.outputs.storageAccountName
-output staticWebAppName string = app.outputs.staticWebAppName
-output staticWebAppHostname string = app.outputs.staticWebAppHostname
-output ciClientId string = identity.outputs.clientId
-output ciPrincipalId string = identity.outputs.principalId
-output ciRoleDefinitionId string = ciRole.id
-output appInsightsName string = platform.outputs.appInsightsName
-output appInsightsConnectionString string = platform.outputs.appInsightsConnectionString
-output dnsZoneName string = empty(dnsZoneName) ? '' : dns!.outputs.zoneName
-output dnsNameServers array = empty(dnsZoneName) ? [] : dns!.outputs.nameServers
-output tenantId string = tenant().tenantId
-output subscriptionId string = subscription().subscriptionId
+// ---------- DNS ----------
+
+module dns 'dns.bicep' = if (isProd && !empty(dnsZoneName)) {
+  name: 'dns'
+  scope: rg
+  params: {
+    zoneName: dnsZoneName
+    ttl: dnsTtl
+    staticWebAppDefaultHostname: app.outputs.staticWebAppHostname
+    staticWebAppInboundIp: app.outputs.staticWebAppInboundIp
+    apexTxtValues: concat(dnsApexTxtValues[?dnsZoneName] ?? [], empty(swaApexToken) ? [] : [swaApexToken])
+    tags: tags
+  }
+}
+
+module subdomain 'dns-subdomain.bicep' = if (!isProd && !empty(dnsZoneName)) {
+  name: 'dns-subdomain'
+  scope: resourceGroup(dnsZoneResourceGroup)
+  params: {
+    zoneName: dnsZoneName
+    recordName: env
+    target: app.outputs.staticWebAppHostname
+    ttl: dnsTtl
+  }
+}
+
+// Output names are upper case: scripts/lib/env.sh saves them as settings under these names.
+output AZURE_RESOURCE_GROUP string = rg.name
+output AZURE_TENANT_ID string = tenant().tenantId
+output AZURE_SUBSCRIPTION_ID string = subscription().subscriptionId
+output CI_CLIENT_ID string = identity.outputs.clientId
+output CI_PRINCIPAL_ID string = identity.outputs.principalId
+output SWA_NAME string = app.outputs.staticWebAppName
+output SWA_HOSTNAME string = app.outputs.staticWebAppHostname
+output STORAGE_ACCOUNT string = app.outputs.storageAccountName
+output LOG_ANALYTICS_WORKSPACE string = platform.outputs.workspaceName
+output APPINSIGHTS_NAME string = platform.outputs.appInsightsName
+// Compiled into the browser bundle by the Deploy workflow (scripts/bootstrap.sh copies it to the
+// repository variable APPINSIGHTS_CONNECTION_STRING). It names the ingestion endpoint and the
+// instrumentation key; it is not a credential and is public once the site ships it.
+output APPLICATIONINSIGHTS_CONNECTION_STRING string = platform.outputs.appInsightsConnectionString
+// The hostname the site is reached on: the domain once the apex is bound, else the site's own.
+output SITE_HOSTNAME string = isProd && apexBound
+  ? dnsZoneName
+  : (!isProd && !empty(dnsZoneName) ? '${env}.${dnsZoneName}' : app.outputs.staticWebAppHostname)
+// Set these as the domain's name servers at the registrar (prod only).
+output NAME_SERVERS string = isProd && !empty(dnsZoneName) ? join(dns!.outputs.nameServers, ' ') : ''

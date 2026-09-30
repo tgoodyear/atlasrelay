@@ -82,7 +82,10 @@ accounts. The site records the project, the pledge and its confirmation.
 ## Infrastructure
 
 GitHub Actions deploys with OpenID Connect through a user-assigned managed identity that
-trusts only this repository's `main` branch. No long-lived Azure credential is stored in the
-repository or in GitHub secrets. The identity's custom role is scoped to one resource group
-and cannot change role assignments, modify its own federation, change DNS, delete the site or
-the storage account, or regenerate storage keys.
+trusts only jobs in this repository's GitHub Environment `prod`, which only the `main` branch may
+use. No long-lived Azure credential is stored in the repository or in GitHub secrets. The
+identity's custom role can read the static web app and list its deployment token, and nothing
+else: it cannot deploy infrastructure, change role assignments, modify its own federation,
+change DNS, read or change storage, or delete anything. Infrastructure is deployed by a
+subscription Owner as a deployment stack whose deny settings block deleting its resources
+outside the stack.

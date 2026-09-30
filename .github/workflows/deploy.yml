@@ -9,7 +9,9 @@ on:
       # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
       # to it has to trigger this workflow.
       - 'scripts/*.sh'
+      - 'scripts/lib/**'
       - '**.md'
+      - '.azure/**'
       - '.github/workflows/infra.yml'
   pull_request:
     branches: [main]
@@ -19,7 +21,9 @@ on:
       # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
       # to it has to trigger this workflow.
       - 'scripts/*.sh'
+      - 'scripts/lib/**'
       - '**.md'
+      - '.azure/**'
       - '.github/workflows/infra.yml'
   workflow_dispatch:
 
@@ -31,8 +35,8 @@ concurrency:
 permissions: {}
 
 env:
-  RESOURCE_GROUP: internetresearch
-  SWA_NAME: swa-internetresearch
+  RESOURCE_GROUP: rg-atlasrelay-prod
+  SWA_NAME: swa-atlasrelay-prod
   # Set by scripts/bootstrap.sh from the Bicep outputs. Until then the workflow builds and tests only;
   # once AZURE_BOOTSTRAPPED is set, missing secrets fail the run instead of skipping silently.
   AZURE_READY: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
@@ -143,6 +147,9 @@ jobs:
     needs: [build, browser]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # The CI identity trusts jobs in this GitHub Environment only, and scripts/bootstrap.sh
+    # restricts it to the main branch.
+    environment: prod
     permissions:
       id-token: write
       contents: read

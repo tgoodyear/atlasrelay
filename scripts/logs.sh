@@ -7,16 +7,22 @@
 #   scripts/logs.sh traffic 7d          # page loads, pages, referrers, campaigns, countries
 #   scripts/logs.sh list                # the saved queries
 #
-# Needs az signed in with an account that can read the workspace, and jq. Uses SUBSCRIPTION_ID if
-# set, otherwise az's current subscription; RESOURCE_GROUP and WORKSPACE override the defaults.
+# Needs az signed in with an account that can read the workspace, and jq. Reads the prod
+# environment's workspace; ATLASRELAY_ENV=dev reads dev's. Uses SUBSCRIPTION_ID if set, then the
+# environment's settings (.azure/<env>/.env), then az's current subscription. RESOURCE_GROUP and
+# WORKSPACE override the names.
 set -euo pipefail
-[ $# -ge 1 ] && [ $# -le 2 ] || { sed -n '2,11s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+[ $# -ge 1 ] && [ $# -le 2 ] || { sed -n '2,13s/^# \{0,1\}//p' "$0" >&2; exit 2; }
 NAME=$1
 SPAN=${2:-1d}
-RESOURCE_GROUP=${RESOURCE_GROUP:-internetresearch}
-WORKSPACE=${WORKSPACE:-log-internetresearch}
+ENV_NAME=${ATLASRELAY_ENV:-prod}
+RESOURCE_GROUP=${RESOURCE_GROUP:-rg-atlasrelay-$ENV_NAME}
+WORKSPACE=${WORKSPACE:-log-atlasrelay-$ENV_NAME}
 die() { echo "error: $*" >&2; exit 1; }
 cd "$(dirname "$0")/.."
+if [ -z "${SUBSCRIPTION_ID:-}" ] && [ -f ".azure/$ENV_NAME/.env" ]; then
+  SUBSCRIPTION_ID=$(sed -n 's/^AZURE_SUBSCRIPTION_ID="\(.*\)"$/\1/p' ".azure/$ENV_NAME/.env")
+fi
 
 if [ "$NAME" = list ]; then
   for f in ops/queries/*.kql; do

@@ -11,7 +11,7 @@ the project, the pledge and its confirmation.
 | --- | --- |
 | Simple UI | Single-page React app with a handful of screens. |
 | Serverless | Azure Static Web Apps (Free) + managed Azure Functions + Azure Table Storage + App Insights. |
-| CI/CD from GitHub | Two GitHub Actions workflows: app deploy (build and test on PRs, deploy on push to `main`) and infra (lint on PRs, what-if and deploy on `main`). Both log in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub. |
+| CI/CD from GitHub | Two GitHub Actions workflows: app deploy (build and test on PRs, deploy on push to `main`, logging in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub) and infra checks (Bicep lint on PRs and `main`). The infrastructure itself is one deployment stack per environment, deployed by a subscription Owner. |
 | Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth. RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); the design leaves a slot for it. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
 
@@ -315,30 +315,36 @@ so the function sets the same security headers itself.
 
 ## Azure resources (every one declared in Bicep)
 
+Each environment is one deployment stack at subscription scope, `atlasrelay-<env>`, deployed from
+`infra/main.bicep` by `scripts/bootstrap.sh` or `scripts/provision.sh` (a subscription Owner).
+The names below are prod's; `dev` has the same set with `dev` in place of `prod`, no zone, and a
+`dev` CNAME in the prod zone.
+
 | Resource | Bicep | SKU |
 | --- | --- | --- |
-| Resource group `internetresearch` (westus2) | `infra/main.bicep` | |
-| Static Web App `swa-internetresearch` + `appsettings` (staging environments disabled) | `infra/app.bicep` | Free |
-| Storage account `stinternetresearch<hash>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS |
-| Log Analytics `log-internetresearch` (0.1 GB/day cap; App Insights tables kept 90 days, other tables 30) + App Insights `appi-internetresearch` | `infra/platform.bicep` | Pay-as-you-go |
-| Action group `ag-internetresearch`, five log search alerts, availability test `webtest-internetresearch-home` and its alert, workbook "Atlas Relay" | `infra/monitoring.bicep` | |
-| User-assigned managed identity `id-internetresearch-ci` + federated credential for the GitHub `main` branch | `infra/identity.bicep` | |
-| Custom role "Atlas Credit Exchange CI Deployer": read everything in the group; write deployments, the static site and storage only, minus site deletion/invitations/user roles/token reset and storage deletion/key regeneration | `infra/main.bicep` | |
-| Role assignment of that role to the CI identity; `CanNotDelete` locks on the storage account and the static site | `infra/rbac.bicep` | |
-| Public DNS zone `atlasrelay.org` with a `www` CNAME to the site and mail-rejection records | `infra/dns.bicep` | Azure DNS |
+| Resource group `rg-atlasrelay-prod` (westus2) | `infra/main.bicep` | |
+| Static Web App `swa-atlasrelay-prod` + `appsettings` (staging environments disabled) | `infra/app.bicep` | Free |
+| Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims` | `infra/app.bicep` | Standard LRS |
+| Log Analytics `log-atlasrelay-prod` (0.1 GB/day cap; App Insights tables kept 90 days, other tables 30) + App Insights `appi-atlasrelay-prod` | `infra/platform.bicep` | Pay-as-you-go |
+| Action group `ag-atlasrelay-prod`, five log search alerts, availability test `webtest-atlasrelay-prod-home` and its alert, workbook "Atlas Relay" | `infra/monitoring.bicep` | |
+| User-assigned managed identity `id-atlasrelay-prod-ci` + federated credential for the GitHub Environment `prod` | `infra/identity.bicep` | |
+| Custom role "Atlas Relay CI Deployer (prod)": read the resource group and the static site, and list the site's deployment token; assigned to the CI identity on the group | `infra/rbac.bicep` | |
+| Public DNS zone `atlasrelay.org` with the apex A record, a `www` CNAME to the site, the apex TXT set and mail-rejection records (prod only) | `infra/dns.bicep` | Azure DNS |
 
-`main.bicep` is subscription-scoped and is run once by a subscription Owner via
-`scripts/bootstrap.sh`. It creates the group, the CI identity, the custom role, the
-monitoring resources, the role assignment and the locks, and deploys `app.bicep`.
-`app.bicep` is what CI deploys on every infra change; it needs nothing beyond the custom
-role, so a compromised workflow run cannot change RBAC, re-federate the identity, remove a
-lock, delete the site or data, regenerate storage keys, or raise the log cap. It can still
-read storage keys through `listKeys`, which the API itself needs, and it could change the
-site's SKU.
+The stack deploys with `--action-on-unmanage deleteResources`, so a resource removed from the
+templates is deleted on the next deployment, and `--deny-settings-mode denyDelete`, so nobody can
+delete a managed resource outside the stack, Owners included. That replaces the `CanNotDelete`
+locks the storage account and the site used to carry. Neither setting excludes any principal: CI
+deletes nothing, and an Owner who needs to delete by hand deploys once with the deny settings off.
 
-`main.bicepparam` (bootstrap) and `app.bicepparam` (CI) both feed `app.bicep`;
-`scripts/check-params.sh` fails lint if a shared value drifts, so neither path undoes
-the other.
+CI deploys no Bicep. Its role can read the site and list the deployment token the upload action
+needs, and nothing else, so a compromised workflow run cannot change RBAC, re-federate the
+identity, touch storage, keys, DNS or monitoring, or delete anything. It can replace the site's
+content, which is what a deploy is.
+
+`infra/main.bicepparam` reads the environment's settings (`.azure/<env>/.env`, git-ignored) with
+`readEnvironmentVariable`; `.azure/env.example` lists them and `scripts/check-params.sh` checks
+the two against each other.
 
 Why a managed identity rather than an Entra app registration: the Microsoft Graph Bicep
 extension cannot be used from a personal Microsoft account, and the subscription is owned
@@ -347,12 +353,13 @@ resource, works with `azure/login`, and needs no directory permissions.
 
 Why the federated subject looks odd: the repository was created after 2026-07-15, so
 GitHub issues immutable subjects of the form `repo:OWNER@OWNER-ID/REPO@REPO-ID:…`.
-`bootstrap.sh` reads the prefix from the GitHub API and passes it to Bicep.
+`bootstrap.sh` reads the prefix from the GitHub API and passes it to Bicep, which appends
+`:environment:<env>`. `bootstrap.sh` also restricts that GitHub Environment to `main`.
 
 Why no pull-request previews: preview environments would run unreviewed code against the
 production tables with a CI identity, so PRs only build, test and lint. Previews can be
-re-enabled later by setting `enablePullRequestFederation` and
-`stagingEnvironmentPolicy: Enabled`.
+re-enabled later with `stagingEnvironmentPolicy: Enabled` and a federated credential for pull
+requests in `infra/identity.bicep`.
 
 Upgrade path: SWA Standard for custom OIDC (RIPE NCC Access), an SLA and PR preview
 environments.
@@ -362,11 +369,14 @@ environments.
 ```
 web/      Vite + React + TypeScript SPA; public/staticwebapp.config.json
 api/      Azure Functions v4 (Node 22, TypeScript)
-infra/    main.bicep (subscription scope) → identity.bicep, rbac.bicep, app.bicep (+ .bicepparam)
-scripts/  bootstrap.sh (one-time provisioning + GitHub secret wiring) and its helpers; logs.sh
+infra/    main.bicep (subscription scope, one deployment stack per environment) and its modules;
+          main.bicepparam reads the environment's settings
+.azure/   env.example; each environment's settings in .azure/<env>/.env (git-ignored)
+scripts/  bootstrap.sh, provision.sh, teardown.sh, settings.sh (lib/env.sh); bind-custom-domain.sh;
+          logs.sh; check-params.sh
 ops/queries/  saved KQL queries that scripts/logs.sh runs against the Log Analytics workspace
 .github/workflows/deploy.yml   build + test on PRs; build + deploy app & API on main
-.github/workflows/infra.yml    Bicep lint on PRs; what-if + deploy app.bicep on main (OIDC login)
+.github/workflows/infra.yml    Bicep build + lint, settings check, ShellCheck; deploys nothing
 docs/     this spec, RIPE research notes, runbook
 ```
 
@@ -377,17 +387,16 @@ docs/     this spec, RIPE research notes, runbook
   telemetry) and API, then stage a self-contained `api-deploy/` folder (npm workspaces hoist the
   API's runtime dependencies to the repo root, and the SWA action uploads the API folder
   verbatim), smoke-load the API entry point, upload both as artifacts. Runs on PRs too.
-- `deploy.yml`, job `deploy` (push to `main` / manual only): download artifacts,
-  `azure/login` (OIDC, managed identity), read the SWA deployment token with
+- `deploy.yml`, job `deploy` (push to `main` / manual only, in the GitHub Environment `prod`):
+  download artifacts, `azure/login` (OIDC, managed identity), read the SWA deployment token with
   `az staticwebapp secrets list` (masked, never stored), then
   `Azure/static-web-apps-deploy@v1` with `skip_app_build`/`skip_api_build`.
 - `deploy.yml`, job `indexnow` (after a deploy that uploaded, no Azure identity): runs
   `scripts/indexnow.mjs`, which reads the live `/sitemap.xml` and posts its URLs to IndexNow.
   It logs failures as warnings and is `continue-on-error`, so it cannot fail a deploy.
-- `infra.yml`: lints every template and checks parameter drift on PRs; on `main` it
-  logs in, runs `az deployment group what-if` (resource ids only, so no connection
-  string reaches the log) then `create` on `infra/app.bicep`.
-- Both workflows degrade to build/lint-only until bootstrap has run; after that
+- `infra.yml`: builds and lints every template (a warning fails it), runs
+  `scripts/check-params.sh` and ShellCheck, on PRs and on `main`. It holds no Azure identity.
+- `deploy.yml` degrades to build-only until bootstrap has run; after that
   (`AZURE_BOOTSTRAPPED` repo variable) a missing secret fails the run instead of
   skipping. Deployments to `main` are serialized (`concurrency`); PR runs have their own
   groups. Third-party actions are pinned to commit SHAs and kept current by Dependabot.
@@ -395,13 +404,13 @@ docs/     this spec, RIPE research notes, runbook
   SHA pins the wrapper, not the client image.
 - The staged API artifact is built from the lockfile (`npm ci -w api --omit=dev`), so
   the tree that ships is the tree that was tested.
-- `scripts/bootstrap.sh`: preflight checks, resource-provider registration, reads the
-  GitHub OIDC subject prefix (validated against the repository's immutable-subject
-  setting), runs `az deployment sub create` with
-  `infra/main.bicep` (one retry for custom-role replication lag), waits for the role
-  assignment, and stores the identity's client id, tenant id and subscription id as
-  GitHub secrets plus the `AZURE_BOOTSTRAPPED` variable. Nothing else is created
-  imperatively.
+- `scripts/bootstrap.sh <env>`: preflight checks, resource-provider registration, reads the
+  GitHub OIDC subject prefix (validated against the repository's immutable-subject setting),
+  writes the settings, deploys the stack (retried for custom-role replication lag), creates the
+  GitHub Environment restricted to `main`, and for prod stores the identity's client id, tenant
+  id and subscription id as GitHub secrets plus the `AZURE_BOOTSTRAPPED` and
+  `APPINSIGHTS_CONNECTION_STRING` variables. `scripts/provision.sh <env>` redeploys the stack
+  from the settings; `scripts/teardown.sh <env>` deletes the environment.
 
 ## Security notes
 
