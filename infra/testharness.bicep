@@ -11,7 +11,8 @@
 //   vnet-atlasrelay-<env>          snet-cae (delegated to the Container Apps environment),
 //                                  snet-pe (private endpoints)
 //   privatelink.vaultcore.azure.net, linked to the network
-//   kv-atlasrelay-<env>-<3>        RBAC, public network access disabled, private endpoint
+//   kv-atlasrelay-<env>-<suffix>   RBAC, public network access disabled, private endpoint (the
+//                                  suffix fills the name to 24 characters: 6 for dev)
 //   id-atlasrelay-<env>-e2e        Key Vault Secrets User on the vault, Blob Data Contributor on
 //                                  the results container
 //   stare2e<env><6>/results        test results; Entra ID only, no shared keys
@@ -188,7 +189,7 @@ resource testIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-
 }
 
 resource results 'Microsoft.Storage/storageAccounts@2023-05-01' = {
-  name: take('stare2e${environmentName}${suffix}', 24)
+  name: 'stare2e${environmentName}${take(suffix, 6)}'
   location: location
   tags: tags
   sku: {

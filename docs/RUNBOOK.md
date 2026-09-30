@@ -29,7 +29,7 @@ It also gets the full-flow test harness, which is never deployed in prod
 | Resource (dev only) | dev | Declared in |
 | --- | --- | --- |
 | Virtual network with subnets `snet-cae` and `snet-pe`, private DNS zone `privatelink.vaultcore.azure.net` | `vnet-atlasrelay-dev` | `infra/testharness.bicep` |
-| Key Vault for the test accounts, no public network access, with a private endpoint | `kv-atlasrelay-dev-<3 characters>`, `pe-atlasrelay-dev-kv` | `infra/testharness.bicep` |
+| Key Vault for the test accounts, no public network access, with a private endpoint | `kv-atlasrelay-dev-<6 characters>`, `pe-atlasrelay-dev-kv` | `infra/testharness.bicep` |
 | Test identity: reads the vault's secrets, writes the results | `id-atlasrelay-dev-e2e` | `infra/testharness.bicep` |
 | Storage account for test results, container `results`, Entra ID only | `stare2edev<6 characters>` | `infra/testharness.bicep` |
 | Container Apps environment in `snet-cae`, and the test job | `cae-atlasrelay-dev`, `caj-atlasrelay-dev-e2e` | `infra/testharness.bicep` |
@@ -268,7 +268,7 @@ The tests run in Azure. `.github/workflows/e2e-dev.yml`:
    run's artifact, and fails the run unless every test passed.
 
 Inside the job, `e2e-real/run.mjs` reads the accounts from the Key Vault
-`kv-atlasrelay-dev-<3 characters>` as the job's identity, through the vault's private endpoint,
+`kv-atlasrelay-dev-<6 characters>` as the job's identity, through the vault's private endpoint,
 signs both accounts in once (`e2e-real/global-setup.ts`, outside any trace or report), runs the
 suite, and replaces the passwords and the site's session cookies with `[redacted]` in the output
 and in every result file, trace archives included, before uploading. GitHub never holds the

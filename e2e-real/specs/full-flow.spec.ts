@@ -43,7 +43,7 @@ test.beforeAll(cleanUp);
 test.afterAll(cleanUp);
 
 async function signedIn(browser: Browser, role: Role): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext({ storageState: statePath(role) });
+  const context = await browser.newContext({ baseURL: process.env.BASE_URL, storageState: statePath(role) });
   const page = await context.newPage();
   // Every confirm() the flow meets is one a person would accept.
   page.on('dialog', (d) => void d.accept());
@@ -97,7 +97,7 @@ test('researcher posts a project, donor pledges by hand, researcher confirms and
   });
 
   await test.step('a visitor sees the funded project, the pledge and the results, and not the email', async () => {
-    const visitor = await browser.newContext();
+    const visitor = await browser.newContext({ baseURL: process.env.BASE_URL });
     const page = await visitor.newPage();
     await page.goto(projectPath);
     await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible();
