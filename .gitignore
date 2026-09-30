@@ -10,3 +10,6 @@ api/local.settings.json
 !.env.example
 .claude/
 api-deploy/
+web/dist-e2e/
+web/test-results/
+web/playwright-report/
