@@ -116,20 +116,21 @@ needs to send email.
 
 ### Canonical host
 
-`https://www.atlasrelay.org` is the canonical host. The canonical tags, the sitemap and the
-IndexNow submission all use it, and the README links it. `www` is a CNAME to the site's own
-hostname, while the apex resolves through the A record described above.
+`https://atlasrelay.org` is the canonical host. The canonical tags, the sitemap and the
+IndexNow submission all use it, and the README links it. The apex resolves through the A record
+described above, while `www` is a CNAME to the site's own hostname. Both stay bound to the site.
 
-`atlasrelay.org` serves the same pages until www is made the site's default domain. Static Web
-Apps then answers every other hostname of the site, the apex and the `azurestaticapps.net` name
-included, with a redirect to it. This is a one-time step for a subscription Owner, in the portal:
-open `swa-internetresearch`, then **Custom domains**, select `www.atlasrelay.org`, and choose
-**Set default**. The custom domain schema has no default-domain property, so Bicep cannot declare
-it, and the CI role cannot write custom domains. Check it afterwards:
+`www.atlasrelay.org` serves the same pages until the apex is made the site's default domain.
+Static Web Apps then answers every other hostname of the site, `www` and the
+`azurestaticapps.net` name included, with a redirect to it. This is a one-time step for a
+subscription Owner, in the portal: open `swa-internetresearch`, then **Custom domains**, select
+`atlasrelay.org`, and choose **Set default**. The custom domain schema has no default-domain
+property, so Bicep cannot declare it, and the CI role cannot write custom domains. Check it
+afterwards:
 
 ```bash
-curl -sI 'https://atlasrelay.org/projects?status=all' | grep -iE '^(HTTP|location)'
-# expect a permanent redirect to https://www.atlasrelay.org/projects?status=all
+curl -sI 'https://www.atlasrelay.org/projects?status=all' | grep -iE '^(HTTP|location)'
+# expect a permanent redirect to https://atlasrelay.org/projects?status=all
 ```
 
 ## Dev environment
@@ -277,7 +278,7 @@ The Traffic tab, `scripts/logs.sh traffic` and `scripts/logs.sh actions` read `A
   `(not recorded)`.
 - **Campaign** (`Properties.utm_source`, `utm_medium`, `utm_campaign`): copied from the landing URL
   onto every page view of that page load. Tag the links you post, for example
-  `https://www.atlasrelay.org/?utm_source=ripe-atlas-list`, and the page loads they bring count
+  `https://atlasrelay.org/?utm_source=ripe-atlas-list`, and the page loads they bring count
   under that source. Other query parameters are never read.
 - **Country, device, browser**: App Insights works out the location from the IP address when the
   data arrives and stores the address as `0.0.0.0`. Device is Mobile for iOS and Android and

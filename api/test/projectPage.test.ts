@@ -12,7 +12,7 @@ const index = readFileSync(join(repoRoot, 'web/index.html'), 'utf8');
 const templates: PageTemplates = { project: index, notFound: '<!doctype html><title>Page not found | Atlas Relay</title><p>404 page</p>' };
 
 const ID = 'mf1abcd0000xyz12';
-const URL_OF = (path: string): string => `https://www.atlasrelay.org${path}`;
+const URL_OF = (path: string): string => `https://atlasrelay.org${path}`;
 
 function project(over: Partial<Project> = {}): Project {
   return {
@@ -67,7 +67,7 @@ test('a public project is 200 with its own head, cached briefly, indexable', asy
   assert.equal(res.status, 200);
   assert.deepEqual(s.reads, [ID]);
   assert.ok(res.body.includes('<title>Anycast catchments | Atlas Relay</title>'));
-  assert.ok(res.body.includes(`<link rel="canonical" href="https://www.atlasrelay.org/projects/${ID}" />`));
+  assert.ok(res.body.includes(`<link rel="canonical" href="https://atlasrelay.org/projects/${ID}" />`));
   assert.equal(res.headers['cache-control'], `public, max-age=${PAGE_MAX_AGE}`);
   assert.equal(res.headers['content-type'], 'text/html; charset=utf-8');
   assert.equal(res.headers['x-robots-tag'], undefined);

@@ -299,7 +299,7 @@ function:
    owner still sees a taken-down project in the app.
 5. For a public project it returns `shell/project.html` with the project's title and summary in
    `<title>`, the meta description, the Open Graph and Twitter tags, and the text inside
-   `#root`, plus a canonical URL and `og:url` on `https://www.atlasrelay.org`. Every value is
+   `#root`, plus a canonical URL and `og:url` on `https://atlasrelay.org`. Every value is
    HTML-escaped, and descriptions are cut to 200 characters.
 6. The browser loads the app from the same page. `GET /api/projects/{id}` returns the same title
    and description as `page`, and the app sets them with `usePageMeta`, so the head does not

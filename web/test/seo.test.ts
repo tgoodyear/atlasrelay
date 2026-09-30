@@ -61,7 +61,7 @@ test('the home page has a title and a meta description', () => {
 
 test('the home page canonical is the canonical origin', () => {
   assert.equal(canonicalOf(indexHtml), `${SITE_ORIGIN}/`);
-  assert.equal(SITE_ORIGIN, 'https://www.atlasrelay.org');
+  assert.equal(SITE_ORIGIN, 'https://atlasrelay.org');
 });
 
 test('Open Graph and Twitter tags are complete and agree with the head', () => {
@@ -357,6 +357,6 @@ test('the IndexNow key file is served from the site root and holds its own key',
 });
 
 test('the IndexNow script reads every <loc> from a sitemap and unescapes it', () => {
-  const xml = '<urlset><url><loc>https://www.atlasrelay.org/</loc></url><url><loc> https://www.atlasrelay.org/a?b=1&amp;c=2 </loc><lastmod>2026-09-20</lastmod></url></urlset>';
-  assert.deepEqual(extractLocs(xml), ['https://www.atlasrelay.org/', 'https://www.atlasrelay.org/a?b=1&c=2']);
+  const xml = '<urlset><url><loc>https://atlasrelay.org/</loc></url><url><loc> https://atlasrelay.org/a?b=1&amp;c=2 </loc><lastmod>2026-09-20</lastmod></url></urlset>';
+  assert.deepEqual(extractLocs(xml), ['https://atlasrelay.org/', 'https://atlasrelay.org/a?b=1&c=2']);
 });

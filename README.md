@@ -1,6 +1,6 @@
 # Atlas Relay
 
-[atlasrelay.org](https://www.atlasrelay.org) connects Internet researchers who need
+[atlasrelay.org](https://atlasrelay.org) connects Internet researchers who need
 [RIPE Atlas](https://atlas.ripe.net) measurement credits with Atlas users who have credits to
 spare. Researchers post a project, and donors send credits in one of two ways. Donors can
 transfer through the RIPE Atlas API with a single-use, transfer-only key, and the pledge is

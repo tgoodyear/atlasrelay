@@ -5,5 +5,5 @@
  *
  * This file imports nothing, so web/test/seo.test.ts can load the page renderer that uses it.
  */
-export const SITE_ORIGIN = 'https://www.atlasrelay.org';
+export const SITE_ORIGIN = 'https://atlasrelay.org';
 export const SITE_NAME = 'Atlas Relay';

@@ -97,12 +97,12 @@ test('the project head is one line, capped, and never empty', () => {
 });
 
 test('only /projects/{id} and /projects/{id}/edit with a well-formed id are project paths', () => {
-  const origin = 'https://www.atlasrelay.org';
+  const origin = 'https://atlasrelay.org';
   assert.deepEqual(parseProjectPath(`${origin}/projects/${ID}`), { kind: 'project', id: ID });
   assert.deepEqual(parseProjectPath(`${origin}/projects/${ID}?utm_source=x#top`), { kind: 'project', id: ID });
   assert.deepEqual(parseProjectPath(`${origin}/projects/${ID}/`), { kind: 'project', id: ID });
   assert.deepEqual(parseProjectPath(`/projects/${ID}`), { kind: 'project', id: ID });
-  assert.deepEqual(parseProjectPath(`https://atlasrelay.org/projects/${ID}`), { kind: 'project', id: ID });
+  assert.deepEqual(parseProjectPath(`https://www.atlasrelay.org/projects/${ID}`), { kind: 'project', id: ID });
   assert.deepEqual(parseProjectPath(`${origin}/projects/${ID}/edit`), { kind: 'edit', id: ID });
   assert.deepEqual(parseProjectPath(`${origin}/projects/${ID}/edit/`), { kind: 'edit', id: ID });
   for (const bad of [
@@ -147,10 +147,10 @@ test('a project page carries the project in every title and description tag, esc
 
 test('a project page has its canonical URL and og:url, is indexable, and keeps the share image', () => {
   const html = renderProjectPage(template, { id: ID, title: 'Anycast', summary: 'Measuring anycast.' });
-  assert.deepEqual(canonicals(html), [`https://www.atlasrelay.org/projects/${ID}`]);
-  assert.equal(meta(html, 'property', 'og:url'), `https://www.atlasrelay.org/projects/${ID}`);
+  assert.deepEqual(canonicals(html), [`https://atlasrelay.org/projects/${ID}`]);
+  assert.equal(meta(html, 'property', 'og:url'), `https://atlasrelay.org/projects/${ID}`);
   assert.equal(meta(html, 'name', 'robots'), undefined);
-  assert.equal(meta(html, 'property', 'og:image'), 'https://www.atlasrelay.org/og-image.png');
+  assert.equal(meta(html, 'property', 'og:image'), 'https://atlasrelay.org/og-image.png');
   assert.equal(meta(html, 'name', 'twitter:card'), 'summary_large_image');
   assert.equal(meta(html, 'property', 'og:type'), 'website');
   assert.ok(!/\n[ \t]*\n/.test(html.slice(0, html.indexOf('</head>'))), 'no blank lines in the head');
