@@ -47,8 +47,9 @@ export function init(connectionString: string, earlyErrors: unknown[]): void {
   core.initialize(config, [plugin, new AjaxPlugin(), sender]);
   // The Sender batches for up to 15 seconds. The full SDK flushes the batch when the page is hidden
   // or left; with the core used directly that is this file's job. Without it, whatever was queued
-  // when the visitor closed the tab or followed a sign-in link was lost. pagehide and
-  // visibilitychange only: an unload handler would keep the page out of the back/forward cache.
+  // when the visitor closed the tab was lost. A sign-in click does not rely on this: telemetry.ts
+  // sends it before following the link. pagehide and visibilitychange only: an unload handler
+  // would keep the page out of the back/forward cache.
   addPageHideEventListener(() => sender.onunloadFlush());
   channel = sender;
   core.addTelemetryInitializer((item: ITelemetryItem) => {
@@ -69,6 +70,32 @@ export function event(name: string, properties: Record<string, string>): void {
 /** Send what is queued now, the way it is sent when the page is left (a beacon where possible). */
 export function flush(): void {
   channel?.onunloadFlush();
+}
+
+/**
+ * Send what is queued now as a keepalive request, which the browser finishes even after the page
+ * has been replaced, and resolve once it has finished or failed. Never rejects; the caller decides
+ * how long to wait. Resolves at once when nothing was queued, or when the SDK used a beacon
+ * instead (browsers without keepalive, or a batch over the keepalive size limit), since a beacon
+ * outlives the page too.
+ */
+export function sendNow(): Promise<void> {
+  const sender = channel;
+  if (!sender) return Promise.resolve();
+  // The unload path makes one call to the global fetch, with keepalive, and does not wait for the
+  // response. Catch that call's promise so the caller can.
+  let request: Promise<Response> | undefined;
+  const original = window.fetch;
+  window.fetch = (...args: Parameters<typeof fetch>) => (request = original.apply(window, args));
+  try {
+    sender.onunloadFlush();
+  } catch {
+    // Nothing was sent; the caller goes on regardless.
+  } finally {
+    window.fetch = original;
+  }
+  const started = request as Promise<Response> | undefined;
+  return started ? started.then(() => undefined, () => undefined) : Promise.resolve();
 }
 
 function trackError(err: unknown): void {

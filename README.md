@@ -41,3 +41,10 @@ security problems privately, as described in [SECURITY.md](SECURITY.md), rather 
 public issue.
 
 Licensed under the [MIT License](LICENSE).
+
+## Third-party notices
+
+The site serves its own copies of two fonts, both under the SIL Open Font License 1.1:
+[Inter](https://github.com/rsms/inter) ([license](https://github.com/rsms/inter/blob/master/LICENSE.txt))
+and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) ([license](https://github.com/JetBrains/JetBrainsMono/blob/master/OFL.txt)).
+The license text also ships in each font's `@fontsource` package.

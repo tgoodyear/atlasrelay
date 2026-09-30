@@ -228,11 +228,14 @@ so local and dev builds send nothing. The Deploy workflow passes the repository 
 `APPINSIGHTS_CONNECTION_STRING`, which `scripts/bootstrap.sh` sets from the Bicep output. The
 SDK loads once the page has finished loading, so the first page's own API calls are not in
 `AppDependencies`. Later calls are, and their `traceparent` header gives the API request the same
-operation id. It sends in batches and sends what is queued when the page is hidden or left, so an
-action followed by a navigation still arrives. A sign-in link clicked before the SDK has loaded
-starts the download at once and waits up to 1.5 seconds for it, so the click and the first page
-view are sent before the page is replaced. A visitor who closes the tab before the SDK loads is
-not counted.
+operation id. It sends in batches, and sends what is queued when the page is hidden or left. A
+sign-in click does not rely on that, because a request made while the page is being replaced may
+never arrive. The browser follows the link once the click has been sent, or after 1.5 seconds,
+whichever comes first. The click goes as a keepalive request, so if time runs out it still
+finishes after the page has gone. A click before the SDK has loaded starts the download at once, within the
+same 1.5 seconds. If the SDK or the ingestion endpoint is blocked, the link is followed anyway.
+Ctrl-, Cmd- and middle-clicks open a tab and are not held. A visitor who closes the tab before the
+SDK loads is not counted. `web/e2e/sign-in.spec.ts` checks this in a browser.
 
 ### Where to look
 

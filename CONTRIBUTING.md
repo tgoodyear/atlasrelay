@@ -26,6 +26,14 @@ npm test          # API typecheck and unit tests, web typecheck
 npm run build     # the Vite build, then the API bundle, which embeds two of the built pages
 ```
 
+If you change `web/src/lib/telemetry.ts` or a sign-in link, also run the browser tests. They build
+the site with a placeholder App Insights connection string and answer every request themselves:
+
+```bash
+npx -w web playwright install chromium   # once
+npm run test:e2e -w web
+```
+
 Infrastructure lives in `infra/*.bicep`. Changes to `app.bicep` deploy through
 CI; the resource group, identity, roles, locks, monitoring and DNS are deployed
 only by a subscription owner running `scripts/bootstrap.sh`.

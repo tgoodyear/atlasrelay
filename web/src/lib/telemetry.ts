@@ -99,27 +99,43 @@ function onLinkClick(event: MouseEvent): void {
   const action = linkAction(anchor.href, location.href);
   if (!action) return;
   trackAction(action.name, action.properties);
-  // A sign-in link replaces this page. Before the SDK has started, whatever is held here (the
-  // first page view, this click) exists only in memory and would go with it. Hold the navigation
-  // until the SDK has taken the queue and sent it, for at most SIGN_IN_WAIT_MS. Links that open a
-  // new tab, and clicks that the browser turns into one, leave this page alive and need nothing.
+  // A sign-in link replaces this page, and the SDK batches for up to 15 seconds. Sending the click
+  // from pagehide is not enough: a request made while the page is being torn down may never
+  // arrive. So the navigation waits until the click has been sent (loading the SDK first if it has
+  // not started yet), for at most SIGN_IN_WAIT_MS. Links that open a new tab, and clicks that the
+  // browser turns into one, leave this page alive and are left to the browser.
   const replacesPage =
     event.type === 'click' && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey &&
     (!anchor.target || anchor.target === '_self');
-  if (sdk || action.name !== 'sign-in-clicked' || !replacesPage || event.defaultPrevented) return;
+  if (action.name !== 'sign-in-clicked' || !replacesPage || event.defaultPrevented) return;
   event.preventDefault();
   const href = anchor.href;
   let gone = false;
   const go = () => {
     if (gone) return;
     gone = true;
+    clearTimeout(timer);
+    // The request sendNow started carries on after the page has gone. Anything queued since goes
+    // the same way; usually there is nothing and this sends nothing.
+    if (sdk) quietly(() => sdk?.flush());
     location.assign(href);
   };
-  setTimeout(go, SIGN_IN_WAIT_MS);
-  void loadSdk().then((mod) => {
-    mod?.flush();
-    go();
-  });
+  const timer = setTimeout(go, SIGN_IN_WAIT_MS);
+  // Whatever goes wrong here (the SDK blocked or failing, the endpoint unreachable), the link is
+  // followed: at once if the SDK cannot be had, otherwise when the request ends or time runs out.
+  void (sdk ? Promise.resolve(sdk) : loadSdk())
+    .then((mod) => mod?.sendNow())
+    .catch(() => undefined)
+    .then(go);
+}
+
+// Telemetry must never stand between the visitor and the page they asked for.
+function quietly(fn: () => void): void {
+  try {
+    fn();
+  } catch {
+    // The click is lost; the navigation is not.
+  }
 }
 
 /** Call once, before the app renders. */
