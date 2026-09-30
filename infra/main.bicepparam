@@ -6,12 +6,14 @@ using './main.bicep'
 param environmentName = readEnvironmentVariable('AZURE_ENV_NAME')
 param location = readEnvironmentVariable('AZURE_LOCATION', 'westus2')
 param swaLocation = 'westus2'
-param swaSku = 'Free'
 param stagingEnvironmentPolicy = 'Disabled'
 param githubRepo = readEnvironmentVariable('ATLASRELAY_GITHUB_REPO', 'tgoodyear/atlasrelay')
 param githubOidcSubjectPrefix = readEnvironmentVariable('ATLASRELAY_GITHUB_OIDC_SUBJECT_PREFIX')
 param logDailyCapGb = '0.1'
-param storageKeyIndex = int(readEnvironmentVariable('ATLASRELAY_STORAGE_KEY_INDEX', '0'))
+// The next two are for moving an environment off managed functions only (docs/RUNBOOK.md).
+param storageSharedKeyAccess = bool(readEnvironmentVariable('ATLASRELAY_STORAGE_SHARED_KEY', 'false'))
+param linkApi = !bool(readEnvironmentVariable('ATLASRELAY_API_UNLINKED', 'false'))
+param operatorPrincipalId = readEnvironmentVariable('ATLASRELAY_OPERATOR_PRINCIPAL_ID', '')
 param additionalAppSettings = {}
 param alertEmail = readEnvironmentVariable('ATLASRELAY_ALERT_EMAIL', '')
 param budgetAmount = 120

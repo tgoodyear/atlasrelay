@@ -1,5 +1,6 @@
 // Atlas Relay: application resources (resource-group scope), a module of infra/main.bicep.
-// Storage with the tables the API uses, and the static web app with its app settings.
+// Storage with the tables the API uses, and the static web app. The API itself, a Function App
+// linked to the site, is in api.bicep.
 targetScope = 'resourceGroup'
 
 @description('Base name used for resources, e.g. atlasrelay-prod')
@@ -23,13 +24,6 @@ param location string = resourceGroup().location
 ])
 param swaLocation string = 'westus2'
 
-@description('Free or Standard. Standard unlocks custom OIDC providers.')
-@allowed([
-  'Free'
-  'Standard'
-])
-param swaSku string = 'Free'
-
 @description('Allow pull-request preview environments. Off: only production is deployed.')
 @allowed([
   'Enabled'
@@ -37,18 +31,12 @@ param swaSku string = 'Free'
 ])
 param stagingEnvironmentPolicy string = 'Disabled'
 
-@description('App Insights connection string for the API. Empty leaves telemetry off.')
-param appInsightsConnectionString string = ''
+@description('''Accept the storage account key. Off: only Microsoft Entra identities can reach the data.
+On only while an environment moves off managed functions (docs/RUNBOOK.md).''')
+param storageSharedKeyAccess bool = false
 
-@description('Which storage key the API uses (0 = key1, 1 = key2). Flip during key rotation for zero downtime.')
-@allowed([
-  0
-  1
-])
-param storageKeyIndex int = 0
-
-@description('Extra app settings merged into the managed-functions configuration. Bicep is the only writer of app settings.')
-param additionalAppSettings object = {}
+@description('Object id of the Owner who works on the tables by hand (moderation, exports). Empty: nobody.')
+param operatorPrincipalId string = ''
 
 @description('Tags applied to every resource')
 param tags object = {}
@@ -79,8 +67,10 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
     supportsHttpsTrafficOnly: true
-    // Managed SWA functions have no managed identity, so the API authenticates with a key.
-    allowSharedKeyAccess: true
+    // The API signs in with its managed identity (api.bicep) and operators with their own
+    // account, so nothing needs the key.
+    allowSharedKeyAccess: storageSharedKeyAccess
+    defaultToOAuthAuthentication: true
     publicNetworkAccess: 'Enabled'
     networkAcls: {
       defaultAction: 'Allow'
@@ -101,15 +91,31 @@ resource tables 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-
   }
 ]
 
-// ---------- web + api ----------
+// Storage Table Data Contributor, for the Owner who closes a project or exports data by hand
+// (docs/RUNBOOK.md, Operations). Owner on the subscription grants no data access on its own.
+var tableDataContributor = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
 
+resource operatorTables 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(operatorPrincipalId)) {
+  name: guid(storage.id, operatorPrincipalId, tableDataContributor)
+  scope: storage
+  properties: {
+    roleDefinitionId: tableDataContributor
+    principalId: operatorPrincipalId
+    principalType: 'User'
+    description: 'Operator: read and change table rows by hand (moderation, exports)'
+  }
+}
+
+// ---------- web ----------
+
+// Standard, because only Standard can link a Function App as the API (api.bicep).
 resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
   name: swaName
   location: swaLocation
   tags: tags
   sku: {
-    name: swaSku
-    tier: swaSku
+    name: 'Standard'
+    tier: 'Standard'
   }
   properties: {
     allowConfigFileUpdates: true
@@ -119,23 +125,7 @@ resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
   }
 }
 
-// App settings for the managed Functions API. This resource REPLACES the whole settings map,
-// so every setting must be declared here (or passed via additionalAppSettings).
-var baseAppSettings = {
-  TABLES_CONNECTION_STRING: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[storageKeyIndex].value};EndpointSuffix=${environment().suffixes.storage}'
-  ATLAS_API_BASE: 'https://atlas.ripe.net/api/v2'
-}
-var monitoringAppSettings = empty(appInsightsConnectionString)
-  ? {}
-  : {
-      APPLICATIONINSIGHTS_CONNECTION_STRING: appInsightsConnectionString
-    }
-
-resource swaSettings 'Microsoft.Web/staticSites/config@2024-04-01' = {
-  parent: swa
-  name: 'appsettings'
-  properties: union(baseAppSettings, monitoringAppSettings, additionalAppSettings)
-}
+// The site has no app settings of its own: the API reads its settings from the Function App.
 
 // Custom domains are not declared here. Static Web Apps validates a binding against public DNS,
 // after the registrar delegates the zone, which happens between deployments; the apex also needs
@@ -143,6 +133,8 @@ resource swaSettings 'Microsoft.Web/staticSites/config@2024-04-01' = {
 // makes the bindings and records the apex token as a setting, and dns.bicep publishes it.
 
 output storageAccountName string = storage.name
+output tableEndpoint string = storage.properties.primaryEndpoints.table
+output tableNames string[] = tableNames
 output staticWebAppName string = swa.name
 output staticWebAppHostname string = swa.properties.defaultHostname
 // Address the platform serves this site on, used for the apex A record (Azure DNS alias records

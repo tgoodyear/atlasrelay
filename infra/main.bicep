@@ -2,18 +2,21 @@
 // stack atlasrelay-<env> by scripts/bootstrap.sh and scripts/provision.sh, with parameters from
 // infra/main.bicepparam (which reads the environment's settings, .azure/<env>/.env).
 //
-//   app.bicep         storage + tables, static web app + app settings
+//   app.bicep         storage + tables, static web app (Standard)
+//   api.bicep         Function App (Flex Consumption) with its managed identity and host storage,
+//                     linked to the static web app as its API
 //   platform.bicep    Log Analytics + App Insights (App* tables kept 90 days), the monthly budget
 //   monitoring.bicep  action group, log search alerts, availability test, workbook
 //   identity.bicep    CI managed identity + GitHub federated credential
-//   rbac.bicep        CI custom role (read the site, list its deployment token) + assignment
+//   rbac.bicep        CI custom roles (read the site, list its deployment token; publish the API
+//                     to the Function App) + assignments
 //   dns.bicep         public DNS zone for the domain (prod only)
 //   dns-subdomain.bicep  <env>.<domain> CNAME in the prod zone (other environments)
 //
 // The stack runs with --action-on-unmanage deleteResources (a resource dropped from this template
 // is deleted on the next deployment) and --deny-settings-mode denyDelete (nobody deletes a managed
-// resource outside the stack). CI deploys no Bicep: it only uploads the site with the deployment
-// token its role lets it read.
+// resource outside the stack). CI deploys no Bicep: it publishes the API package to the Function
+// App and uploads the site with the deployment token its role lets it read.
 targetScope = 'subscription'
 
 @description('Environment name: 1-6 lowercase letters and digits, e.g. prod or dev (AZURE_ENV_NAME).')
@@ -34,13 +37,6 @@ param location string = 'westus2'
 ])
 param swaLocation string = 'westus2'
 
-@description('Free or Standard. Standard unlocks custom OIDC providers.')
-@allowed([
-  'Free'
-  'Standard'
-])
-param swaSku string = 'Free'
-
 @description('Allow pull-request preview environments on the static web app')
 @allowed([
   'Enabled'
@@ -59,14 +55,18 @@ param githubOidcSubjectPrefix string
 @description('Daily ingestion cap for Log Analytics in GB')
 param logDailyCapGb string = '0.1'
 
-@description('Which storage key the API uses (0 = key1, 1 = key2). Flip during key rotation.')
-@allowed([
-  0
-  1
-])
-param storageKeyIndex int = 0
+@description('''Accept the data storage account's key. Off: only Microsoft Entra identities reach the data.
+On only while an environment moves off managed functions (docs/RUNBOOK.md).''')
+param storageSharedKeyAccess bool = false
 
-@description('Extra app settings merged into the managed-functions configuration')
+@description('''Link the Function App to the static web app as its API. Off only while an environment
+moves off managed functions (docs/RUNBOOK.md).''')
+param linkApi bool = true
+
+@description('Object id of the Owner who works on the tables by hand. Empty: nobody has data access.')
+param operatorPrincipalId string = ''
+
+@description('Extra app settings for the Function App')
 param additionalAppSettings object = {}
 
 @description('Address that receives alerts and budget notifications. Empty skips the action group, the alerts and the budget.')
@@ -145,8 +145,8 @@ module platform 'platform.bicep' = {
 }
 
 // Alerts, the availability test and the workbook. A module of main.bicep rather than of
-// platform.bicep because the availability test requests the site, and the site's app settings
-// need the App Insights component first.
+// platform.bicep because the availability test requests the site, and the Function App's app
+// settings need the App Insights component first.
 module monitoring 'monitoring.bicep' = {
   name: 'monitoring'
   scope: rg
@@ -171,10 +171,28 @@ module app 'app.bicep' = {
     storageName: 'statlasrelay${env}${take(uniqueString(subscription().id, env), 6)}'
     location: location
     swaLocation: swaLocation
-    swaSku: swaSku
     stagingEnvironmentPolicy: stagingEnvironmentPolicy
+    storageSharedKeyAccess: storageSharedKeyAccess
+    operatorPrincipalId: operatorPrincipalId
+    tags: tags
+  }
+}
+
+// In the site's region: a linked backend is registered with the site's region.
+module api 'api.bicep' = {
+  name: 'api'
+  scope: rg
+  params: {
+    baseName: baseName
+    functionAppName: 'func-${baseName}-${take(uniqueString(subscription().id, env, 'api'), 6)}'
+    hostStorageName: 'stfnatlasrelay${env}${take(uniqueString(subscription().id, env, 'api'), 4)}'
+    location: swaLocation
+    staticWebAppName: app.outputs.staticWebAppName
+    dataStorageName: app.outputs.storageAccountName
+    dataTableEndpoint: app.outputs.tableEndpoint
+    dataTableNames: app.outputs.tableNames
+    linkApi: linkApi
     appInsightsConnectionString: platform.outputs.appInsightsConnectionString
-    storageKeyIndex: storageKeyIndex
     additionalAppSettings: additionalAppSettings
     tags: tags
   }
@@ -188,6 +206,7 @@ module rbac 'rbac.bicep' = {
   params: {
     environmentName: env
     principalId: identity.outputs.principalId
+    functionAppName: api.outputs.functionAppName
   }
 }
 
@@ -226,6 +245,9 @@ output CI_PRINCIPAL_ID string = identity.outputs.principalId
 output SWA_NAME string = app.outputs.staticWebAppName
 output SWA_HOSTNAME string = app.outputs.staticWebAppHostname
 output STORAGE_ACCOUNT string = app.outputs.storageAccountName
+output FUNCTION_APP_NAME string = api.outputs.functionAppName
+output FUNCTION_APP_HOSTNAME string = api.outputs.functionAppHostname
+output FUNCTION_STORAGE_ACCOUNT string = api.outputs.hostStorageAccountName
 output LOG_ANALYTICS_WORKSPACE string = platform.outputs.workspaceName
 output APPINSIGHTS_NAME string = platform.outputs.appInsightsName
 // Compiled into the browser bundle by the Deploy workflow (scripts/bootstrap.sh copies it to the

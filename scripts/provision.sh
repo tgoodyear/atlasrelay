@@ -2,10 +2,12 @@
 # Deploy an existing environment's stack from its current settings, without the rest of
 # bootstrap (no GitHub steps). Use it after changing a setting or a template:
 #
-#   scripts/settings.sh prod ATLASRELAY_STORAGE_KEY_INDEX 1
+#   scripts/settings.sh prod ATLASRELAY_DNS_TTL 300
 #   scripts/provision.sh prod
 #
 # Needs az 2.61+, signed in with Owner on the environment's subscription.
+# ACTION_ON_UNMANAGE=detachAll leaves a resource dropped from the templates in place instead of
+# deleting it, for that one deployment (docs/RUNBOOK.md, moving off managed functions).
 set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: scripts/provision.sh <env>" >&2; exit 2; }
 ENV_NAME=$1

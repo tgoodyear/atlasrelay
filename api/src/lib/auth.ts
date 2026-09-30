@@ -8,8 +8,17 @@ export interface Principal {
   userRoles: string[];
 }
 
-/** Decode the client principal that Static Web Apps injects. Returns null when anonymous. */
-export function getPrincipal(req: HttpRequest): Principal | null {
+/**
+ * Decode the client principal that Static Web Apps injects. Returns null when anonymous.
+ *
+ * The header is trusted because only Static Web Apps can reach the API: linking the Function App
+ * to the site puts an identity provider in front of it that refuses every request the site did not
+ * send. Until that link exists the Function App answers anyone who knows its hostname, so Bicep
+ * sets IGNORE_CLIENT_PRINCIPAL=1 on an unlinked app and every request is anonymous. Public routes
+ * still work, which is what the cutover checks before linking (docs/RUNBOOK.md).
+ */
+export function getPrincipal(req: HttpRequest, env: Record<string, string | undefined> = process.env): Principal | null {
+  if (env.IGNORE_CLIENT_PRINCIPAL === '1') return null;
   const header = req.headers.get('x-ms-client-principal');
   if (!header) return null;
   try {

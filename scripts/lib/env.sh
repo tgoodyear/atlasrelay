@@ -78,7 +78,8 @@ STACK="atlasrelay-$ENV_NAME"
 az_sub() { AZ_SUB=(--subscription "$(aget AZURE_SUBSCRIPTION_ID)"); }
 stack_location() { local l; l=$(aget AZURE_LOCATION) || return 1; echo "${l:-westus2}"; }
 # DENY_SETTINGS_MODE=none lifts the deny assignments for one deployment, so a managed resource can
-# be deleted by hand; the next ordinary deployment puts them back.
+# be deleted by hand; the next ordinary deployment puts them back. ACTION_ON_UNMANAGE=detachAll
+# keeps a resource that was dropped from the templates instead of deleting it, for one deployment.
 deploy_stack() (
   # Export exactly the settings infra/main.bicepparam reads, when they have a value; an unset one
   # takes its default there. Each is read on its own (aget), so the settings file never sets this
@@ -95,7 +96,7 @@ deploy_stack() (
   location=$(stack_location) || exit 1
   az stack sub create --name "$STACK" --location "$location" "${AZ_SUB[@]}" \
     --parameters infra/main.bicepparam \
-    --action-on-unmanage deleteResources \
+    --action-on-unmanage "${ACTION_ON_UNMANAGE:-deleteResources}" \
     --deny-settings-mode "${DENY_SETTINGS_MODE:-denyDelete}" \
     --description "Atlas Relay $ENV_NAME (scripts/bootstrap.sh, scripts/provision.sh)" \
     --yes --only-show-errors -o none
@@ -137,6 +138,10 @@ sync_budget_start() {
 # (RoleDefinitionDoesNotExist). The deployment is idempotent, so retry.
 provision() {
   local attempt
+  case "${ACTION_ON_UNMANAGE:-deleteResources}" in
+    deleteResources|detachAll) ;;
+    *) die "ACTION_ON_UNMANAGE must be deleteResources or detachAll" ;;
+  esac
   sync_budget_start || die "could not work out the budget's start date"
   for attempt in 1 2 3; do
     deploy_stack && save_outputs && return 0
