@@ -337,6 +337,57 @@ test('a write is refused if its receipt reservation was taken over while it wait
   expect(await row('claims', reservation.partitionKey, reservation.rowKey)).toMatchObject({ token: 'another-request' });
 });
 
+test('lowering the request during a check is applied to the ceiling the write is held to', async ({ person }) => {
+  // A request of 100 allows 10,000; lowered to 10 it allows 1,000. A 5,000-credit arrival fits the first only.
+  const { researcher, project, pledgeId } = await manualPledge(person, 50, 100);
+  const key = await ownerKey({ transactions: { kind: 'held', reply: transactionsOk([adminRow(995001, 5000, 5)]) } });
+  const confirming = researcher.request.patch(`/api/pledges/${project.id}/${pledgeId}`, { data: { status: 'confirmed', apiKey: key, transactionId: '995001' } });
+  await expect.poll(async () => (await ripe.transactionReads(key)).length, { timeout: 10_000 }).toBe(1);
+  // While RIPE is being read, the owner lowers the request in another tab.
+  const edit = await researcher.request.patch(`/api/projects/${project.id}`, { data: { creditsRequested: 10 } });
+  expect(edit.status(), await edit.text()).toBe(200);
+  expect(await ripe.release(key)).toBe(1);
+
+  const res = await confirming;
+  expect(res.status(), await res.text()).toBe(409);
+  expect((await res.json()).error.details).toMatchObject({ recorded: false, verification: { outcome: 'over-ceiling', room: 1000 } });
+  expect(await row('pledges', project.id, pledgeId)).toMatchObject({ status: 'sent', amountVerified: false });
+  expect(await row('claims', `receipt-${researcher.id}`, '995001')).toBeNull();
+});
+
+test('a change to the request waits for a confirmation in progress', async ({ person }) => {
+  const researcher = await person({ role: 'researcher' });
+  const project = await postProject(researcher, { creditsRequested: 100 });
+  const lock = { partitionKey: `confirm-${project.id}`, rowKey: 'lock' };
+  await putRow('claims', { ...lock, token: 'test-holder', createdAt: new Date().toISOString() });
+  const editing = researcher.request.patch(`/api/projects/${project.id}`, { data: { creditsRequested: 10 } });
+  await new Promise((r) => setTimeout(r, 1_500));
+  expect(await row('projects', 'project', project.id)).toMatchObject({ creditsRequested: 100 });
+  await deleteRow('claims', lock.partitionKey, lock.rowKey);
+  const res = await editing;
+  expect(res.status(), await res.text()).toBe(200);
+  expect(await row('projects', 'project', project.id)).toMatchObject({ creditsRequested: 10 });
+  // An edit that leaves the request alone does not wait.
+  await putRow('claims', { ...lock, token: 'test-holder', createdAt: new Date().toISOString() });
+  const started = Date.now();
+  const other = await researcher.request.patch(`/api/projects/${project.id}`, { data: { summary: 'A new summary for this project.' } });
+  expect(other.status(), await other.text()).toBe(200);
+  expect(Date.now() - started).toBeLessThan(5_000);
+  await deleteRow('claims', lock.partitionKey, lock.rowKey);
+});
+
+test('focus stays in the dialog when a key is refused after a first answer', async ({ person }) => {
+  const { researcher, donor, project } = await manualPledge(person);
+  const key = await ownerKey({ transactions: transactionsOk([]) });
+  const dialog = await checkWithKey(researcher.page, project, donor, key);
+  await expect(dialog.locator('.alert-warn')).toContainText('can take a minute or two to appear');
+  // The key is withdrawn on RIPE's side before the owner checks again.
+  await ripe.scenario(key, { transactions: transactionsRefused() });
+  await dialog.getByRole('button', { name: 'Check again' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Get information about your credits');
+  await expect(dialog.getByLabel('RIPE Atlas API key (optional)')).toBeFocused();
+});
+
 test('two confirmations racing for one arrival record it once', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher, { creditsRequested: 1000 });

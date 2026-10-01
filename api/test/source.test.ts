@@ -189,3 +189,26 @@ test('the history recheck runs before the receipt is reserved, and the write is 
   const afterReserve = update.slice(reserve, save);
   assert.equal(afterReserve.includes('ownerReceiptLedger('), false, 'no history read while the reservation is held');
 });
+
+test('the ceiling is decided on a project row read under the lock, and a change to it takes the lock', () => {
+  // The project row read at the top of the update handler predates the history and RIPE reads, and
+  // the owner can lower the request meanwhile. Under the lock the row is read again; and the project
+  // edit takes the same lock when it changes the request, so the two cannot interleave.
+  const pledges = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = pledges.slice(pledges.indexOf("app.http('pledges-update'"));
+  const lock = update.indexOf('await acquireConfirmLock(');
+  const reread = update.indexOf('await getProject(projectId)', lock);
+  const ceiling = update.indexOf('maxCredits(current.creditsRequested)');
+  const save = update.indexOf('await savePledge(');
+  assert.ok(lock > 0 && reread > lock && ceiling > reread && save > ceiling, 'the project is read again under the lock and the ceiling taken from that row');
+  const projects = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'projects.ts'), 'utf8');
+  const edit = projects.slice(projects.indexOf("app.http('projects-update'"));
+  const editLock = edit.indexOf('await acquireConfirmLock(');
+  const write = edit.indexOf('await patchProject(');
+  const release = edit.indexOf('releaseConfirmLock(');
+  assert.ok(editLock > 0 && write > editLock && release > write, 'a project edit that changes the request holds the confirmation lock around its write');
+  // Only an edit holding the lock may write the request: an unchanged value is left out of the write.
+  assert.match(edit, /const writeFields = ceilingChanges \? fields : otherFields;/, 'an unchanged request is dropped from the write');
+  const patchCall = edit.slice(write, edit.indexOf('});', write));
+  assert.ok(patchCall.includes('...writeFields') && !/\.\.\.fields\b/.test(patchCall), 'the edit writes writeFields, never the raw fields');
+});
