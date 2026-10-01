@@ -323,6 +323,8 @@ other's profiles and misread each other's credit transfers. So a run, whether th
   then it only stops renewing, and the job keeps the lease until it ends. The registry stops an
   upload 20 minutes after it starts. An API deployment that has not ended by then is reported,
   and the lease is left to lapse instead of being released; check dev's build before the next run.
+  A deploy request that got no answer may still have started, so the orchestrator keeps the lock
+  for those 20 minutes before it lets go.
 - Before it builds anything, the orchestrator checks that the job's `LOCK_CONTAINER_URL` names the
   same lock, so the job renews the lease the orchestrator holds.
 - A run that finds the lock held waits for it, checking every 30 seconds, for up to 45 minutes,

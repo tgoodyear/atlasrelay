@@ -211,6 +211,7 @@ e2e_lock_end() {
 # What is deploying right now, so an exit can wait for it (or cancel it) before it releases the
 # lock: a deploy that lands after the release would overwrite the next run's build.
 #   api <scm host> <deployment id> <token> <start>   or   site <registry> <resource group> <run id> <start>
+#   or, while the request that starts one has no answer yet, unknown <what> - - - <start>
 E2E_IN_FLIGHT=()
 # Set once the request to start the job has gone out.
 E2E_START_SENT=""
@@ -225,6 +226,16 @@ e2e_settle_deploy() {
   [ ${#E2E_IN_FLIGHT[@]} -gt 0 ] || return 0
   local status="" until=$(( ${E2E_IN_FLIGHT[4]} + E2E_DEPLOY_LIMIT + 60 ))
   case "${E2E_IN_FLIGHT[0]}" in
+    unknown)
+      # The request went out and its answer did not come back, so a deploy may be running with no
+      # id to follow or cancel. Keep the lock for as long as that deploy could last.
+      local kind="an API deployment"
+      [ "${E2E_IN_FLIGHT[1]}" = api ] || kind="a site upload"
+      echo "$kind may have started without this run learning its id; keeping the lock until $(date -r "$until" +%H:%M:%S 2> /dev/null || date -d "@$until" +%H:%M:%S) in case it did" >&2
+      while [ "$(date +%s)" -lt "$until" ]; do sleep 10; done
+      # The registry ends an upload by then; an API deployment has no such limit.
+      if [ "${E2E_IN_FLIGHT[1]}" = site ]; then E2E_IN_FLIGHT=(); return 0; fi
+      status="not known" ;;
     api)
       echo "waiting for the API deployment to end before giving up the lock" >&2
       while [ "$(date +%s)" -lt "$until" ]; do
@@ -244,7 +255,8 @@ e2e_settle_deploy() {
       done ;;
   esac
   local what="API deployment ${E2E_IN_FLIGHT[2]}"
-  [ "${E2E_IN_FLIGHT[0]}" = api ] || what="site upload run ${E2E_IN_FLIGHT[3]}"
+  [ "${E2E_IN_FLIGHT[0]}" != unknown ] || what="API deployment (id not known)"
+  [ "${E2E_IN_FLIGHT[0]}" != site ] || what="site upload run ${E2E_IN_FLIGHT[3]}"
   _e2e_error "the $what had not ended (last status: ${status:-unknown}); leaving the lock to lapse rather than releasing it. Check dev's build before the next run."
   return 1
 }
@@ -281,6 +293,7 @@ steps:
 YAML
   # Queued, not followed, so its id is known: an exit while it runs cancels it (e2e_settle_deploy).
   queued=$(date +%s)
+  E2E_IN_FLIGHT=(unknown site - - "$queued")
   run_id=$(az acr run ${AZ_SUB[@]+"${AZ_SUB[@]}"} -r "$registry" -g "$rg" --set-secret "token=$token" -f acr-upload.yaml \
     --timeout "$E2E_DEPLOY_LIMIT" --no-wait "$ctx" 2>&1 >/dev/null | sed -n 's/.*Queued a run with ID: \([A-Za-z0-9]*\).*/\1/p' | tail -1)
   rm -rf "$ctx"
@@ -327,10 +340,11 @@ e2e_deploy() {
   token=$(az account get-access-token --subscription "$sub" --query accessToken -o tsv) || return 1
   _e2e_mask "$token"
   published=$(date +%s)
+  E2E_IN_FLIGHT=(unknown api - - "$published")
   code=$(curl -sS --max-time 300 -o "$E2E_LOCK_DIR/publish.txt" -w '%{http_code}' -X POST "https://$scm/api/publish?RemoteBuild=false" \
     -H @<(printf 'Authorization: Bearer %s\n' "$token") -H 'Content-Type: application/zip' --data-binary "@$api_zip") || return 1
   case "$code" in
-    200) ;;
+    200) E2E_IN_FLIGHT=() ;;
     202)
       # A 202 carries the deployment's id. Its status: 4 succeeded; 3 failed; -1 or 5 cancelled;
       # 6 partly succeeded. The endpoint can miss a poll while the app restarts.
@@ -347,7 +361,7 @@ e2e_deploy() {
       case "$status" in 4|3|-1|5|6) E2E_IN_FLIGHT=() ;; esac
       [ "$status" = 4 ] || { _e2e_error "the API deployment ended with status ${status:-unknown (not finished in 10 minutes)}"; return 1; }
       ;;
-    *) _e2e_error "publish answered $code"; cat "$E2E_LOCK_DIR/publish.txt" >&2; return 1 ;;
+    *) E2E_IN_FLIGHT=(); _e2e_error "publish answered $code"; cat "$E2E_LOCK_DIR/publish.txt" >&2; return 1 ;;
   esac
   echo "API published"
 
