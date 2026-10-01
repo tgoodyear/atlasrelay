@@ -364,7 +364,7 @@ names them (Bicep sets it from the same settings as the registrations), and stor
 `orcid:<userId>`, so that no Google or ORCID sign-in can reach an account made with another
 provider even if the platform ever handed out the same id twice. GitHub and Microsoft accounts
 keep the bare ids they were created with, and an existing account is refused to a sign-in from a
-different provider.
+different provider on every handler that acts as the signed-in person (`api/src/lib/account.ts`).
 
 ORCID iDs are public by design, and a researcher may well want theirs on their projects, but the
 site does not publish it. The build sets ORCID's `nameClaimType` to `name`, so the account name

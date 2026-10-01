@@ -194,7 +194,10 @@ function identityProviders(on: ProviderId[]) {
       orcid: {
         registration: {
           clientIdSettingName: APP_SETTINGS.orcid.clientId,
-          clientCredential: { clientSecretSettingName: APP_SETTINGS.orcid.clientSecret },
+          // ORCID's token endpoint takes only client_secret_post. "ClientSecretPost" is the one value
+          // App Service authentication (which Static Web Apps' custom providers mirror) defines for
+          // this field; stating it keeps the exchange from depending on a default.
+          clientCredential: { method: 'ClientSecretPost', clientSecretSettingName: APP_SETTINGS.orcid.clientSecret },
           openIdConnectConfiguration: { wellKnownOpenIdConfiguration: ORCID_DISCOVERY },
         },
         login: {

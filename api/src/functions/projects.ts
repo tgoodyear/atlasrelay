@@ -1,5 +1,5 @@
 import { app, HttpRequest } from '@azure/functions';
-import { getPrincipal, requirePrincipal } from '../lib/auth';
+import { optionalAccount, requireAccount } from '../lib/account';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Project, acquireConfirmLock, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, releaseConfirmLock, totals } from '../lib/store';
@@ -120,7 +120,7 @@ app.http('projects-get', {
     const id = req.params.id;
     if (!isId(id)) throw new HttpError(404, 'Not found');
     const project = await getProject(id);
-    const principal = getPrincipal(req);
+    const principal = await optionalAccount(req);
     // A project an operator took down answers 404 like its page does, except to its owner, who can
     // still open it and settle its pledges.
     if (!project || (!isPublicProject(project) && principal?.userId !== project.ownerId)) throw new HttpError(404, 'Not found');
@@ -211,7 +211,7 @@ app.http('projects-create', {
   methods: ['POST'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const user = await ensureUser(p.userId, p.identityProvider, p.userDetails);
     if (!user.atlasEmail) throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before posting a project');
 
@@ -310,7 +310,7 @@ app.http('projects-update', {
   methods: ['PATCH'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const id = req.params.id;
     if (!isId(id)) throw new HttpError(404, 'Not found');
     const project = await getProject(id);

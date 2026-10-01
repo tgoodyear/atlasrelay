@@ -1,5 +1,5 @@
 import { app, HttpRequest } from '@azure/functions';
-import { requirePrincipal } from '../lib/auth';
+import { requireAccount } from '../lib/account';
 import { assertKeyFormat, getCredits } from '../lib/atlas';
 import { handle, json, readJson } from '../lib/http';
 
@@ -9,7 +9,7 @@ app.http('atlas-balance', {
   methods: ['POST'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    requirePrincipal(req);
+    await requireAccount(req);
     const body = await readJson(req);
     const key = assertKeyFormat(body.apiKey);
     const credits = await getCredits(key);

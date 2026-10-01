@@ -388,7 +388,8 @@ test('a custom sign-in build opens the providers it names, and keeps GitHub and 
   assert.equal(idp.azureActiveDirectory.registration.openIdIssuer, 'https://login.microsoftonline.com/common/v2.0');
   const orcid = idp.customOpenIdConnectProviders.orcid;
   assert.equal(orcid.registration.openIdConnectConfiguration.wellKnownOpenIdConfiguration, 'https://orcid.org/.well-known/openid-configuration');
-  assert.equal(orcid.registration.clientCredential.clientSecretSettingName, 'SIGNIN_ORCID_CLIENT_SECRET');
+  // ORCID accepts only client_secret_post at its token endpoint.
+  assert.deepEqual(orcid.registration.clientCredential, { method: 'ClientSecretPost', clientSecretSettingName: 'SIGNIN_ORCID_CLIENT_SECRET' });
   assert.deepEqual(orcid.login.scopes, ['openid']);
   // The iD is the "sub" claim; the account name must not be it, since it seeds the public display name.
   assert.equal(orcid.login.nameClaimType, 'name');

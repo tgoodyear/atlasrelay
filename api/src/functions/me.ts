@@ -1,5 +1,5 @@
 import { app, HttpRequest } from '@azure/functions';
-import { requirePrincipal } from '../lib/auth';
+import { requireAccount } from '../lib/account';
 import { handle, json, readJson } from '../lib/http';
 import { Project, anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listPledges, listProjectsByOwner, patchProject, pledgeRacedDeletion, projectMayHaveRacedDeletion, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
@@ -11,7 +11,7 @@ app.http('me-get', {
   methods: ['GET'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const user = await ensureUser(p.userId, p.identityProvider, p.userDetails);
     return json({ user: privateUser(user), principal: { provider: p.identityProvider, roles: p.userRoles } });
   }),
@@ -22,7 +22,7 @@ app.http('me-put', {
   methods: ['PUT'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     await ensureUser(p.userId, p.identityProvider, p.userDetails);
     const body = await readJson(req);
     const patch: Record<string, string> = {};
@@ -44,7 +44,7 @@ app.http('me-delete', {
   methods: ['DELETE'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     // Pledging to a project whose owner is gone cannot work: the handler needs the owner's RIPE
     // address to name a recipient. Leaving them open would advertise projects that fail at the
     // moment a donor tries to give to them.

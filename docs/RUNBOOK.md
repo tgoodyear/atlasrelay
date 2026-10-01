@@ -310,8 +310,10 @@ ORCID record that registered them and cannot be moved to another one. ORCID's pu
 non-commercial use, which covers this site: it sells nothing.
 
 ORCID is the least certain of the four. Its discovery document lists only the `openid` scope and
-only `client_secret_post` for the token endpoint. If Static Web Apps sends more scopes than the
-config asks for, ORCID may refuse the sign-in. Try ORCID on dev before switching prod. If it fails
+only `client_secret_post` for the token endpoint. The config asks for `openid` and sets the client
+credential method to `ClientSecretPost`, a field Microsoft documents for App Service authentication
+but not on the Static Web Apps page. If Static Web Apps rejects that field, sends more scopes than
+the config asks for, or sends the secret another way, ORCID may refuse the sign-in. Try ORCID on dev before switching prod. If it fails
 there, leave ORCID out of the settings (the others work without it).
 
 ### 2. Store the settings and provision

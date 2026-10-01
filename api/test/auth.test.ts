@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HttpRequest } from '@azure/functions';
 import { acceptedProviders, accountId, getPrincipal } from '../src/lib/auth';
+import { optionalAccount, requireAccount } from '../src/lib/account';
+import { HttpError } from '../src/lib/http';
 
 function request(principal?: object): HttpRequest {
   const headers: Record<string, string> = {};
@@ -66,4 +68,17 @@ test('the API accepts Google and ORCID only where the environment has registrati
   assert.equal(getPrincipal(request(google), { SIGNIN_PROVIDERS: 'github,aad,orcid' }), null);
   // GitHub and Microsoft are always accepted; unknown names add nothing.
   assert.deepEqual([...acceptedProviders({ SIGNIN_PROVIDERS: ' ORCID, facebook ' })].sort(), ['aad', 'github', 'orcid']);
+});
+
+test('an account answers only to the provider that created it, on every handler', async () => {
+  const stored = new Map<string, { provider: string }>([['abc123', { provider: 'github' }]]);
+  const lookup = async (id: string) => stored.get(id) ?? null;
+  const asAad = request({ ...signedIn, identityProvider: 'aad' });
+  // The same bare id from Microsoft never reaches the GitHub account.
+  assert.equal(await optionalAccount(asAad, lookup), null);
+  await assert.rejects(requireAccount(asAad, lookup), (err: HttpError) => err.status === 403);
+  assert.equal((await requireAccount(request(signedIn), lookup)).userId, 'abc123');
+  // No profile row (never made, or deleted): nothing to compare, so the principal stands.
+  assert.equal((await optionalAccount(request({ ...signedIn, userId: 'fresh1' }), lookup))?.userId, 'fresh1');
+  await assert.rejects(requireAccount(request(), lookup), (err: HttpError) => err.status === 401);
 });
