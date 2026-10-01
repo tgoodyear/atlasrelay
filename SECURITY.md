@@ -91,7 +91,8 @@ route, public project ids, the pledge method and the amount as a power-of-ten ra
 **Accounts from different sign-in providers are never merged.** The site keys each account by the
 id Azure Static Web Apps issues for that sign-in, never by email address, so a Google account and a
 Microsoft account with the same email are two accounts. Google and ORCID account ids also carry the
-provider's name. A sign-in from any provider the site does not offer is treated as signed out.
+provider's name. The API treats a sign-in from any provider other than GitHub, Microsoft, Google and ORCID as
+signed out.
 
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.
@@ -119,8 +120,8 @@ settings and holds no values. The config asks for no scopes beyond the ones Stat
 to sign people in (for ORCID, only `openid`), and the API never receives a provider's token.
 A leaked secret lets someone act as the site's registration with that provider, within the
 redirect URIs registered there. It does not let anyone sign in to this site as another person, and
-it reaches no Azure resource or data. The runbook ("Google and ORCID sign-in") has the steps to
-rotate a secret, and rotating one is the response to a leak.
+it reaches no Azure resource or data. If a secret leaks, rotate it at once; the runbook ("Google
+and ORCID sign-in") has the steps.
 
 The API runs on an Azure Function App that only the static web app can call: linking the two puts
 an identity provider in front of the Function App that refuses requests the site did not send, and

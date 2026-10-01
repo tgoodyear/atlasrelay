@@ -40,7 +40,7 @@ the project, the pledge and its confirmation.
 
 | Field | Notes |
 | --- | --- |
-| `provider`, `handle` | From the SWA client principal (`github`, `aad`, `google` or `orcid`; the account name it passes on, which can be an email address). |
+| `provider`, `handle` | From the SWA client principal: `provider` is `github`, `aad`, `google` or `orcid`, and `handle` is the account name it passes on, which can be an email address. |
 | `displayName` | Shown publicly next to projects and pledges. |
 | `atlasEmail` | RIPE NCC Access email. **Private.** Required to publish a project. Only revealed to a donor who has created a pledge for that project. |
 | `affiliation`, `url` | Optional public profile fields. |
@@ -264,7 +264,8 @@ remain, carrying only the chosen display name, because other people rely on that
 Sign-in handles are never returned publicly. Static Web Apps fills `userDetails` with the email
 address for some identity providers, and that value seeds both the handle and the initial display
 name, so `publicName()` reduces anything email-shaped to its local part before it leaves the API.
-An ORCID iD never becomes a display name either (`initialDisplayName()`).
+An account name shaped like an ORCID iD never becomes the initial display name either
+(`initialDisplayName()`).
 
 Browser telemetry (page views, load times, errors, the page's API calls and five named actions)
 goes to App Insights with no cookies, nothing stored in the browser, and no user id. Query strings,
@@ -339,7 +340,8 @@ The build picks the kind. `web/src/lib/signin.ts` turns `VITE_SIGNIN_PROVIDERS` 
 `staticwebapp.config.json` that ships: empty gives the committed file (built-in GitHub and
 Microsoft); a list such as `github,aad,google,orcid` adds the `auth` section, the `/login/<provider>`
 shortcuts and the sign-in buttons for those providers, and refuses to build without `github` and
-`aad`. Every provider the build does not offer answers 404 at `/.auth/login/<provider>`, because the
+`aad`. Facebook, Twitter, Apple and any of the four providers the build does not offer answer 404 at
+`/.auth/login/<provider>`, because the
 platform still answered some of them on its own (`/.auth/login/google` and `/.auth/login/facebook`
 went on to the provider in 2026-10). The client ids and secrets go from the owner's settings file
 into the site's app settings through Bicep (`infra/app.bicep`); the shipped config names the
@@ -352,7 +354,7 @@ settings and holds no values. The Deploy workflow builds prod with the repositor
 | GitHub | built-in, or the site's own OAuth app | the platform's default | username |
 | Microsoft | built-in, or the site's own Entra app, issuer `login.microsoftonline.com/common/v2.0` | the platform's default | can be an email address |
 | Google | the site's own OAuth client | the platform's default (`openid`, `profile`, `email` on the built-in redirect in 2026-10; not documented) | can be an email address |
-| ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the `name` claim |
+| ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the `name` claim, if `nameClaimType` sets it (not verified); a `user-` placeholder when empty |
 
 The API reads `identityProvider`, `userId` and `userDetails` from `x-ms-client-principal`; the
 header carries no claims for any provider. Static Web Apps documents `userId` as "an Azure Static

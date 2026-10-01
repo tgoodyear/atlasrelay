@@ -75,15 +75,17 @@ export default function Privacy() {
             <li>Microsoft passes on an account name that can be your email address.</li>
             {offers('google') && (
               <li>
-                Google: the site asks for your name and email address (the openid, email and profile
-                scopes). The account name it passes on can be your email address.
+                Google: the site uses Azure's default request to Google, which asked for your name and
+                email address (the openid, email and profile scopes) when this page was written. The
+                account name it passes on can be your email address.
               </li>
             )}
             {offers('orcid') && (
               <li>
                 ORCID: the site asks only for the openid scope, which gives your ORCID iD and, if your
-                ORCID record makes it public, your name. The account name is that name. The site never
-                shows your ORCID iD on a page.
+                ORCID record makes it public, your name. The site asks for that name as the account
+                name; if none comes through, the account name is a placeholder. The site never shows
+                your ORCID iD to other people unless you type it into your profile.
               </li>
             )}
           </ul>

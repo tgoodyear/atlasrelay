@@ -17,7 +17,7 @@ export default function SignInPrompt({ reason, returnTo, heading = 'Sign in to c
           ))}
         </ul>
         <p className="small muted" style={{ marginTop: '1.25rem' }}>
-          The account you sign in with only identifies you here. This site never asks for your RIPE Atlas password.
+          The account you sign in with is used only to identify you here. This site never asks for your RIPE Atlas password.
         </p>
       </div>
     </div>

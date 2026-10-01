@@ -289,9 +289,10 @@ Platform**:
 
 1. **Branding**: app name `Atlas Relay`, a support email, home page `https://atlasrelay.org`,
    privacy policy `https://atlasrelay.org/privacy`, authorized domain `atlasrelay.org`.
-2. **Audience**: user type **External**, then **Publish app**. The site asks only for `openid`,
-   `email` and `profile`, which are not sensitive scopes, so no app verification is needed. Google
-   shows the app's name on the consent screen only after a lighter brand verification.
+2. **Audience**: user type **External**, then **Publish app**. Static Web Apps asked Google for
+   `openid`, `email` and `profile` on the built-in redirect in 2026-10 (not documented; check the
+   authorize URL on dev). Those are not sensitive scopes, so no app verification is needed. Google
+   shows the app's name on the consent screen only after brand verification.
 3. **Clients**: **Create client**, type **Web application**, authorized redirect URI
    `https://<host>/.auth/login/google/callback`. Google compares redirect URIs exactly, so copy it
    with no trailing slash. Note the client id and secret.
@@ -299,10 +300,10 @@ Platform**:
 **ORCID.** Sign in to [orcid.org](https://orcid.org) with the owner's ORCID account (the email on
 it must be verified), open **Developer tools** and register for the public API. Name `Atlas Relay`,
 website `https://atlasrelay.org`, a short description, and the redirect URI
-`https://<host>/.auth/login/orcid/callback`. Add dev's URI as a second redirect URI, or register a
-second client from another account. ORCID shows a client id (`APP-...`) and a secret. Public API
-credentials belong to the ORCID record that registered them and cannot be moved to another one. The
-public API is free for non-commercial use, which covers this site: it sells nothing.
+`https://<host>/.auth/login/orcid/callback`. For dev, register a second client from another ORCID
+account. ORCID shows a client id (`APP-...`) and a secret. Public API credentials belong to the
+ORCID record that registered them and cannot be moved to another one. ORCID's public API terms allow
+non-commercial use, which covers this site: it sells nothing.
 
 ORCID is the least certain of the four. Its discovery document lists only the `openid` scope and
 only `client_secret_post` for the token endpoint. If Static Web Apps sends more scopes than the
@@ -362,7 +363,7 @@ with it.
 
 ### Rotating a secret
 
-GitHub, Microsoft and Google each allow two secrets at once, so a rotation has no gap:
+GitHub, Microsoft and Google each allow at least two secrets at once, so a rotation has no gap:
 
 1. Create a new secret with the provider.
 2. Store it: `read -rs SECRET && scripts/settings.sh prod ATLASRELAY_<PROVIDER>_CLIENT_SECRET "$SECRET"; unset SECRET`.
