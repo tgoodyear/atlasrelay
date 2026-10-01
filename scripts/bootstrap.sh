@@ -181,7 +181,10 @@ if [ "$ENV_NAME" = prod ]; then
   # The sign-in providers the site's build offers (web/src/lib/signin.ts), matching the settings
   # this deployment just wrote. Unset means the built-in GitHub and Microsoft sign-in.
   signin=$(aget SIGNIN_PROVIDERS)
-  current=$(gh variable get SIGNIN_PROVIDERS --repo "$REPO" 2> /dev/null || true)
+  # Read from the list, so an absent variable is empty output while an API error stops here: a
+  # stale value left behind would make the next deploy build sign-in the settings no longer have.
+  current=$(gh variable list --repo "$REPO" --json name,value --jq '.[] | select(.name == "SIGNIN_PROVIDERS") | .value') ||
+    die "can't read the repository variables"
   if [ "$signin" != "$current" ]; then
     if [ -n "$signin" ]; then
       gh variable set SIGNIN_PROVIDERS --repo "$REPO" --body "$signin"
