@@ -2,6 +2,22 @@
   "trailingSlash": "never",
   "routes": [
     {
+      "route": "/.auth/login/google",
+      "statusCode": 404
+    },
+    {
+      "route": "/.auth/login/facebook",
+      "statusCode": 404
+    },
+    {
+      "route": "/.auth/login/twitter",
+      "statusCode": 404
+    },
+    {
+      "route": "/.auth/login/apple",
+      "statusCode": 404
+    },
+    {
       "route": "/login",
       "redirect": "/.auth/login/github?post_login_redirect_uri=/dashboard",
       "statusCode": 302

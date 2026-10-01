@@ -167,27 +167,46 @@ jobs:
           EXECUTION: ${{ steps.start.outputs.execution }}
           RUN_ID: ${{ steps.start.outputs.run_id }}
         run: |
-          mkdir -p "results/runs/$RUN_ID"
+          # The platform's events only (image pulled, container started, exit code): they explain a
+          # container that never started, and carry no test output. This log is public; the suite's
+          # own console stays in the private results container.
           # column_ifexists: the tables' columns have changed between Container Apps versions.
-          query="union isfuzzy=true
-            (ContainerAppConsoleLogs | extend Source = 'console'),
-            (ContainerAppSystemLogs | extend Source = 'system')
+          query="ContainerAppSystemLogs
             | where tostring(column_ifexists('ContainerGroupName', '')) startswith '$EXECUTION'
               or tostring(column_ifexists('ReplicaName', '')) startswith '$EXECUTION'
               or tostring(column_ifexists('ExecutionName', '')) == '$EXECUTION'
-            | project TimeGenerated, Source, Text = tostring(column_ifexists('Log', ''))
+            | project TimeGenerated, Reason = tostring(column_ifexists('Reason', '')), Text = tostring(column_ifexists('Log', ''))
             | order by TimeGenerated asc"
           body="$(jq -n --arg q "$query" '{query: $q, timespan: "PT6H"}')"
           az rest --method post --resource https://api.loganalytics.io \
             --url "https://api.loganalytics.io/v1/workspaces/$LOG_WORKSPACE_ID/query" --body "$body" \
-            --query 'tables[0].rows[]' -o tsv > "results/runs/$RUN_ID/job-logs.tsv" ||
-            echo "::warning::could not read the job's logs"
+            --query 'tables[0].rows[]' -o tsv ||
+            echo "::warning::could not read the job's platform events"
+
+      # An allowlisted copy of the summary: outcome, counts, commit, run id, and each test's title and
+      # outcome. No errors, URLs or file names: Playwright errors can quote the page. The repository
+      # is public, so anyone signed in to GitHub can download an artifact; everything else stays in
+      # the private results container, under runs/<run id>/, for the operator.
+      - name: Public summary
+        if: always() && steps.start.outputs.run_id != ''
+        env:
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+        run: |
+          mkdir -p public
+          summary="results/runs/$RUN_ID/summary.json"
+          if [ -f "$summary" ]; then
+            jq '{runId, status, gitSha, startedAt, finishedAt,
+                 stats: (.stats // {} | {expected, unexpected, flaky, skipped}),
+                 tests: [(.tests // [])[] | {title, outcome}]}' "$summary" > public/summary.json
+          else
+            jq -n --arg run "$RUN_ID" '{runId: $run, status: "no summary"}' > public/summary.json
+          fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.start.outputs.run_id != ''
         with:
           name: e2e-dev-${{ steps.start.outputs.run_id }}
-          path: results/runs/${{ steps.start.outputs.run_id }}
+          path: public/summary.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -209,7 +228,7 @@ jobs:
                 "", "| Test | Outcome |", "| --- | --- |",
                 (.tests[] | "| \(.title | gsub("\\|"; "/")) | \(.outcome) |")' "$summary"
             else
-              echo "No summary.json: the run did not finish its upload. See job-logs.tsv in the artifact."
+              echo "No summary.json: the run did not finish its upload. The platform events are in this run's log; the suite's console is in the private results container."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           [ "$STATUS" = Succeeded ] || { echo "::error::the job execution ended $STATUS"; exit 1; }

@@ -111,7 +111,11 @@ operator, who writes them (Key Vault Secrets Officer) and can reach the vault on
 `scripts/set-test-users.sh` or `scripts/set-ripe-keys.sh` has opened it to their address. The
 GitHub workflow that runs the tests builds the job's image in the environment's private container
 registry, starts the job and downloads its results; its identity has no role on the vault, and
-GitHub holds no test credentials. Before results leave the job, the passwords, the RIPE keys and
+GitHub holds no test credentials. The run publishes only its summary (outcome, counts, commit) as
+an artifact, because anyone signed in to GitHub can download the artifacts of a public repository;
+the report, traces and console stay in the private results container. The keys are copied in from
+a separate vault that refuses every network; `scripts/set-ripe-keys.sh` admits the operator's
+address only while it reads from it. Before results leave the job, the passwords, the RIPE keys and
 account emails, and the site's session cookies are replaced with `[redacted]` in the output, the
 report and every trace, including the keys the tests paste into the pledge form.
 

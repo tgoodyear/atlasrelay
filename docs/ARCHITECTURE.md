@@ -514,7 +514,7 @@ docs/     this spec, RIPE research notes, runbook
   `scripts/bootstrap.sh dev` last ran with `--no-approval`), logs in with OIDC as the dev CI identity, builds
   `e2e-real/Dockerfile` in dev's registry with ACR Tasks, starts the Container Apps job with the
   new image pinned by digest, polls the execution, downloads the results from blob storage and
-  uploads them as an artifact, reads the job's logs from Log Analytics when the execution failed,
+  uploads only the summary as an artifact (the repository is public), reads the job's logs from Log Analytics when the execution failed,
   and fails unless every test passed. Without the repository variable `DEV_ENABLED=true` it only
   prints a notice.
 - `e2e-image.yml` (PRs that change `e2e-real/` or `web/e2e/ui.ts`): builds the test image and

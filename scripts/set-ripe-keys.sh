@@ -6,7 +6,12 @@
 #   scripts/set-ripe-keys.sh <env> --from-vault VAULT --donor SECRET --recipient SECRET
 #                            [--from-subscription ID] [--ip ADDRESS] [--yes]
 #
-#   --from-vault VAULT        the Key Vault the keys are in now; you need to be able to read it
+#   --from-vault VAULT        the Key Vault the keys are in now. It must refuse every network; the
+#                             script admits this machine's address while it reads and removes it
+#                             again, so you need both read access to its secrets (for example Key
+#                             Vault Secrets User) and permission to change its network rules
+#                             (Microsoft.KeyVault/vaults/write, which Contributor or Owner has),
+#                             in --from-subscription when the vault is elsewhere
 #   --donor SECRET            the secret holding the key of the account with credits: the donor
 #                             pastes it into the pledge form
 #   --recipient SECRET        the secret holding the key of the researcher's account: it receives
@@ -58,6 +63,50 @@ cd "$(dirname "$0")/.."
 az_sub
 test_vault_check
 FROM_SUB=${FROM_SUB:-$(aget AZURE_SUBSCRIPTION_ID)}
+if [ -z "$IP" ]; then
+  IP=$(curl -fsS --max-time 10 https://api.ipify.org) || die "can't find this machine's public address; pass --ip"
+fi
+[[ $IP =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "not an IPv4 address: $IP"
+
+# ---------- the source vault ----------
+
+# The source vault refuses every network. Admit this machine's address only while reading from it,
+# and remove the rule again on the way out, whatever happens.
+# source_acl: "<default action> <bypass> <public network access> <ip rules> <vnet rules> <private endpoints>"
+source_acl() {
+  az keyvault show --name "$FROM_VAULT" --subscription "$FROM_SUB" \
+    --query "[properties.networkAcls.defaultAction, properties.networkAcls.bypass, properties.publicNetworkAccess, length(properties.networkAcls.ipRules || \`[]\`), length(properties.networkAcls.virtualNetworkRules || \`[]\`), length(properties.privateEndpointConnections || \`[]\`)]" \
+    -o tsv | tr '\t\n' '  ' | sed 's/ *$//'
+}
+CLOSED="Deny None Enabled 0 0 0"
+# The vault must refuse every network before this script touches it, so the one rule it adds is
+# the only way in, and removing it closes the vault again.
+acl=$(source_acl) || die "can't read $FROM_VAULT's network settings"
+[ "$acl" = "$CLOSED" ] ||
+  die "$FROM_VAULT must refuse every network first (default action Deny, bypass None, public network access Enabled, no address or network rules, no private endpoints); it has: $acl. docs/RUNBOOK.md, \"Full-flow tests on dev\""
+
+# Fails when the vault is still open, so `set -e` stops the script with the EXIT trap still set,
+# which tries again.
+source_close() {
+  az keyvault network-rule remove --name "$FROM_VAULT" --subscription "$FROM_SUB" \
+    --ip-address "$IP/32" -o none 2> /dev/null || true
+  if [ "$(source_acl 2> /dev/null)" = "$CLOSED" ]; then
+    return 0
+  fi
+  echo "WARNING: $FROM_VAULT still has a network rule; remove $IP/32 from it by hand" >&2
+  return 1
+}
+# The traps go first: the add can be interrupted, or fail after Azure has applied it.
+trap source_close EXIT
+trap 'exit 130' INT TERM
+echo "opening $FROM_VAULT to $IP while reading the keys"
+az keyvault network-rule add --name "$FROM_VAULT" --subscription "$FROM_SUB" --ip-address "$IP/32" -o none ||
+  die "can't add a network rule to $FROM_VAULT"
+# A new rule takes a moment to apply.
+for _ in $(seq 1 18); do
+  az keyvault secret list --vault-name "$FROM_VAULT" --subscription "$FROM_SUB" --query "[0].name" -o none 2> /dev/null && break
+  sleep 10
+done
 
 # ---------- which account is which ----------
 
@@ -96,6 +145,11 @@ key() {
 key "$DONOR" DONOR_KEY
 key "$RECIPIENT" RECIPIENT_KEY
 [ "$DONOR_KEY" != "$RECIPIENT_KEY" ] || die "$DONOR and $RECIPIENT hold the same key"
+
+# Done with the source vault: close it before opening the test vault, whose trap replaces this one.
+source_close
+trap - EXIT INT TERM
+echo "closed $FROM_VAULT again"
 
 test_vault_open "$IP"
 
