@@ -257,9 +257,14 @@ export async function getUser(id: string): Promise<User | null> {
 
 export async function ensureUser(id: string, provider: string, handle: string): Promise<User> {
   const existing = await getUser(id);
-  if (existing) return existing;
+  if (existing) {
+    // Accounts are never shared between providers (api/src/lib/auth.ts). Static Web Apps should
+    // never hand two providers the same id; if it did, the second is refused rather than let in.
+    if (existing.provider && existing.provider !== provider) throw new HttpError(403, 'This account was created with another sign-in provider');
+    return existing;
+  }
   const ts = now();
-  const displayName = initialDisplayName(handle, id);
+  const displayName = initialDisplayName(handle, id, provider);
   const user: User = { id, provider, handle, displayName, atlasEmail: '', affiliation: '', url: '', createdAt: ts, updatedAt: ts };
   await (await table('users')).upsertEntity({ partitionKey: USERS_PK, rowKey: id, ...user }, 'Merge');
   return user;

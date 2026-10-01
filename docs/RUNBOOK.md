@@ -282,7 +282,11 @@ URI: platform **Web**, `https://<host>/.auth/login/aad/callback`. Then, under Ce
 secrets, add a client secret and note when it expires (24 months at most). The site's config uses
 the issuer `https://login.microsoftonline.com/common/v2.0`. Microsoft does not document whether
 Static Web Apps accepts personal accounts through it, so sign in on dev with a personal account and
-a work account before prod.
+a work account before prod. Some organizations let their users consent only to apps from a
+verified publisher, and the site's own registration has none until the owner completes
+[publisher verification](https://learn.microsoft.com/entra/identity-platform/publisher-verification-overview)
+for it. People from those organizations who signed in through the built-in provider would see
+"Need admin approval" instead. Verify the publisher before switching prod, or accept that.
 
 **Google.** In the Google Cloud console, create a project for the site, then open **Google Auth
 Platform**:
@@ -321,11 +325,12 @@ Each registration is two settings in `.azure/<env>/.env`, set together:
 | `ATLASRELAY_GOOGLE_CLIENT_ID`, `ATLASRELAY_GOOGLE_CLIENT_SECRET` | the Google client |
 | `ATLASRELAY_ORCID_CLIENT_ID`, `ATLASRELAY_ORCID_CLIENT_SECRET` | the ORCID client |
 
-Type the secrets at a prompt rather than on the command line, so they stay out of the shell
-history:
+Give a secret as `-` and type it at the prompt, which does not echo it, so it stays out of the
+shell history and the process list. `scripts/settings.sh <env>` on its own shows secrets only as
+`(set)`.
 
 ```bash
-read -rs SECRET && scripts/settings.sh dev ATLASRELAY_GOOGLE_CLIENT_SECRET "$SECRET"; unset SECRET
+scripts/settings.sh dev ATLASRELAY_GOOGLE_CLIENT_SECRET -
 scripts/settings.sh dev ATLASRELAY_GOOGLE_CLIENT_ID '<client id>'
 # ... the same for GitHub, Microsoft and ORCID
 scripts/provision.sh dev
@@ -333,9 +338,12 @@ scripts/provision.sh dev
 
 `scripts/provision.sh` refuses a half-set pair, and refuses Google or ORCID without GitHub and
 Microsoft. It writes the client ids and secrets to the site's app settings (`SIGNIN_*`, in
-`infra/app.bicep`), and saves the providers they cover as `SIGNIN_PROVIDERS`, for example
-`github,aad,google,orcid`. App settings alone change nothing the visitor sees. The site keeps
-using the built-in providers until a build names the new ones.
+`infra/app.bicep`), tells the API which providers to accept (the Function App setting
+`SIGNIN_PROVIDERS`), and saves the providers they cover as the setting `SIGNIN_PROVIDERS`, for
+example `github,aad,google,orcid`. The site keeps using the built-in providers until a build names
+the new ones. The deployment replaces the site's whole set of app settings; the site had none of
+its own before this, which `az staticwebapp appsettings list -n swa-atlasrelay-<env>` confirms
+before the first run.
 
 ### 3. Build the site with them
 
@@ -366,7 +374,7 @@ with it.
 GitHub, Microsoft and Google each allow at least two secrets at once, so a rotation has no gap:
 
 1. Create a new secret with the provider.
-2. Store it: `read -rs SECRET && scripts/settings.sh prod ATLASRELAY_<PROVIDER>_CLIENT_SECRET "$SECRET"; unset SECRET`.
+2. Store it: `scripts/settings.sh prod ATLASRELAY_<PROVIDER>_CLIENT_SECRET -`.
 3. `scripts/provision.sh prod`. No new build is needed: the setting names do not change.
 4. Sign in with that provider, then delete the old secret with the provider.
 
@@ -375,13 +383,23 @@ until step 3 finishes. Do the two back to back. Rotate the Microsoft secret befo
 Entra shows the date under Certificates & secrets.
 
 If a secret leaks, rotate it at once and delete the old one with the provider. A client secret
-lets someone act as the site's registration with that provider. It does not let anyone sign in to
-this site as somebody else, and it reaches no Azure resource or data.
+lets someone act as the site's registration with that provider: for GitHub, for example, it can
+check, reset or revoke the tokens people granted the OAuth app. On its own it does not let anyone
+sign in to this site as somebody else, because the provider sends sign-in codes only to the
+registered redirect URIs. It reaches no Azure resource or data as long as the Entra registration
+has no application permissions and no Azure role assignments; give it none (the delegated sign-in
+permissions it starts with are enough).
 
 ### Turning them off
 
 The build has to change first, then the settings. Taking settings away while the live site still
-names them breaks sign-in with those providers, GitHub and Microsoft included.
+names them breaks sign-in with those providers, GitHub and Microsoft included. `scripts/provision.sh`
+reads which sign-in settings the live site has from Azure, and refuses to remove any of them
+without `SIGNIN_REMOVAL_OK=1`, even when the local settings file is an older copy.
+
+Going back to the built-in GitHub and Microsoft providers can change people's `userId` just as
+switching away can. Run the same [account check](#before-switching-prod-check-that-existing-accounts-survive)
+on dev in this direction too.
 
 1. Prod: delete the repository variable `SIGNIN_PROVIDERS` (or set it to the providers that stay,
    GitHub and Microsoft always among them), and run the Deploy workflow. Dev: build and deploy

@@ -54,3 +54,12 @@ test('a principal from a provider the site does not offer is not signed in', asy
     expect((await visitor.request.get('/api/me')).status(), provider).toBe(401);
   }
 });
+
+test('a build without its own registrations answers 404 for Google and ORCID sign-in', async ({ signedOut }) => {
+  const visitor = await signedOut();
+  // Static Web Apps matches routes without regard to case; the emulator does not, so only the
+  // lower-case forms are checked here.
+  for (const path of ['/.auth/login/google', '/.auth/login/orcid', '/login/google', '/login/orcid']) {
+    expect((await visitor.request.get(path, { maxRedirects: 0 })).status(), path).toBe(404);
+  }
+});

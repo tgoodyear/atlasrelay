@@ -3,6 +3,8 @@ import { Pledge, Project, User, creditedAmount, donorMayCancelApiPledge } from '
 
 // Any '@' at all, not just a dotted domain: alice@localhost is still an address.
 const EMAIL_SHAPED = /@/;
+// An ORCID iD: four groups of four digits, the last character possibly X.
+const ORCID_ID = /^(https?:\/\/orcid\.org\/)?\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/i;
 
 /**
  * A name safe to show to anonymous visitors. Static Web Apps fills userDetails with the email
@@ -13,6 +15,9 @@ export function publicName(displayName: string, handle: string, id: string): str
   for (const candidate of [displayName, handle]) {
     const value = (candidate || '').trim();
     if (!value) continue;
+    // The site does not publish an ORCID iD that came from the sign-in (initialDisplayName). One
+    // typed in as a display name is the person's choice and is shown.
+    if (candidate === handle && candidate !== displayName && ORCID_ID.test(value)) continue;
     if (!EMAIL_SHAPED.test(value)) return value;
     const local = value.split('@')[0].trim();
     if (local) return local;
@@ -21,18 +26,19 @@ export function publicName(displayName: string, handle: string, id: string): str
   return `user-${(id || '').split(':').pop()!.slice(0, 6)}`;
 }
 
-// An ORCID iD: four groups of four digits, the last character possibly X.
-const ORCID_ID = /^(https?:\/\/orcid\.org\/)?\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/i;
-
 /**
  * The display name a new account starts with, shown to anonymous visitors. Some identity providers
- * put the email address in the handle, so it gets the part before the @. An ORCID iD is never used:
- * the site does not publish it unless the person types it in themselves (docs/ARCHITECTURE.md).
+ * put the email address in the handle, so it gets the part before the @. For Google that part is
+ * nearly the whole address (anything@gmail.com), so a Google account starts with a placeholder
+ * instead. An ORCID iD is never used: the site does not publish it unless the person types it in
+ * themselves (docs/ARCHITECTURE.md).
  */
-export function initialDisplayName(handle: string, id: string): string {
+export function initialDisplayName(handle: string, id: string, provider = ''): string {
   const value = handle.trim();
-  if (!value || ORCID_ID.test(value)) return publicName('', '', id);
-  return value.includes('@') ? value.split('@')[0] : value;
+  const placeholder = publicName('', '', id);
+  if (!value || ORCID_ID.test(value)) return placeholder;
+  if (!value.includes('@')) return value;
+  return provider === 'google' ? placeholder : value.split('@')[0];
 }
 
 /**

@@ -107,13 +107,23 @@ export function providerLabel(id: string | undefined): string {
 }
 
 /**
- * A path on this site to come back to after signing in, or the fallback. Only a local path is
- * accepted: anything else could send a person who just signed in to another site.
+ * A page on this site to come back to after signing in, or the fallback. Only a page of the app is
+ * accepted: anything else could send a person who just signed in to another site, or into a
+ * sign-out or another sign-in. The value is resolved the way a browser would and rebuilt from its
+ * parts, so dot segments and encoded slashes cannot turn it into //host.
  */
 export function safeReturnPath(value: string | null | undefined, fallback = '/dashboard'): string {
-  if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return fallback;
-  if (/[\x00-\x1f\x7f]/.test(value)) return fallback;
-  return value;
+  if (!value || !value.startsWith('/') || value.startsWith('//') || /[\\\x00-\x1f\x7f]/.test(value)) return fallback;
+  let url: URL;
+  try {
+    url = new URL(value, 'https://return.invalid');
+  } catch {
+    return fallback;
+  }
+  const path = url.pathname;
+  if (url.origin !== 'https://return.invalid' || path.startsWith('//') || /%2f|%5c/i.test(path)) return fallback;
+  if (/^\/(\.auth|api|login|logout)(\/|$)/i.test(path)) return fallback;
+  return path + url.search + url.hash;
 }
 
 export function loginUrl(provider: ProviderId, returnTo: string): string {

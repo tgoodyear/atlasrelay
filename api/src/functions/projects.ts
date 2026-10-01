@@ -5,7 +5,7 @@ import { isId, newId } from '../lib/ids';
 import { Project, acquireConfirmLock, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, releaseConfirmLock, totals } from '../lib/store';
 import { MAX_OPEN_PROJECTS_PER_USER, PROJECT_POST_INTERVAL_MS, SurplusClose, capSettlement, surplusOpenProjects } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
-import { isPublicProject, publicPledge, publicProject, publicUser } from '../lib/views';
+import { isPublicProject, publicName, publicPledge, publicProject, publicUser } from '../lib/views';
 import { projectHead } from '../lib/projectHtml';
 import { logError } from '../lib/telemetry';
 
@@ -246,7 +246,7 @@ app.http('projects-create', {
     const project: Project = {
       id: newId(),
       ownerId: user.id,
-      ownerName: user.displayName || user.handle,
+      ownerName: publicName(user.displayName, user.handle, user.id),
       title: fields.title!,
       summary: fields.summary!,
       description: fields.description!,

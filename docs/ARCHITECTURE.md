@@ -359,10 +359,12 @@ settings and holds no values. The Deploy workflow builds prod with the repositor
 The API reads `identityProvider`, `userId` and `userDetails` from `x-ms-client-principal`; the
 header carries no claims for any provider. Static Web Apps documents `userId` as "an Azure Static
 Web Apps-specific unique identifier for the user", unique per site. `api/src/lib/auth.ts` accepts
-only the four providers above, and stores Google and ORCID accounts under `google:<userId>` and
+GitHub and Microsoft, plus Google and ORCID only where the Function App setting `SIGNIN_PROVIDERS`
+names them (Bicep sets it from the same settings as the registrations), and stores Google and ORCID accounts under `google:<userId>` and
 `orcid:<userId>`, so that no Google or ORCID sign-in can reach an account made with another
 provider even if the platform ever handed out the same id twice. GitHub and Microsoft accounts
-keep the bare ids they were created with.
+keep the bare ids they were created with, and an existing account is refused to a sign-in from a
+different provider.
 
 ORCID iDs are public by design, and a researcher may well want theirs on their projects, but the
 site does not publish it. The build sets ORCID's `nameClaimType` to `name`, so the account name

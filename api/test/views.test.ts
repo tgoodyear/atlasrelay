@@ -18,7 +18,13 @@ test('a new account never starts with an ORCID iD or an email address as its pub
   assert.equal(initialDisplayName('Josiah Carberry', 'orcid:abc123def'), 'Josiah Carberry');
   assert.equal(initialDisplayName('0000-0002-1825-0097', 'orcid:abc123def'), 'user-abc123');
   assert.equal(initialDisplayName('https://orcid.org/0000-0002-1694-233X', 'orcid:abc123def'), 'user-abc123');
-  assert.equal(initialDisplayName('someone@gmail.com', 'google:abc123def'), 'someone');
+  // A Gmail local part is nearly the whole address, so Google accounts start with a placeholder.
+  assert.equal(initialDisplayName('someone@gmail.com', 'google:abc123def', 'google'), 'user-abc123');
+  assert.equal(initialDisplayName('Some One', 'google:abc123def', 'google'), 'Some One');
+  assert.equal(initialDisplayName('someone@contoso.com', 'abc123def', 'aad'), 'someone');
+  // A handle that is an ORCID iD is never published; a display name the person typed is.
+  assert.equal(publicName('', '0000-0002-1825-0097', 'orcid:abc123def'), 'user-abc123');
+  assert.equal(publicName('0000-0002-1825-0097', '0000-0002-1825-0097', 'orcid:abc123def'), '0000-0002-1825-0097');
   assert.equal(initialDisplayName('  ', 'google:abc123def'), 'user-abc123');
   assert.equal(publicName('', '', 'orcid:abc123def'), 'user-abc123');
 });

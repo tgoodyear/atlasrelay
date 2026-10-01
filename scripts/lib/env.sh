@@ -159,6 +159,23 @@ signin_providers() {
   fi
   echo "$providers"
 }
+# The sign-in providers the deployed site has app settings for, from Azure (names only; the values
+# are dropped here). Empty when the site does not exist yet.
+live_signin_providers() {
+  local site names
+  site="/subscriptions/$(aget AZURE_SUBSCRIPTION_ID)/resourceGroups/rg-atlasrelay-$ENV_NAME/providers/Microsoft.Web/staticSites/swa-atlasrelay-$ENV_NAME" || return 1
+  # Only "not found" means there is nothing to protect; any other error stops the deployment.
+  if ! names=$(az rest --method post --url "$site/listAppSettings?api-version=2024-04-01" --query 'keys(properties)' -o tsv 2>&1); then
+    grep -qiE 'ResourceNotFound|ResourceGroupNotFound|"code": *"NotFound"|could not be found' <<< "$names" && return 0
+    echo "error: can't list the app settings of swa-atlasrelay-$ENV_NAME: $names" >&2
+    return 1
+  fi
+  grep -q '^SIGNIN_GITHUB_CLIENT_ID$' <<< "$names" && echo -n github,
+  grep -q '^SIGNIN_MICROSOFT_CLIENT_ID$' <<< "$names" && echo -n aad,
+  grep -q '^SIGNIN_GOOGLE_CLIENT_ID$' <<< "$names" && echo -n google,
+  grep -q '^SIGNIN_ORCID_CLIENT_ID$' <<< "$names" && echo -n orcid,
+  echo
+}
 # A new custom role can take a minute or two to replicate before it can be assigned
 # (RoleDefinitionDoesNotExist). The deployment is idempotent, so retry.
 provision() {
@@ -172,8 +189,9 @@ provision() {
   providers=$(signin_providers) || die "the sign-in settings are incomplete"
   # Removing a registration's settings breaks sign-in with it, and with GitHub and Microsoft too
   # when it is one of theirs, for as long as the live site's build still names it. The site has to
-  # go first (docs/RUNBOOK.md, "Turning them off"); SIGNIN_REMOVAL_OK=1 says it has.
-  previous=$(aget SIGNIN_PROVIDERS) || die "could not read SIGNIN_PROVIDERS"
+  # go first (docs/RUNBOOK.md, "Turning them off"); SIGNIN_REMOVAL_OK=1 says it has. What counts
+  # is what the site has now, read from Azure, not this settings file, which may be an old copy.
+  previous=$(live_signin_providers) || die "could not read the site's sign-in settings from Azure"
   for p in ${previous//,/ }; do
     if [[ ",$providers," != *",$p,"* ]] && [ "${SIGNIN_REMOVAL_OK:-}" != 1 ]; then
       die "this removes the $p sign-in settings, which the last deployment had. First deploy a site build whose VITE_SIGNIN_PROVIDERS leaves $p out (empty, for github or aad) (docs/RUNBOOK.md, \"Turning them off\"), then run again with SIGNIN_REMOVAL_OK=1"

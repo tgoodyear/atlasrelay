@@ -27,7 +27,7 @@ app.http('me-put', {
     const body = await readJson(req);
     const patch: Record<string, string> = {};
     const displayName = str(body, 'displayName', { max: 80 });
-    if (displayName !== undefined) patch.displayName = displayName || initialDisplayName(p.userDetails, p.userId);
+    if (displayName !== undefined) patch.displayName = displayName || initialDisplayName(p.userDetails, p.userId, p.identityProvider);
     const atlasEmail = email(body, 'atlasEmail');
     if (atlasEmail !== undefined) patch.atlasEmail = atlasEmail;
     const affiliation = str(body, 'affiliation', { max: 120 });

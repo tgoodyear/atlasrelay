@@ -91,8 +91,8 @@ route, public project ids, the pledge method and the amount as a power-of-ten ra
 **Accounts from different sign-in providers are never merged.** The site keys each account by the
 id Azure Static Web Apps issues for that sign-in, never by email address, so a Google account and a
 Microsoft account with the same email are two accounts. Google and ORCID account ids also carry the
-provider's name. The API treats a sign-in from any provider other than GitHub, Microsoft, Google and ORCID as
-signed out.
+provider's name. The API accepts GitHub and Microsoft, and Google and ORCID only in an environment
+that has its own registrations for them; it treats a sign-in from any other provider as signed out.
 
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.
@@ -114,13 +114,19 @@ Sign-in uses Azure Static Web Apps' built-in GitHub and Microsoft providers, whi
 of the site's own. Google and ORCID sign-in need the site's own app registrations, and once a site
 has any registration of its own, Static Web Apps turns its built-in providers off, so GitHub and
 Microsoft then need the site's own registrations too. Each registration has a client secret. The
-secrets are kept in the owner's git-ignored settings file and in the static web app's app settings,
-which the CI identity cannot read; `staticwebapp.config.json`, which ships with the site, names the
-settings and holds no values. The config asks for no scopes beyond the ones Static Web Apps uses
+secrets are kept in the owner's git-ignored settings file and in the static web app's app settings.
+The CI identity cannot read app settings, and `staticwebapp.config.json`, which ships with the site,
+names the settings and holds no values. But that file decides which settings the site sends where,
+so whoever can deploy the site (the CI identity with the deployment token, or anyone who gets code
+onto `main`) could ship a config that sends a secret to a server of their choosing, or declare a
+provider that answers for any ORCID iD. Deploying the site is already full control of it; the
+secrets do not change who has that. The config asks for no scopes beyond the ones Static Web Apps uses
 to sign people in (for ORCID, only `openid`), and the API never receives a provider's token.
 A leaked secret lets someone act as the site's registration with that provider, within the
-redirect URIs registered there. It does not let anyone sign in to this site as another person, and
-it reaches no Azure resource or data. If a secret leaks, rotate it at once; the runbook ("Google
+redirect URIs registered there; for GitHub that includes checking, resetting or revoking the tokens
+people granted the app. On its own it does not let anyone sign in to this site as another person,
+since sign-in codes go only to the registered redirect URIs. It reaches no Azure resource or data,
+because the Entra registration is given no application permissions or Azure role assignments. If a secret leaks, rotate it at once; the runbook ("Google
 and ORCID sign-in") has the steps.
 
 The API runs on an Azure Function App that only the static web app can call: linking the two puts

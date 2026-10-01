@@ -8,7 +8,7 @@ import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, don
 import { checkReceipt, contestedOnRecheck, stillUncontested, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
-import { privatePledge, publicProject } from '../lib/views';
+import { privatePledge, publicName, publicProject } from '../lib/views';
 import { logError, logEvent } from '../lib/telemetry';
 
 app.http('pledges-list', {
@@ -89,7 +89,7 @@ app.http('pledges-create', {
         id: newId(),
         projectId: id,
         donorId: donor.id,
-        donorName: donor.displayName || donor.handle,
+        donorName: publicName(donor.displayName, donor.handle, donor.id),
         anonymous,
         amount,
         method,

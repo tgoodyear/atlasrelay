@@ -181,10 +181,14 @@ if [ "$ENV_NAME" = prod ]; then
   # The sign-in providers the site's build offers (web/src/lib/signin.ts), matching the settings
   # this deployment just wrote. Unset means the built-in GitHub and Microsoft sign-in.
   signin=$(aget SIGNIN_PROVIDERS)
-  if [ -n "$signin" ]; then
-    gh variable set SIGNIN_PROVIDERS --repo "$REPO" --body "$signin"
-  elif gh variable get SIGNIN_PROVIDERS --repo "$REPO" > /dev/null 2>&1; then
-    gh variable delete SIGNIN_PROVIDERS --repo "$REPO"
+  current=$(gh variable get SIGNIN_PROVIDERS --repo "$REPO" 2> /dev/null || true)
+  if [ "$signin" != "$current" ]; then
+    if [ -n "$signin" ]; then
+      gh variable set SIGNIN_PROVIDERS --repo "$REPO" --body "$signin"
+    else
+      gh variable delete SIGNIN_PROVIDERS --repo "$REPO"
+    fi
+    echo "  SIGNIN_PROVIDERS is now '${signin}'; the live site changes with the next Deploy run"
   fi
 else
   if [ -n "$(aget E2E_JOB_NAME)" ]; then

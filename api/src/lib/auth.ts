@@ -17,11 +17,22 @@ export interface Principal {
  * sets IGNORE_CLIENT_PRINCIPAL=1 on an unlinked app and every request is anonymous. Public routes
  * still work, which is what the cutover checks before linking (docs/RUNBOOK.md).
  */
-/**
- * The providers the site offers (web/src/lib/signin.ts). A principal from any other provider is
- * treated as anonymous, so a provider Static Web Apps turns on by itself can never create accounts.
- */
+/** Every provider the site can offer (web/src/lib/signin.ts). */
 export const PROVIDERS = ['github', 'aad', 'google', 'orcid'] as const;
+
+/**
+ * The providers this environment accepts: SIGNIN_PROVIDERS, which Bicep sets on the Function App
+ * from the same settings that give the site its registrations (infra/main.bicep), or GitHub and
+ * Microsoft when it is unset. A principal from any other provider is treated as anonymous, so a
+ * provider Static Web Apps answers on its own (it still sent /.auth/login/google on to Google in
+ * 2026-10) can never create an account on a site that does not offer it.
+ */
+export function acceptedProviders(env: Record<string, string | undefined>): Set<string> {
+  const named = (env.SIGNIN_PROVIDERS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const accepted = new Set<string>(['github', 'aad']);
+  for (const p of named) if ((PROVIDERS as readonly string[]).includes(p)) accepted.add(p);
+  return accepted;
+}
 
 /**
  * Providers whose account ids are stored with the provider's name in front ("orcid:<id>").
@@ -44,7 +55,7 @@ export function getPrincipal(req: HttpRequest, env: Record<string, string | unde
     const decoded = JSON.parse(Buffer.from(header, 'base64').toString('utf8')) as Partial<Principal>;
     if (typeof decoded.userId !== 'string' || typeof decoded.identityProvider !== 'string' || !decoded.userId) return null;
     const provider = decoded.identityProvider.toLowerCase();
-    if (!(PROVIDERS as readonly string[]).includes(provider)) return null;
+    if (!acceptedProviders(env).has(provider)) return null;
     // Table Storage refuses these characters in a key, and ':' separates the provider prefix
     // (accountId). Static Web Apps ids contain none of them.
     if (/[\\/#?:\x00-\x1f\x7f]/.test(decoded.userId)) return null;

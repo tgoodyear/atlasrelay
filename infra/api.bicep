@@ -45,6 +45,10 @@ param appInsightsConnectionString string = ''
 @description('Extra app settings for the Function App. Bicep is the only writer of its app settings.')
 param additionalAppSettings object = {}
 
+@description('''Sign-in providers the API accepts (api/src/lib/auth.ts): the ones the site has its
+own registrations for, else the built-in GitHub and Microsoft.''')
+param signinProviders string = 'github,aad'
+
 param tags object = {}
 
 // Built-in roles. https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage
@@ -271,6 +275,7 @@ var baseAppSettings = {
   TABLES_ENDPOINT: dataTableEndpoint
   AZURE_CLIENT_ID: apiIdentity.properties.clientId
   ATLAS_API_BASE: 'https://atlas.ripe.net/api/v2'
+  SIGNIN_PROVIDERS: signinProviders
 }
 var monitoringAppSettings = empty(appInsightsConnectionString)
   ? {}

@@ -126,6 +126,13 @@ test accounts into the site, with their passwords in a private Key Vault. Never 
 this says; main.bicepparam sets it for every other environment.''')
 param testHarness bool = toLower(environmentName) != 'prod'
 
+// The providers the site's own registrations cover, as scripts/lib/env.sh (signin_providers) works
+// them out: none, or GitHub and Microsoft plus Google and ORCID where their pairs are set. The API
+// accepts exactly these (GitHub and Microsoft when none).
+var signinGoogle = !empty(signinGoogleClientId) && !empty(signinGoogleClientSecret)
+var signinOrcid = !empty(signinOrcidClientId) && !empty(signinOrcidClientSecret)
+var signinProviders = join(concat(['github', 'aad'], signinGoogle ? ['google'] : [], signinOrcid ? ['orcid'] : []), ',')
+
 var env = toLower(environmentName)
 var isProd = env == 'prod'
 var harness = testHarness && !isProd
@@ -238,6 +245,7 @@ module api 'api.bicep' = {
     linkApi: linkApi
     appInsightsConnectionString: platform.outputs.appInsightsConnectionString
     additionalAppSettings: additionalAppSettings
+    signinProviders: signinProviders
     tags: tags
   }
 }
