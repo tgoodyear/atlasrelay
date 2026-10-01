@@ -12,13 +12,13 @@
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.2",
-    "@azure/functions": "^4.16.4",
+    "@azure/functions": "^4.16.5",
     "@azure/identity": "^4.13.3"
   },
   "devDependencies": {
-    "@types/node": "^22.20.3",
+    "@types/node": "^26.6.3",
     "esbuild": "^0.28.2",
-    "tsx": "^4.20.0",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
   "engines": {
