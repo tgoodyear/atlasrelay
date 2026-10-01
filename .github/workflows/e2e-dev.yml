@@ -1,11 +1,17 @@
 name: Full-flow tests on dev
 
-# Signs two test accounts into the dev site through the real Microsoft sign-in and runs the full
-# flow there (e2e-real/), including real RIPE Atlas transfers between two test accounts. The tests
-# run in Azure, as the Container Apps job E2E_JOB_NAME, which reads the accounts' passwords and the
-# RIPE Atlas keys from a Key Vault that has no public network access. This workflow builds the test
-# image in dev's container registry, starts the job with it, waits, and collects the redacted
-# results. It never holds a password or a key. docs/RUNBOOK.md, "Full-flow tests on dev".
+# Puts this commit's site and API on dev, signs two test accounts into it through the real
+# Microsoft sign-in and runs the full flow there (e2e-real/), including real RIPE Atlas transfers
+# between two test accounts. The tests run in Azure, as the Container Apps job E2E_JOB_NAME, which
+# reads the accounts' passwords and the RIPE Atlas keys from a Key Vault that has no public network
+# access. This workflow builds the site, the API and the test image, deploys the site and the API
+# to dev, starts the job, waits, and collects the redacted results. It never holds a password or a
+# key. docs/RUNBOOK.md, "Full-flow tests on dev".
+#
+# dev is one site, one API and one set of tables. Every run, this workflow's or one started from
+# the owner's machine with scripts/run-e2e.sh, holds one lock from before it deploys until its tests
+# end (scripts/lib/e2e-job.sh, e2e-real/lib/lock.mjs), so the build under test is always the run's
+# own, and two runs never use the test accounts at the same time.
 #
 # Only the owner can make it run:
 # - It runs after a push to main (only the owner can merge under the "Protect main" ruleset) that
@@ -14,14 +20,11 @@ name: Full-flow tests on dev
 # - Every job checks the repository, the actor and the branch.
 # - The job that gets an Azure token runs in the GitHub Environment dev, which only main may use and
 #   which waits for the owner's approval (unless scripts/bootstrap.sh dev last ran with
-#   --no-approval). The CI identity trusts that environment and nothing else.
+#   --no-approval). The CI identity trusts that environment and nothing else, and holds roles in
+#   dev's resource group only, so it cannot deploy anywhere else.
+# - The build runs in a job of its own, without an Azure identity.
 # - While dev does not exist (the repository variable DEV_ENABLED is not true), it only prints a
 #   notice.
-#
-# It tests the site as it is deployed on dev and deploys nothing there, so the push trigger covers
-# only what it builds and runs: the test image (e2e-real/ and web/e2e/ui.ts), the code that builds
-# and starts it, and this file. To test a change to web/, api/ or infra/, put it on dev first
-# (docs/RUNBOOK.md, "Dev environment") and then start this workflow by hand.
 on:
   push:
     branches: [main]
@@ -32,9 +35,8 @@ on:
       - '.github/workflows/e2e-dev.yml'
   workflow_dispatch:
 
-# One run at a time: two runs would sign the same accounts in and delete each other's profiles.
-# This queues the workflow's own runs; inside the job, e2e-real/lib/lock.mjs also keeps a run out
-# while one started by scripts/run-e2e.sh is going.
+# Queues the workflow's own runs. The lock (scripts/lib/e2e-job.sh) is what keeps a workflow run
+# and a run started by scripts/run-e2e.sh apart: a run that finds it held waits up to 45 minutes.
 concurrency:
   group: e2e-dev
   cancel-in-progress: false
@@ -51,14 +53,61 @@ jobs:
       - name: Skip
         run: echo "::notice::The dev environment does not exist (repository variable DEV_ENABLED is not true), so there is nothing to test. scripts/bootstrap.sh dev sets it."
 
+  # Untrusted code (npm lifecycle scripts) runs here, without any Azure identity, as in the Deploy
+  # workflow. The run job deploys what this builds.
+  build:
+    name: Build the site and the API
+    if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (api + web workspaces only)
+        run: npm ci -w api -w web
+
+      # The same build as docs/RUNBOOK.md, "Dev environment": no App Insights connection string, so
+      # the test runs send no browser telemetry.
+      - name: Build
+        run: |
+          npm run build
+          . scripts/lib/e2e-job.sh
+          e2e_stage_api
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dev-web
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dev-api
+          path: api.zip
+          if-no-files-found: error
+          retention-days: 1
+
   run:
-    name: Run the tests in Azure
+    name: Deploy to dev and run the tests in Azure
+    needs: build
     if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED == 'true'
     runs-on: ubuntu-latest
     # The CI identity trusts jobs in this GitHub Environment only; scripts/bootstrap.sh restricts it
     # to main and, unless run with --no-approval, makes it wait for the owner's approval.
     environment: dev
-    timeout-minutes: 70
+    # Up to 45 minutes waiting for the lock, the image build and the deploy, and 55 minutes for the
+    # execution.
+    timeout-minutes: 140
     permissions:
       id-token: write
       contents: read
@@ -71,13 +120,20 @@ jobs:
       LOG_WORKSPACE_ID: ${{ vars.E2E_LOG_WORKSPACE_ID }}
       REGISTRY: ${{ vars.E2E_REGISTRY }}
       SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # For scripts/lib/e2e-job.sh, which signs az in again with a fresh OIDC token during the run,
+      # and e2e-real/lock-holder.mjs, which gets its storage tokens the same way.
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       API: 2025-07-01
     steps:
+      # This workflow deploys to dev and nowhere else; scripts/lib/e2e-job.sh checks the names and
+      # the resources' environment tags again before it deploys.
       - name: Check the settings
         run: |
-          for v in RESOURCE_GROUP JOB_NAME RESULTS_ACCOUNT RESULTS_CONTAINER LOG_WORKSPACE_ID REGISTRY SUBSCRIPTION_ID; do
+          for v in RESOURCE_GROUP JOB_NAME RESULTS_ACCOUNT RESULTS_CONTAINER LOG_WORKSPACE_ID REGISTRY SUBSCRIPTION_ID AZURE_CLIENT_ID AZURE_TENANT_ID; do
             [ -n "${!v}" ] || { echo "::error::$v is empty; run scripts/bootstrap.sh dev"; exit 1; }
           done
+          [ "$RESOURCE_GROUP" = rg-atlasrelay-dev ] || { echo "::error::E2E_RESOURCE_GROUP is $RESOURCE_GROUP, not dev's"; exit 1; }
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,6 +142,26 @@ jobs:
       - name: Check the Playwright versions agree
         run: node --test e2e-real/test/versions.test.mjs
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # For the Static Web Apps CLI (npx swa deploy). --ignore-scripts: no package's install script
+      # runs in a job that holds an Azure identity.
+      - name: Install the Static Web Apps CLI
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dev-web
+          path: web/dist
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dev-api
+          path: .
+
       - name: Azure login (OIDC via managed identity)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
@@ -93,66 +169,38 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # Built by ACR Tasks in dev's registry from e2e-real/ and web/e2e/ui.ts at this commit; the
-      # image stays private there and the job pulls it as the test identity.
-      - name: Build the test image
-        id: image
+      # scripts/lib/e2e-job.sh, e2e_run: builds the test image in dev's registry (ACR Tasks, from
+      # e2e-real/ and web/e2e/ui.ts at this commit; private there, and the job pulls it as the test
+      # identity), takes the lock (waiting up to 45 minutes for a run that holds it), publishes the
+      # API and uploads the site, starts the job with the image pinned by digest and the lease to
+      # renew, waits for the execution, and releases the lock. Cancelling the run releases it too,
+      # unless the job is still running; the job then keeps it until it ends.
+      - name: Deploy and run the tests, holding the lock
+        id: run
         run: |
           . scripts/lib/e2e-job.sh
-          image="$(e2e_build_image "$REGISTRY" "$RESOURCE_GROUP" "sha-$GITHUB_SHA")"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "built $image"
+          E2E_ENV=dev
+          E2E_SUBSCRIPTION=$SUBSCRIPTION_ID
+          E2E_RG=$RESOURCE_GROUP
+          E2E_SWA="swa-atlasrelay-dev"
+          E2E_JOB=$JOB_NAME
+          E2E_REGISTRY_NAME=$REGISTRY
+          E2E_RESULTS_ACCOUNT=$RESULTS_ACCOUNT
+          E2E_RUN_ID="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          E2E_SHA=$GITHUB_SHA
+          E2E_IMAGE_TAG="sha-$GITHUB_SHA"
+          E2E_SITE_DIR=web/dist
+          E2E_API_ZIP=api.zip
+          e2e_run
 
-      # The job's own container definition with the image swapped for the one just built, pinned by
-      # digest, and a run id the results are filed under (scripts/lib/e2e-job.sh).
-      - name: Start the job
-        id: start
-        env:
-          IMAGE_REF: ${{ steps.image.outputs.image }}
-        run: |
-          . scripts/lib/e2e-job.sh
-          job_url="https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$JOB_NAME"
-          run_id="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          execution="$(e2e_start_job "$job_url" "$IMAGE_REF" "$run_id" "$GITHUB_SHA")"
-          {
-            echo "execution=$execution"
-            echo "run_id=$run_id"
-            echo "job_url=$job_url"
-          } >> "$GITHUB_OUTPUT"
-          echo "started $execution (run $run_id) with $IMAGE_REF"
-
-      # The job's replica timeout is 45 minutes; a start can wait a few minutes for capacity.
-      - name: Wait for the execution
-        id: wait
-        env:
-          EXECUTION: ${{ steps.start.outputs.execution }}
-          JOB_URL: ${{ steps.start.outputs.job_url }}
-        run: |
-          deadline=$(( $(date +%s) + 55 * 60 ))
-          status=""
-          while [ "$(date +%s)" -lt "$deadline" ]; do
-            status="$(az rest --method get --url "$JOB_URL/executions/$EXECUTION?api-version=$API" --query properties.status -o tsv 2> /dev/null || true)"
-            case "$status" in
-              Succeeded|Failed|Stopped|Degraded) break ;;
-            esac
-            echo "$(date -u +%H:%M:%S) ${status:-pending}"
-            sleep 20
-          done
-          case "$status" in
-            Succeeded|Failed|Stopped|Degraded) ;;
-            *)
-              echo "::error::execution $EXECUTION did not finish in 55 minutes (last status: ${status:-unknown}); stopping it"
-              az rest --method post --url "$JOB_URL/executions/$EXECUTION/stop?api-version=$API" -o none || true
-              status=TimedOut ;;
-          esac
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          echo "execution $EXECUTION: $status"
-
+      # az needs a storage token here, which the sign-in at the start can no longer give it.
       - name: Download the results
-        if: always() && steps.start.outputs.run_id != ''
+        if: always() && steps.run.outputs.execution != ''
         env:
-          RUN_ID: ${{ steps.start.outputs.run_id }}
+          RUN_ID: ${{ steps.run.outputs.run_id }}
         run: |
+          . scripts/lib/e2e-job.sh
+          e2e_az_refresh now
           mkdir -p results
           az storage blob download-batch --auth-mode login --account-name "$RESULTS_ACCOUNT" \
             --source "$RESULTS_CONTAINER" --pattern "runs/$RUN_ID/*" --destination results \
@@ -162,11 +210,12 @@ jobs:
       # The console output is in the results when the run got that far. This covers a container that
       # never started or died early. Log Analytics takes a few minutes to receive the lines.
       - name: Read the job's logs
-        if: always() && steps.start.outputs.execution != '' && steps.wait.outputs.status != 'Succeeded'
+        if: always() && steps.run.outputs.execution != '' && steps.run.outputs.status != 'Succeeded'
         env:
-          EXECUTION: ${{ steps.start.outputs.execution }}
-          RUN_ID: ${{ steps.start.outputs.run_id }}
+          EXECUTION: ${{ steps.run.outputs.execution }}
         run: |
+          . scripts/lib/e2e-job.sh
+          e2e_az_refresh now
           # The platform's events only (image pulled, container started, exit code): they explain a
           # container that never started, and carry no test output. This log is public; the suite's
           # own console stays in the private results container.
@@ -188,9 +237,9 @@ jobs:
       # is public, so anyone signed in to GitHub can download an artifact; everything else stays in
       # the private results container, under runs/<run id>/, for the operator.
       - name: Public summary
-        if: always() && steps.start.outputs.run_id != ''
+        if: always() && steps.run.outputs.run_id != ''
         env:
-          RUN_ID: ${{ steps.start.outputs.run_id }}
+          RUN_ID: ${{ steps.run.outputs.run_id }}
         run: |
           mkdir -p public
           summary="results/runs/$RUN_ID/summary.json"
@@ -203,18 +252,19 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always() && steps.start.outputs.run_id != ''
+        if: always() && steps.run.outputs.run_id != ''
         with:
-          name: e2e-dev-${{ steps.start.outputs.run_id }}
+          name: e2e-dev-${{ steps.run.outputs.run_id }}
           path: public/summary.json
           if-no-files-found: warn
           retention-days: 14
 
       - name: Verdict
-        if: always() && steps.start.outputs.run_id != ''
+        if: always() && steps.run.outputs.run_id != ''
         env:
-          RUN_ID: ${{ steps.start.outputs.run_id }}
-          STATUS: ${{ steps.wait.outputs.status }}
+          RUN_ID: ${{ steps.run.outputs.run_id }}
+          STATUS: ${{ steps.run.outputs.status }}
+          SHA: ${{ github.sha }}
         run: |
           summary="results/runs/$RUN_ID/summary.json"
           {
@@ -222,7 +272,7 @@ jobs:
             echo
             echo "Execution status: ${STATUS:-unknown}"
             echo
-            echo "The site under test is the build deployed on dev; this workflow does not deploy it."
+            echo "The run deployed commit $SHA to dev and tested it there."
             if [ -f "$summary" ]; then
               jq -r '"Result: \(.status) (\(.stats.expected) passed, \(.stats.unexpected) failed, \(.stats.skipped) skipped)",
                 "", "| Test | Outcome |", "| --- | --- |",

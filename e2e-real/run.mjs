@@ -5,10 +5,13 @@
 //    E2E_RESEARCHER_PASSWORD, E2E_DONOR_USERNAME and E2E_DONOR_PASSWORD instead (and E2E_*_TOTP
 //    when an account has a TOTP seed), plus E2E_RIPE_DONOR_KEY, E2E_RIPE_DONOR_ACCOUNT,
 //    E2E_RIPE_RECIPIENT_KEY and E2E_RIPE_RECIPIENT_ACCOUNT for the real-transfer tests.
-// 2. Take the lock every run of the job shares (lib/lock.mjs), when RESULTS_CONTAINER_URL is set,
-//    so two runs never sign the same accounts in or move credits at the same time. A run that
-//    loses the lock stops the suite the way Ctrl+C does: the running test is interrupted, its
-//    afterEach hooks still run (the credit return among them), and the run fails.
+// 2. Hold the lock every run on dev shares (lib/lock.mjs), so two runs never sign the same accounts
+//    in or move credits at the same time. Started by scripts/run-e2e.sh or the workflow, the job
+//    is given the lease its orchestrator took before deploying (E2E_LOCK_LEASE_ID) and only renews
+//    it; the orchestrator releases it. Started without one, it takes the lock itself, when
+//    LOCK_CONTAINER_URL (or, from a job defined before the locks container, RESULTS_CONTAINER_URL)
+//    is set. A run that loses the lock stops the suite the way Ctrl+C does: the running test is
+//    interrupted, its afterEach hooks still run (the credit return among them), and the run fails.
 // 3. Run the Playwright suite. Its output is printed with every secret replaced.
 // 4. Redact the results directory: the passwords, TOTP seeds, RIPE keys and account emails, and
 //    the site's session cookies, which traces record in request headers.
@@ -23,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSecret, managedIdentityToken, putBlob } from './lib/azure.mjs';
-import { acquireLock } from './lib/lock.mjs';
+import { acquireLock, adoptLock, lockBlobUrl } from './lib/lock.mjs';
 import { lineRedactor, redactText, redactTree, secretValues, variants } from './lib/redact.mjs';
 import { summarize } from './lib/summary.mjs';
 
@@ -61,6 +64,10 @@ function log(line) {
   const text = redactText(`${line}\n`, needles);
   process.stdout.write(text);
   consoleLog.push(text);
+}
+
+function leaseIdGiven() {
+  return Boolean(process.env.E2E_LOCK_LEASE_ID);
 }
 
 /** @param {string} s */
@@ -218,14 +225,28 @@ try {
   accountSecrets = secretValues(env);
   if (!env.E2E_RIPE_DONOR_KEY) log('the job names no RIPE Atlas keys, so the real-transfer tests will skip');
   needles = variants(accountSecrets);
-  const container = process.env.RESULTS_CONTAINER_URL;
-  if (container) {
+  const lockUrl = process.env.LOCK_CONTAINER_URL
+    ? lockBlobUrl(process.env.LOCK_CONTAINER_URL)
+    : process.env.RESULTS_CONTAINER_URL
+      ? `${process.env.RESULTS_CONTAINER_URL.replace(/\/$/, '')}/locks/full-flow`
+      : '';
+  const leaseId = process.env.E2E_LOCK_LEASE_ID ?? '';
+  if (leaseId && !process.env.LOCK_CONTAINER_URL) {
+    throw new Error('this run was given a lease (E2E_LOCK_LEASE_ID) but the job names no LOCK_CONTAINER_URL; run scripts/provision.sh');
+  }
+  if (lockUrl) {
+    // A storage token from the managed identity endpoint lasts hours, longer than the job may run.
     const token = await managedIdentityToken('https://storage.azure.com/', process.env.AZURE_CLIENT_ID);
-    lock = await acquireLock(container, token, { log, onLost: stopForLostLock });
-    log('holding the lock: no other run can start the tests until this one ends');
+    if (leaseId) {
+      lock = await adoptLock(lockUrl, token, leaseId, { log, onLost: stopForLostLock });
+      log('renewing the lock the run was started under; the orchestrator releases it when the run ends');
+    } else {
+      lock = await acquireLock(lockUrl, token, { log, onLost: stopForLostLock, holder: { runId, gitSha: process.env.E2E_GIT_SHA } });
+      log('holding the lock: no other run can start until this one ends');
+    }
     if (lockLost) throw new Error('lost the lock before the tests started');
   } else {
-    log('RESULTS_CONTAINER_URL is unset, so this run takes no lock; make sure no other run is going');
+    log('LOCK_CONTAINER_URL is unset, so this run takes no lock; make sure no other run is going');
   }
   exitCode = await runPlaywright(env);
 } catch (err) {
@@ -237,7 +258,7 @@ if (lock) {
   if (lockLost) {
     setupError ||= 'this run lost the lock while the tests ran, so another run may have overlapped it; the suite was stopped';
     exitCode = 1;
-  } else {
+  } else if (!leaseIdGiven()) {
     log('released the lock');
   }
 }

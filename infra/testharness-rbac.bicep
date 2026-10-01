@@ -9,7 +9,12 @@
 // - a custom role on the resource group: read the job, start it, read and stop its executions,
 //   and query the two Container Apps log tables in the workspace (table-level read, so none of the
 //   site's telemetry);
-// - Storage Blob Data Reader on the results container.
+// - Storage Blob Data Reader on the results container;
+// - Storage Blob Data Contributor on the locks container, to take, renew and release the lease
+//   that keeps one run at a time on the environment. The container holds that one blob.
+//
+// The workflow also deploys the commit's site and API to the environment before it tests them;
+// the roles in rbac.bicep, which every environment's CI identity has, already allow that.
 //
 // No role on the Key Vault, control plane or data: CI cannot read, list or change the test
 // accounts or RIPE Atlas keys, open the vault's network, or grant itself access. It cannot change
@@ -28,6 +33,9 @@ param resultsAccountName string
 
 @description('Name of the results container')
 param resultsContainerName string
+
+@description('Name of the container that holds the full-flow lock')
+param locksContainerName string
 
 @description('Name of the container registry that holds the test image')
 param registryName string
@@ -123,6 +131,10 @@ resource results 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
     resource container 'containers' existing = {
       name: resultsContainerName
     }
+
+    resource locks 'containers' existing = {
+      name: locksContainerName
+    }
   }
 }
 
@@ -136,5 +148,18 @@ resource readResults 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: principalId
     principalType: 'ServicePrincipal'
     description: 'GitHub Actions (OIDC) downloads the full-flow test results'
+  }
+}
+
+var storageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource holdLock 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: results::blobs::locks
+  name: guid(results::blobs::locks.id, principalId, storageBlobDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+    principalId: principalId
+    principalType: 'ServicePrincipal'
+    description: 'GitHub Actions (OIDC) takes, renews and releases the full-flow lock'
   }
 }

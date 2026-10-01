@@ -276,6 +276,7 @@ module testharnessRbac 'testharness-rbac.bicep' = if (harness) {
     principalId: identity.outputs.principalId
     resultsAccountName: testharness!.outputs.resultsAccountName
     resultsContainerName: testharness!.outputs.resultsContainerName
+    locksContainerName: testharness!.outputs.locksContainerName
     registryName: testharness!.outputs.registryName
   }
 }
