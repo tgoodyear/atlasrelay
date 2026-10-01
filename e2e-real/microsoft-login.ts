@@ -33,8 +33,10 @@ const SCREENS: Screen[] = [
   { name: 'mfa-registration', locator: (p) => p.locator('#ProofUpDescription, [data-testid="proofUpTitle"]').or(p.getByText(/More information required|Let's keep your account secure/i)) },
   { name: 'password-change', locator: (p) => p.locator('input[name="newpasswd"], #iPassword') },
   { name: 'pick-account', locator: (p) => p.locator('#tilesHolder, [data-test-id="accountList"], [data-testid="accountList"]') },
-  { name: 'password', locator: (p) => p.locator('input[name="passwd"], input[type="password"]') },
+  // Username before password: the username page also carries a password field, which counts as
+  // visible in the job's browser. On the password page the username field is hidden.
   { name: 'username', locator: (p) => p.locator('input[name="loginfmt"], input[type="email"]') },
+  { name: 'password', locator: (p) => p.locator('input[name="passwd"], input[type="password"]') },
   { name: 'stay-signed-in', locator: (p) => p.locator('#KmsiCheckboxField, #KmsiDescription, [data-testid="kmsiVideo"]').or(p.getByText(/^Stay signed in\?$/)) },
   { name: 'permissions', locator: (p) => p.getByText(/^Permissions requested$/) },
   { name: 'swa-consent', locator: (p) => p.getByRole('button', { name: /Grant Consent/i }) },
@@ -69,6 +71,14 @@ async function fillWhenReady(page: Page, field: Locator, value: string): Promise
     await page.waitForTimeout(1000);
   }
   throw new Error('Microsoft sign-in did not take the typed value');
+}
+
+async function fieldValue(page: Page): Promise<string> {
+  try {
+    return await page.locator('input[name="loginfmt"], input[type="email"]').first().inputValue({ timeout: 1000 });
+  } catch {
+    return '';
+  }
 }
 
 async function submit(page: Page, field?: Locator): Promise<void> {
@@ -115,7 +125,13 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
           await page.reload();
           break;
         }
-        throw new Error(`Microsoft sign-in refused the account: ${text.slice(0, 300)}`);
+        // Enough to tell a wrong value from a wrong page, and nothing secret: the screens passed,
+        // where the page was, and the username's length and domain (the tenant's, not a secret).
+        const at = new URL(page.url());
+        const shown = await fieldValue(page);
+        const u = account.username;
+        const diag = `screens ${seen.join('>')}; at ${at.host}${at.pathname}; username length ${u.length}, domain ${u.includes('@') ? u.split('@').pop() : '(no @)'}; field holds ${shown.length} chars${shown === u ? ', the username' : ''}`;
+        throw new Error(`Microsoft sign-in refused the account: ${text.slice(0, 300)} (${diag})`);
       }
       case 'mfa-method':
         // "Verify your identity" with more than one method: pick the code from an authenticator app.
@@ -135,6 +151,10 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
       case 'username': {
         const field = SCREENS.find((s) => s.name === 'username')!.locator(page).first();
         await fillWhenReady(page, field, account.username);
+        // Some sign-ins (seen in the job's browser) get one form with both fields; submitting it
+        // without the password answers "Please enter your password".
+        const password = SCREENS.find((s) => s.name === 'password')!.locator(page).first();
+        if (await visible(password)) await fillWhenReady(page, password, account.password);
         await submit(page, field);
         break;
       }
