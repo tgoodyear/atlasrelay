@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-// A stand-in for the two RIPE Atlas endpoints the API calls (api/src/lib/atlas.ts): the balance read
-// GET /credits/ and the transfer POST /credits/transfers/. The Functions host reaches it through
+// A stand-in for the RIPE Atlas endpoints the API calls (api/src/lib/atlas.ts): the balance read
+// GET /credits/ and the transfer POST /credits/transfers/ with a donor's key, and the transaction
+// read GET /credits/transactions/ with a project owner's key. The Functions host reaches it through
 // ATLAS_API_BASE, so no test ever talks to atlas.ripe.net.
 //
 // Tests run in parallel against one stub, so behaviour is chosen per API key: a test registers a
@@ -20,6 +21,8 @@ export type Reply =
 export interface Scenario {
   balance?: Reply;
   transfer?: Reply;
+  /** The key holder's transaction list. An empty list when not given. */
+  transactions?: Reply;
 }
 
 export interface RecordedRequest {
@@ -110,6 +113,9 @@ export async function startRipeStub(port: number): Promise<RipeStub> {
     if (path === '/credits/transfers/' && req.method === 'POST') {
       return reply(res, scenario ? (scenario.transfer ?? transferCreated()) : UNKNOWN_KEY);
     }
+    if (path === '/credits/transactions/' && req.method === 'GET') {
+      return reply(res, scenario ? (scenario.transactions ?? transactionsOk([])) : UNKNOWN_KEY);
+    }
     return sendJson(res, 404, { error: { status: 404, title: 'Not Found', detail: `e2e stub has no route for ${req.method} ${url.pathname}` } });
   });
 
@@ -171,5 +177,35 @@ export function transferBadRequest(detail: string): Reply {
     kind: 'json',
     status: 400,
     body: { error: { status: 400, title: 'Bad Request', errors: [{ source: { pointer: '/recipient' }, detail }] } },
+  };
+}
+
+/** One row of RIPE's transaction list, in the live shape: `date` in epoch seconds, amount signed. */
+export interface TransactionRow {
+  id: number;
+  type: 'admin' | 'measurement' | 'probe';
+  amount: number;
+  date: number;
+  reason?: string;
+  description?: string;
+}
+
+/** An admin row, dated `secondsFromNow` from the moment it is built. A positive amount arrived. */
+export function adminRow(id: number, amount: number, secondsFromNow = 0, description = ''): TransactionRow {
+  return { id, type: 'admin', amount, date: Math.floor(Date.now() / 1000) + secondsFromNow, reason: 'Transfer', description };
+}
+
+/** The paginated list the live API returns, newest first. */
+export function transactionsOk(rows: TransactionRow[], next: string | null = null): Reply {
+  const sorted = [...rows].sort((a, b) => b.date - a.date);
+  return { kind: 'json', status: 200, body: { count: sorted.length, next, previous: null, results: sorted } };
+}
+
+/** A key without "Get information about your credits": RIPE refuses the read. */
+export function transactionsRefused(): Reply {
+  return {
+    kind: 'json',
+    status: 403,
+    body: { error: { status: 403, title: 'Forbidden', detail: 'You do not have permission to perform this action.' } },
   };
 }

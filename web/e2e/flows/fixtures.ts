@@ -181,6 +181,9 @@ export const ripe = {
     const res = await fetch(`${RIPE_STUB_URL}/__stub/requests?key=${encodeURIComponent(key)}`);
     return ((await res.json()) as { requests: RecordedRequest[] }).requests;
   },
+  async transactionReads(key: string): Promise<RecordedRequest[]> {
+    return (await this.requests(key)).filter((r) => r.method === 'GET' && r.path.startsWith('/api/v2/credits/transactions/'));
+  },
   async transfers(key: string): Promise<RecordedRequest[]> {
     return (await this.requests(key)).filter((r) => r.method === 'POST' && r.path === '/api/v2/credits/transfers/');
   },

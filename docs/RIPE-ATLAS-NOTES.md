@@ -65,6 +65,13 @@ Filters: `date`, `date__gt/gte/lt/lte`, `type`, `sort`, `page_size`. Transfers a
 `admin` transactions; the description format is not documented, so automatic
 receipt-matching is best-effort.
 
+Seen live (2026-09-18): the list is `{count, next, previous, results}`, newest first with
+`sort=-date`; `date` is an integer epoch in seconds; a transfer out is a negative `amount` and money
+in is positive. A transfer's row appeared 40 to 70 seconds after the transfer, not at once. The
+site checks manual pledges against the owner's list using `sort`, `type` and `page_size` only;
+the date filters are documented but have not been tried live. No documented field names the
+sending account, and what `reason` and `description` hold for a transfer is *unverified*.
+
 ## Authentication and identity
 
 - **API keys** (preferred): `Authorization: Key <uuid>`. Keys are scoped by *grants*

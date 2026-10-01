@@ -7,7 +7,7 @@ import type { Pledge, Project } from '../src/lib/store';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal, siteStats } from '../src/lib/pledging';
 
 test('totals splits confirmed from pending and ignores cancelled', () => {
-  const base = { id: '', projectId: '', donorId: '', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', message: '', createdAt: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorId: '', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '', createdAt: '', updatedAt: '' };
   const t = totals([
     { ...base, amount: 100, status: 'confirmed' },
     { ...base, amount: 50, status: 'pledged' },
@@ -51,7 +51,7 @@ test('listing keys off confirmed credits, so a pending pledge cannot hide a proj
 });
 
 test('stale pending pledges stop reserving capacity', () => {
-  const base = { id: '', projectId: '', donorId: 'd1', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', message: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorId: 'd1', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '', updatedAt: '' };
   const asOf = Date.parse('2026-09-17T00:00:00Z');
   const fresh = new Date(asOf - 1 * 24 * 3600 * 1000).toISOString();
   const stale = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * 24 * 3600 * 1000).toISOString();
@@ -63,7 +63,7 @@ test('stale pending pledges stop reserving capacity', () => {
 });
 
 test('an expired pledge no longer locks its own donor out', () => {
-  const base = { id: '', projectId: '', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', message: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '', updatedAt: '' };
   const asOf = Date.parse('2026-09-17T00:00:00Z');
   const stale = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * 24 * 3600 * 1000).toISOString();
   const list = [{ ...base, donorId: 'd1', amount: 10, status: 'pledged' as const, createdAt: stale }];
@@ -71,7 +71,7 @@ test('an expired pledge no longer locks its own donor out', () => {
 });
 
 test('a donor may hold only one live pledge per project', () => {
-  const base = { id: '', projectId: '', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', message: '', createdAt: '', updatedAt: '' };
+  const base = { id: '', projectId: '', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '', createdAt: '', updatedAt: '' };
   const list = [
     { ...base, donorId: 'd1', amount: 10, status: 'pledged' as const },
     { ...base, donorId: 'd1', amount: 10, status: 'cancelled' as const },
@@ -93,7 +93,7 @@ test('the slot, not id ordering, is what keeps a donor to one live pledge', () =
   const live = {
     id: 'p1', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, amount: 1, method: 'api' as const,
     status: 'pledged' as const, transactionUrl: '', transactionId: '', transferredAt: '',
-    transferUncertain: false, inFlight: false, inFlightSince: '', message: '', createdAt: recent, updatedAt: recent,
+    transferUncertain: false, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '', createdAt: recent, updatedAt: recent,
   };
   assert.equal(claimIsReclaimable(recent, live, asOf), false, 'a live pledge holds its slot');
   assert.equal(claimIsReclaimable(recent, { ...live, status: 'confirmed' }, asOf), true);
@@ -108,7 +108,7 @@ test('the slot, not id ordering, is what keeps a donor to one live pledge', () =
 test('a transfer of unknown outcome keeps reserving credits and keeps its donor out', () => {
   // Parked at 'sent' because RIPE never answered. Until a human settles it, the credits it may
   // have moved stay reserved, and its donor cannot start a second transfer on the same project.
-  const base = { id: 'a', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, method: 'api' as const, transactionUrl: '', transactionId: '', transferredAt: '2026-09-17T00:00:00.000Z', transferUncertain: true, inFlight: false, inFlightSince: '', message: '', createdAt: new Date().toISOString(), updatedAt: '' };
+  const base = { id: 'a', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, method: 'api' as const, transactionUrl: '', transactionId: '', transferredAt: '2026-09-17T00:00:00.000Z', transferUncertain: true, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '', createdAt: new Date().toISOString(), updatedAt: '' };
   const pledges = [{ ...base, amount: 500, status: 'sent' as const }];
   assert.deepEqual(totals(pledges), { confirmed: 0, pending: 500 });
   assert.equal(activePledgesBy(pledges, 'd1').length, 1);
@@ -116,7 +116,7 @@ test('a transfer of unknown outcome keeps reserving credits and keeps its donor 
 
 test('a pledge past the reservation window counts as expired', () => {
   const day = 24 * 60 * 60 * 1000;
-  const base = { id: 'a', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', message: '', updatedAt: '' };
+  const base = { id: 'a', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, method: 'manual' as const, transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '', updatedAt: '' };
   const asOf = Date.parse('2026-09-17T00:00:00.000Z');
   const fresh = { ...base, amount: 1, status: 'pledged' as const, createdAt: new Date(asOf - 1 * day).toISOString() };
   const stale = { ...base, amount: 1, status: 'pledged' as const, createdAt: new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * day).toISOString() };
@@ -134,7 +134,7 @@ test('a pledge slot is reclaimable once its pledge settles, or once it goes stal
   const ancient = new Date(asOf - (PENDING_RESERVATION_DAYS + 1) * day).toISOString();
   const pledge = (status: 'pledged' | 'sent' | 'confirmed' | 'cancelled') => ({
     id: 'p1', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, amount: 1, method: 'api' as const, status,
-    transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', message: '',
+    transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: false, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '',
     createdAt: recent, updatedAt: recent,
   });
 
@@ -169,7 +169,7 @@ test('a pledge mid-transfer is not actionable, but does not freeze for ever', ()
   const row = {
     id: 'p1', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, amount: 1, method: 'api' as const,
     status: 'pledged' as const, transactionUrl: '', transactionId: '', transferredAt: '',
-    transferUncertain: false, inFlight: true, inFlightSince: '', message: '',
+    transferUncertain: false, inFlight: true, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '',
     createdAt: new Date(asOf - 5_000).toISOString(), updatedAt: '',
   };
   assert.equal(pledgeInFlight(row, asOf), true);
@@ -187,7 +187,7 @@ test('the in-flight window is measured from the transfer, not from the row', () 
   const row = {
     id: 'p1', projectId: 'j1', donorId: 'd1', donorName: '', anonymous: false, amount: 1, method: 'api' as const,
     status: 'pledged' as const, transactionUrl: '', transactionId: '', transferredAt: '',
-    transferUncertain: false, inFlight: true, inFlightSince: '', message: '',
+    transferUncertain: false, inFlight: true, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '',
     createdAt: new Date(asOf - 10 * 60 * 1000).toISOString(), updatedAt: '',
   };
   // Row written ten minutes ago, transfer issued five seconds ago: still in flight.
@@ -338,7 +338,7 @@ test('an unknown error is described for the log without its message', () => {
 const unresolved = (over: Partial<Pledge> = {}): Pledge => ({
   id: 'u1', projectId: 'j1', donorId: 'd1', donorName: 'Alice', anonymous: false, amount: 100_000,
   method: 'api', status: 'sent', transactionUrl: '', transactionId: '', transferredAt: '',
-  transferUncertain: true, inFlight: false, inFlightSince: '', message: '',
+  transferUncertain: true, inFlight: false, inFlightSince: '', receivedAmount: 0, amountVerified: false, message: '',
   createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
   ...over,
 });
@@ -466,7 +466,7 @@ test('a pledge write never carries the donor name, so it cannot undo the deletio
   const p: Pledge = {
     id: 'pl1', projectId: 'pr1', donorId: 'd1', donorName: 'Ada', anonymous: false, amount: 10, method: 'api',
     status: 'confirmed', transactionUrl: '', transactionId: '', transferredAt: '2026-09-26T00:00:00.000Z',
-    transferUncertain: false, inFlight: false, inFlightSince: '2026-09-26T00:00:00.000Z', message: '',
+    transferUncertain: false, inFlight: false, inFlightSince: '2026-09-26T00:00:00.000Z', receivedAmount: 0, amountVerified: false, message: '',
     createdAt: '2026-09-26T00:00:00.000Z', updatedAt: '2026-09-26T00:00:00.000Z', etag: 'W/"x"',
   };
   const e = pledgeWriteEntity(p);
@@ -488,7 +488,7 @@ test('profile deletion counts the pledges that may already have used the owner a
   const base: Pledge = {
     id: 'pl', projectId: 'pr', donorId: 'd', donorName: '', anonymous: false, amount: 1, method: 'api',
     status: 'sent', transactionUrl: '', transactionId: '', transferredAt: '', transferUncertain: true,
-    inFlight: true, inFlightSince: at(5), message: '', createdAt: at(30), updatedAt: at(5),
+    inFlight: true, inFlightSince: at(5), receivedAmount: 0, amountVerified: false, message: '', createdAt: at(30), updatedAt: at(5),
   };
   // An API transfer marked just before the owner went: it may be sent to the address.
   assert.equal(pledgeRacedDeletion(base, deletedAt), true);

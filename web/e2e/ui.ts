@@ -69,7 +69,17 @@ export async function markSent(page: Page, donorName: string): Promise<void> {
 export async function confirmReceived(page: Page, donorName: string): Promise<void> {
   const row = pledgeRow(page, donorName);
   await row.getByRole('button', { name: 'Confirm received' }).click();
-  await expect(row.getByText('Confirmed', { exact: true })).toBeVisible();
+  // A manual pledge opens a dialog where the owner may paste a key to check the amount with RIPE
+  // Atlas. Without one, its button confirms what was pledged. An API pledge confirms straight away.
+  const dialog = page.getByRole('dialog', { name: 'Confirm this pledge' });
+  const confirmed = row.getByText('Confirmed', { exact: true });
+  await expect(dialog.or(confirmed)).toBeVisible();
+  if (await dialog.isVisible()) {
+    await expect(dialog.getByLabel('RIPE Atlas API key (optional)')).toHaveValue('');
+    await dialog.getByRole('button', { name: /^Confirm [\d,]+ credits?$/ }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+  await expect(confirmed).toBeVisible();
 }
 
 /**

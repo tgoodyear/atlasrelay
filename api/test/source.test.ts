@@ -120,3 +120,19 @@ test('the pledge handler reads the owner after its marker is stored and before t
   assert.ok(marker < owner, 'the owner is read after the marker is stored');
   assert.ok(owner < post, 'the owner is read before the transfer');
 });
+
+test('an owner key is only used after every rule that could refuse the confirmation has passed', () => {
+  // The RIPE read is the one step in the update handler that sends something outside this site, and it
+  // sends the owner's key. Every check that can refuse the request without it -- who may act, which
+  // transitions are allowed, the in-flight window, the expiry rule -- has to come first, so a request
+  // that was always going to be refused never carries the key to RIPE at all.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const read = update.indexOf('await checkReceipt(');
+  assert.ok(read > 0, 'the update handler no longer checks receipts');
+  for (const guard of ["throw new HttpError(403, 'Not allowed')", 'if (!ok) throw', 'if (pledgeInFlight(pledge))', "pledge.method !== 'manual'", 'assertKeyFormat(body.apiKey)']) {
+    const at = update.indexOf(guard);
+    assert.ok(at > 0, `the update handler no longer contains ${guard}`);
+    assert.ok(at < read, `${guard} runs before the RIPE read`);
+  }
+});

@@ -4,7 +4,8 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, receiptIdsInUse, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { checkReceipt, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -100,6 +101,8 @@ app.http('pledges-create', {
         // An API transfer is in flight from the moment the row exists until the attempt resolves.
         inFlight: method === 'api',
         inFlightSince: '',
+        receivedAmount: 0,
+        amountVerified: false,
         message,
         createdAt: ts,
         updatedAt: ts,
@@ -647,6 +650,21 @@ app.http('pledges-update', {
     const body = await readJson(req);
     const status = oneOf(body, 'status', ['sent', 'confirmed', 'cancelled'] as const, true)!;
 
+    // Optional, and only for the owner confirming a manual pledge: a RIPE Atlas key of the owner's
+    // own, used for one read of their transactions so the pledge records what actually arrived. It
+    // is checked here, before anything is read or written, and refused in every other case rather
+    // than ignored, so a key sent by mistake is never quietly carried further than this line.
+    const wantsCheck = body.apiKey !== undefined && body.apiKey !== null && body.apiKey !== '';
+    const choice = body.transactionId === undefined || body.transactionId === null || body.transactionId === '' ? undefined : String(body.transactionId);
+    if (wantsCheck || choice !== undefined) {
+      if (!isOwner || status !== 'confirmed' || pledge.method !== 'manual') {
+        throw new HttpError(400, 'A RIPE Atlas key is only used when the project owner confirms a manual pledge. Nothing was recorded.');
+      }
+      if (!wantsCheck) throw new HttpError(400, 'Choosing a RIPE Atlas transaction needs the key it is read with. Nothing was recorded.');
+      if (choice !== undefined && !/^[1-9][0-9]{0,19}$/.test(choice)) throw new HttpError(400, 'Transaction id must be a RIPE Atlas transaction id');
+    }
+    const ownerKey = wantsCheck ? assertKeyFormat(body.apiKey) : '';
+
     const allowed: Record<string, Array<[from: string, to: string]>> = {
       donor: [
         ['pledged', 'sent'],
@@ -722,9 +740,37 @@ app.http('pledges-update', {
     }
 
     // Confirming must never push confirmed credits past the ceiling, whatever was reserved.
+    // What a confirmation records. Unchecked, it is the pledge as made. Checked, it is what the
+    // owner's RIPE Atlas log shows arriving, read in this request and never taken from the browser.
+    let receivedAmount = 0;
+    let amountVerified = false;
+    let transactionId = pledge.transactionId;
+    let checked: CheckedConfirmation | undefined;
     if (status === 'confirmed') {
       const liveTotals = totals(await listPledges(projectId));
-      if (liveTotals.confirmed + pledge.amount > maxCredits(project.creditsRequested)) {
+      const room = maxCredits(project.creditsRequested) - liveTotals.confirmed;
+      if (ownerKey) {
+        let used: Set<string>;
+        try {
+          used = await receiptIdsInUse(project.ownerId, pledge.id);
+        } catch (err) {
+          logError('Could not read which RIPE Atlas transactions are already matched', err);
+          throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.');
+        }
+        try {
+          checked = await checkReceipt({ key: ownerKey, pledged: pledge.amount, since: Date.parse(pledge.createdAt), used, room, choice });
+        } catch (err) {
+          const outcome = ((err as HttpError).details as { verification?: VerificationDetails } | undefined)?.verification?.outcome;
+          logEvent('receipt-check', { outcome: outcome ?? 'error', projectId, pledgeId: pledge.id });
+          throw err;
+        }
+        logEvent('receipt-check', { outcome: checked.outcome, projectId, pledgeId: pledge.id });
+        if (checked.verified) {
+          receivedAmount = checked.amount;
+          amountVerified = true;
+          transactionId = checked.transactionId;
+        }
+      } else if (pledge.amount > room) {
         throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
       }
     }
@@ -743,7 +789,7 @@ app.http('pledges-update', {
     // already been released and its credits counted as confirmed.
     let updated: Pledge;
     try {
-      updated = await savePledge({ ...pledge, status }, pledge.etag);
+      updated = await savePledge({ ...pledge, status, receivedAmount, amountVerified, transactionId }, pledge.etag);
     } catch (err) {
       if (err instanceof RestError && err.statusCode === 412) {
         throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.');
@@ -755,6 +801,14 @@ app.http('pledges-update', {
     if (status === 'confirmed' || status === 'cancelled') {
       await releasePledgeClaim(projectId, pledge.donorId, pledge.id);
     }
-    return json({ pledge: privatePledge(updated), project: publicProject(updatedProject) });
+    return json({
+      pledge: privatePledge(updated),
+      project: publicProject(updatedProject),
+      // Present only when the owner sent a key: what the check found, so the page can say whether
+      // the amount was verified or RIPE did not answer and the pledge was confirmed as pledged.
+      verification: checked
+        ? { outcome: checked.outcome, pledged: pledge.amount, received: checked.verified ? checked.amount : undefined, transactionId: checked.verified ? checked.transactionId : undefined }
+        : undefined,
+    });
   }),
 });

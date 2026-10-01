@@ -53,6 +53,8 @@ test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ 
   await expect(owner.getByText('1 of your projects has pending pledges.')).toBeVisible();
   await owner.getByRole('link', { name: 'Review pledges' }).click();
   await confirmReceived(owner, donor.name);
+  // Confirmed without a key, so the amount is the pledged one and is not marked verified.
+  await expect(pledgeRow(owner, donor.name).getByText('Verified with RIPE Atlas')).toHaveCount(0);
   await expect(owner.locator('dl.kv')).toContainText('Received700');
   await expect(owner.locator('dl.kv')).toContainText('Pending0');
   await expect(owner.locator('.pill-green', { hasText: 'Funded' })).toBeVisible();

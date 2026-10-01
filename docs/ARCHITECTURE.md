@@ -109,7 +109,9 @@ the partition after each change, so the project row never drifts.
 3. Create project: title, one-paragraph summary, description, credits needed, tags,
    optional links and deadline. Publish.
 4. Watch pledges arrive; confirm manual pledges once credits show up at
-   https://atlas.ripe.net/credits/ (transactions list). Close the project when done.
+   https://atlas.ripe.net/credits/ (transactions list). Optionally paste a key of their own
+   with only "Get information about your credits" when confirming; see
+   [Checking a manual pledge](#checking-a-manual-pledge). Close the project when done.
 
 ### Donor
 1. Open a project, click **Send credits**, pick an amount. It defaults to what is left toward the goal, and is bounded by `maxSinglePledge`: what is left to the goal, or one goal's worth once the goal is met. A project accepts up to 100× its request in total, but no single pledge may reserve that whole ceiling.
@@ -141,6 +143,38 @@ the partition after each change, so the project row never drifts.
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
      donor marks it `sent`; the requester marks it `confirmed`.
 3. Donor's pledges are listed on their dashboard.
+
+### Checking a manual pledge
+
+A manual pledge records what the donor said they would send. The donor transfers on
+atlas.ripe.net, out of the site's sight, and may send a different amount. When the owner confirms,
+they may paste a key of their own with only "Get information about your credits". The API reads
+`GET /credits/transactions/?sort=-date&type=admin&page_size=100` once with it, keeps nothing of the
+key, and looks for the arrival.
+
+RIPE's rows carry `id`, `type`, a signed `amount`, `date` in epoch seconds, `reason`,
+`description` and balances. No documented field names the other account, so a row cannot be tied
+to a donor. A row is a candidate when it is `admin`, its amount is positive (money in), it is no
+older than the pledge (to the second, since RIPE stamps whole seconds), and its id is not already
+recorded against another pledge on any of the owner's projects. Then:
+
+| Candidates | What happens |
+| --- | --- |
+| Exactly one of the pledged amount | Confirmed, verified, with RIPE's transaction id. Other amounts beside it are ignored. |
+| One, of another amount | 409. The owner sees "RIPE shows N arrived (pledged M)" and chooses to record N, confirm M unchecked, or wait. |
+| Several, or the page may be incomplete | 409 with the list. The owner picks one, or confirms M unchecked. Nothing is guessed. |
+| None | 409. The row may not be indexed yet (RIPE lists a transfer some time after it happens). Check again, or confirm M unchecked. |
+| Key refused (401/403) | 400 naming the permission. Nothing recorded. |
+| RIPE does not answer | Confirmed at M, unverified, and the response says so. |
+
+A row the owner picks is read again in the request that records it, and has to pass the same
+tests, so the browser never supplies an amount. Recording never takes the project past its 100×
+ceiling: if what arrived would, the owner is told and offered M unchecked when M fits, or cancel.
+
+The pledge keeps `amount` (what was pledged) and gains `receivedAmount` (what arrived, 0 when
+unchecked), `amountVerified`, and RIPE's id in `transactionId`. Totals count `receivedAmount`
+when it is set and `amount` otherwise, and the public pledge shows the counted amount, the pledged
+one, and a "Verified with RIPE Atlas" marker. Rows written before these fields read as unchecked.
 
 ### Ordering, and what happens when a transfer fails
 
@@ -254,7 +288,7 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 | `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. |
 | `GET /api/projects/{id}/pledges` | owner or donor | Owner: all pledges. Donor: own. |
 | `POST /api/projects/{id}/pledges` | user, not owner | `{amount, method, message, anonymous?, apiKey?}`. `anonymous` must be a real boolean when present; it withholds the donor's name from public views. Returns pledge and, for `manual`, the recipient email. |
-| `PATCH /api/pledges/{projectId}/{id}` | donor or owner | Donor: `sent`/`cancelled`. Owner: `confirmed`/`cancelled` (for stale pledges). |
+| `PATCH /api/pledges/{projectId}/{id}` | donor or owner | Donor: `sent`/`cancelled`. Owner: `confirmed`/`cancelled` (for stale pledges). On a manual pledge the owner may add `apiKey` (their own key) and, after a first answer, `transactionId`; see [Checking a manual pledge](#checking-a-manual-pledge). Answers 409 with `details.verification` when the owner has to decide. |
 | `GET /api/my` | user | My projects + my pledges. |
 | `GET /api/stats` | public | Totals for the home page. |
 | `POST /api/atlas/balance` | user | `{apiKey}` → `{current_balance,...}` from RIPE. Never stored. |

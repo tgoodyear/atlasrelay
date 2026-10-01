@@ -2,7 +2,8 @@ import { HttpError } from './http';
 import { logDependency } from './telemetry';
 
 /**
- * Minimal RIPE Atlas REST client for the two calls this platform needs.
+ * Minimal RIPE Atlas REST client for the few calls this platform makes: a balance read and a
+ * transfer with a donor's key, and a transaction read with a project owner's key.
  * Keys are passed per call and never stored. Errors are mapped to HttpErrors
  * that never contain the key.
  */
@@ -85,7 +86,10 @@ export interface CreditTransaction {
    * matcher then discarded, so no transfer could ever be matched to its transaction.
    */
   date: number | string;
+  /** Documented as required strings, with no documented format. Neither is relied on for matching. */
+  reason?: string;
   description?: string;
+  balance_before?: number;
   balance_after?: number;
 }
 
@@ -286,6 +290,42 @@ export async function findTransferTransaction(key: string, amount: number, since
   // 201 already told us the credits moved, and a reference pointing at the wrong transaction is
   // worse than no reference at all.
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+/** One page of the key holder's admin transactions, newest first. */
+export interface TransactionPage {
+  rows: CreditTransaction[];
+  /** RIPE said there is a further page. */
+  hasMore: boolean;
+}
+
+/** How many rows one read asks for. A transfer is an `admin` row; measurement spending is not. */
+export const TRANSACTION_PAGE_SIZE = 100;
+
+/**
+ * Read the key holder's most recent `admin` transactions, which is where RIPE records credit
+ * transfers in both directions. Used when a project owner checks a manual pledge against what
+ * actually reached their account. Needs "Get information about your credits".
+ *
+ * The query uses only parameters already exercised against the live API by findTransferTransaction
+ * (`sort`, `type`, `page_size`). The documented `date__gte` filter would make the page smaller,
+ * but it has not been tried against the live API, and a parameter RIPE rejects would turn every
+ * check into a refusal. The date bound is applied by the caller instead.
+ *
+ * Unlike findTransferTransaction, failures are raised rather than swallowed, because the caller
+ * has to tell the owner which one happened: AtlasRefused when RIPE answered no (a 401 or 403 is
+ * the key lacking the read permission), AtlasUnreachable when RIPE did not answer usefully.
+ */
+export async function readAdminTransactions(key: string): Promise<TransactionPage> {
+  const { ok, status, body } = await atlasCall(`/credits/transactions/?sort=-date&type=admin&page_size=${TRANSACTION_PAGE_SIZE}`, key, {}, BEST_EFFORT_TIMEOUT_MS);
+  if (status >= 500 || (status >= 300 && status < 400)) throw new AtlasUnreachable(`RIPE Atlas returned HTTP ${status} for the transaction list`);
+  if (!ok) throw new AtlasRefused(status, status === 429 ? 429 : 400, describeAtlasError(status, body));
+  if (Array.isArray(body)) return { rows: body as CreditTransaction[], hasMore: false };
+  const page = body as { results?: unknown; next?: unknown } | null;
+  // A 2xx we cannot read is not an answer to "what arrived". Treat it like no answer at all
+  // rather than like an empty list, which would read as "nothing has arrived yet".
+  if (!page || !Array.isArray(page.results)) throw new AtlasUnreachable('RIPE Atlas returned a transaction list this site could not read');
+  return { rows: page.results as CreditTransaction[], hasMore: typeof page.next === 'string' && page.next !== '' };
 }
 
 export async function transferCredits(key: string, recipient: string, amount: number): Promise<TransferResult> {

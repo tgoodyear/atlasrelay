@@ -135,6 +135,18 @@ export interface Pledge {
    * was even issued, and an owner could then free the slot while the credits were moving.
    */
   inFlightSince: string;
+  /**
+   * What actually arrived, when the project owner confirmed a manual pledge with a RIPE Atlas key
+   * and the API read the matching row from their transaction log. 0 means nobody read it, which
+   * is every API pledge, every pledge confirmed without a key, and every row written before this
+   * field existed. `amount` keeps what the donor pledged either way. See creditedAmount.
+   */
+  receivedAmount: number;
+  /**
+   * The API read receivedAmount and transactionId from the owner's RIPE Atlas transaction log
+   * itself, in the request that confirmed the pledge. Never set from anything the browser sent.
+   */
+  amountVerified: boolean;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -546,7 +558,23 @@ export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
 
 // ---------- pledges ----------
 
-function toPledge(e: Entity): Pledge {
+/** A stored credit figure, or 0 when the column is missing or holds anything but a positive whole number. */
+function storedCredits(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
+
+/**
+ * The credits a pledge counts for once confirmed: what RIPE Atlas showed arriving when the owner
+ * checked, otherwise what was pledged. Every total goes through this, so a manual pledge whose donor
+ * sent a different amount is counted at what actually reached the project.
+ */
+export function creditedAmount(p: Pick<Pledge, 'amount' | 'receivedAmount'>): number {
+  return p.receivedAmount > 0 ? p.receivedAmount : p.amount;
+}
+
+/** Exported for tests. */
+export function toPledge(e: Entity): Pledge {
   return {
     id: e.rowKey,
     projectId: e.partitionKey,
@@ -563,6 +591,9 @@ function toPledge(e: Entity): Pledge {
     transferUncertain: e.transferUncertain === true,
     inFlight: e.inFlight === true,
     inFlightSince: String(e.inFlightSince ?? ''),
+    // Rows written before these fields existed read as unchecked, which is what they were.
+    receivedAmount: storedCredits(e.receivedAmount),
+    amountVerified: e.amountVerified === true,
     message: String(e.message ?? ''),
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
@@ -669,6 +700,25 @@ export async function listPledgesByDonor(donorId: string): Promise<Pledge[]> {
     out.push(toPledge(e));
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/**
+ * RIPE Atlas transaction ids already recorded against a pledge on any of this owner's projects,
+ * leaving out `exceptPledgeId`.
+ *
+ * One RIPE account receives the credits for every project its owner posts, so the same arrival
+ * must not be matched to two pledges, on one project or across several. Read before a check and
+ * not locked: two confirmations racing each other could both pick the same row. Only the owner can
+ * confirm, so that needs one person acting twice at once, the same trade the ceiling check makes.
+ */
+export async function receiptIdsInUse(ownerId: string, exceptPledgeId: string): Promise<Set<string>> {
+  const used = new Set<string>();
+  for (const project of await listProjectsByOwner(ownerId)) {
+    for (const p of await listPledges(project.id)) {
+      if (p.id !== exceptPledgeId && p.transactionId) used.add(p.transactionId);
+    }
+  }
+  return used;
 }
 
 export async function getPledge(projectId: string, id: string): Promise<Pledge | null> {
@@ -936,7 +986,7 @@ export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirme
   let pending = 0;
   for (const p of pledges) {
     if (p.status === 'confirmed') {
-      confirmed += p.amount;
+      confirmed += creditedAmount(p);
     } else if (p.status === 'pledged' || p.status === 'sent') {
       // An unresolved row keeps its reservation at any age. It is also what keeps the owner being told
       // something is waiting: the dashboard's prompt and the refresh rotation that keeps it accurate are

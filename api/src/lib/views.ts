@@ -1,5 +1,5 @@
 import { acceptsMorePledges, capacity, maxCredits, maxSinglePledge, remainingToGoal } from './pledging';
-import { Pledge, Project, User, donorMayCancelApiPledge } from './store';
+import { Pledge, Project, User, creditedAmount, donorMayCancelApiPledge } from './store';
 
 // Any '@' at all, not just a dotted domain: alice@localhost is still an address.
 const EMAIL_SHAPED = /@/;
@@ -97,7 +97,13 @@ export function publicPledge(p: Pledge) {
     donorName: p.anonymous ? 'Anonymous' : publicName(p.donorName, '', p.donorId),
     // Published so the listing can say the name is withheld by choice rather than missing.
     anonymous: p.anonymous,
-    amount: p.amount,
+    // What the pledge counts for: what arrived, when the owner checked it against their RIPE Atlas
+    // log, otherwise what was pledged. pledgedAmount keeps the original so a difference can be shown.
+    amount: creditedAmount(p),
+    pledgedAmount: p.amount,
+    // The API itself read the amount from the owner's RIPE Atlas transaction log when the pledge was
+    // confirmed. Not a statement about who sent it: RIPE's rows do not name the sender.
+    amountVerified: p.amountVerified,
     method: p.method,
     status: p.status,
     message: p.message,
