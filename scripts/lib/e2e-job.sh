@@ -212,6 +212,8 @@ e2e_lock_end() {
 # lock: a deploy that lands after the release would overwrite the next run's build.
 #   api <scm host> <deployment id> <token> <start>   or   site <registry> <resource group> <run id> <start>
 E2E_IN_FLIGHT=()
+# Set once the request to start the job has gone out.
+E2E_START_SENT=""
 # The registry ends an upload run 20 minutes after it is queued (--timeout 1200), whatever happens.
 # A Flex Consumption deployment has no such limit, so its wait stops at the same 20 minutes.
 E2E_DEPLOY_LIMIT=1200
@@ -391,6 +393,11 @@ _e2e_on_exit() {
   [ ${#E2E_IN_FLIGHT[@]} -eq 0 ] || e2e_settle_deploy || settled=false
   if [ "$settled" = false ]; then
     e2e_lock_end leave
+  elif [ -n "$E2E_LOCK_PID" ] && [ -n "$E2E_START_SENT" ] && [ -z "${E2E_EXECUTION:-}" ]; then
+    # The start request went out but its answer did not come back: a job may have started and be
+    # taking the lease over. Leave it to that job, or to lapse within a minute if none started.
+    echo "the job may have started without this run learning its name; this run no longer renews the lock, which lapses within 60 s unless that job renews it" >&2
+    e2e_lock_end leave
   elif [ -n "$E2E_LOCK_PID" ] && [ -n "${E2E_EXECUTION:-}" ] && ! _e2e_terminal "${E2E_STATUS:-}"; then
     echo "the test job ($E2E_EXECUTION) is still running and keeps the lock until it ends (45 minutes at most); this run no longer renews it" >&2
     e2e_lock_end leave
@@ -462,6 +469,7 @@ e2e_run() {
 
   e2e_az_refresh || return 1
   e2e_lock_held || return 1
+  E2E_START_SENT=1
   E2E_EXECUTION=$(e2e_start_job "$E2E_JOB_URL" "$E2E_IMAGE" "$E2E_RUN_ID" "$E2E_SHA" "${E2E_BASE_URL:-}" "$E2E_LOCK_LEASE") || return 1
   _e2e_output execution "$E2E_EXECUTION"
   echo "started $E2E_EXECUTION (run $E2E_RUN_ID)"
