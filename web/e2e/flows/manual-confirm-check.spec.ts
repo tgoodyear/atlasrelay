@@ -268,6 +268,13 @@ test('two confirmations on one project cannot together pass its ceiling', async 
   expect(results.map((r) => r.status()).sort()).toEqual([200, 409]);
   const after = (await (await researcher.request.get(`/api/projects/${project.id}`)).json()).project;
   expect(after.creditsConfirmed).toBe(600);
+  // The refused one recorded nothing, so any arrival it reserved is free again. It is refused either
+  // by the check before the lock (the other was already written) or by the one under it.
+  const lost = results.findIndex((r) => r.status() === 409);
+  const refusal = (await results[lost].json()).error;
+  expect(refusal.details?.recorded === false || refusal.details?.verification?.outcome === 'over-ceiling', JSON.stringify(refusal)).toBe(true);
+  expect(await row('claims', `receipt-${researcher.id}`, lost === 0 ? '992001' : '992002')).toBeNull();
+  expect(await row('pledges', project.id, ids[lost])).toMatchObject({ status: 'pledged', amountVerified: false });
 });
 
 test('two confirmations racing for one arrival record it once', async ({ person }) => {

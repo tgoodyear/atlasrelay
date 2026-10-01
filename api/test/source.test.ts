@@ -137,15 +137,27 @@ test('an owner key is only used after every rule that could refuse the confirmat
   }
 });
 
-test('a confirmation holds the project lock from reading the totals to writing the pledge', () => {
-  // Two confirmations on one project could otherwise both read a total under the ceiling and both write.
+test('a confirmation holds the project lock only around the totals read, the ceiling check and the write', () => {
+  // Two confirmations on one project could otherwise both read a total under the ceiling and both
+  // write. The slow reads (the owner's whole pledge history and RIPE) stay outside the lock, so a
+  // long history cannot outlast the lock's grace and let a second request take it mid-confirmation.
   const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
   const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const ledger = update.indexOf('await ownerReceiptLedger(');
+  const ripe = update.indexOf('await checkReceipt(');
   const lock = update.indexOf('await acquireConfirmLock(');
-  const totalsRead = update.indexOf('totals(await listPledges(projectId))');
-  const save = update.indexOf('await savePledge(');
-  const release = update.indexOf('releaseConfirmLock(');
-  assert.ok(lock > 0 && totalsRead > 0 && save > 0 && release > 0, 'the update handler no longer locks around the ceiling check');
-  assert.ok(lock < totalsRead, 'the lock is taken before the totals are read');
-  assert.ok(save < release, 'the lock is released after the pledge is written');
+  const totalsRead = update.indexOf('totals(await listPledges(projectId))', lock);
+  const save = update.indexOf('await savePledge(', lock);
+  const release = update.indexOf('releaseConfirmLock(', save);
+  assert.ok(ledger > 0 && ripe > 0 && lock > 0, 'the update handler no longer reads the ledger, checks RIPE and locks');
+  assert.ok(ledger < lock, 'the owner history is read before the lock is taken');
+  assert.ok(ripe < lock, 'RIPE is read before the lock is taken');
+  assert.ok(totalsRead > lock, 'the confirmed total is read again under the lock');
+  assert.ok(save > totalsRead, 'the pledge is written after that read, under the lock');
+  assert.ok(release > save, 'the lock is released after the pledge is written');
+  // Nothing slow between taking the lock and writing.
+  const locked = update.slice(lock, save);
+  for (const slow of ['ownerReceiptLedger(', 'checkReceipt(', 'reserveReceipt(', 'listProjectsByOwner(']) {
+    assert.equal(locked.includes(slow), false, `${slow} runs under the lock`);
+  }
 });

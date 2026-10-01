@@ -748,67 +748,90 @@ app.http('pledges-update', {
     let checked: CheckedConfirmation | undefined;
     // Names this request's own receipt reservation, so a refusal releases only that one.
     let receiptToken = '';
-    // Held from reading the confirmed total to writing this pledge, so two confirmations on the
-    // project cannot both pass the ceiling check (acquireConfirmLock).
-    let lockToken = '';
-    if (status === 'confirmed') {
-      lockToken = await acquireConfirmLock(projectId);
-      if (!lockToken) {
-        throw new HttpError(409, 'Another pledge on this project is being confirmed right now. Nothing was recorded. Try again in a moment.', { recorded: false });
+
+    // The slow part of a checked confirmation runs first, outside the project lock: the owner's
+    // whole pledge history across every project they ever posted, which only grows, and a RIPE read
+    // that can take seconds. Done under the lock, a long enough history could outlast the lock's
+    // orphan grace and let a second request take it while this one still meant to write. The room
+    // passed here only shapes what the owner is told; the ceiling is decided again under the lock.
+    if (status === 'confirmed' && ownerKey) {
+      const preliminaryRoom = maxCredits(project.creditsRequested) - totals(await listPledges(projectId)).confirmed;
+      let ledger: ReceiptLedger;
+      try {
+        ledger = await ownerReceiptLedger(project.ownerId, pledge.id);
+      } catch (err) {
+        logError('Could not read which RIPE Atlas transactions are already matched', err);
+        throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.', { recorded: false });
       }
-    }
-    let updated: Pledge;
-    try {
-    if (status === 'confirmed') {
-      const liveTotals = totals(await listPledges(projectId));
-      const room = maxCredits(project.creditsRequested) - liveTotals.confirmed;
-      if (ownerKey) {
-        let ledger: ReceiptLedger;
-        try {
-          ledger = await ownerReceiptLedger(project.ownerId, pledge.id);
-        } catch (err) {
-          logError('Could not read which RIPE Atlas transactions are already matched', err);
-          throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.', { recorded: false });
-        }
-        try {
-          checked = await checkReceipt({ key: ownerKey, pledged: pledge.amount, since: Date.parse(pledge.createdAt), used: ledger.used, rivals: ledger.rivals, room, choice });
-        } catch (err) {
-          const outcome = ((err as HttpError).details as { verification?: VerificationDetails } | undefined)?.verification?.outcome;
-          logEvent('receipt-check', { outcome: outcome ?? 'error', projectId, pledgeId: pledge.id });
-          throw err;
-        }
-        logEvent('receipt-check', { outcome: checked.outcome, projectId, pledgeId: pledge.id });
-        receivedAmount = checked.amount;
-        amountVerified = true;
-        transactionId = checked.transactionId;
-        // The ledger was read, not locked. Take the arrival atomically before the pledge is written,
-        // so a second confirmation racing this one cannot record the same transfer.
-        receiptToken = await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id);
-        if (!receiptToken) {
-          throw new HttpError(409, 'Another request is recording that RIPE Atlas transaction right now. Nothing was recorded. Check again in a few minutes.');
-        }
-      } else if (pledge.amount > room) {
-        throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
+      try {
+        checked = await checkReceipt({ key: ownerKey, pledged: pledge.amount, since: Date.parse(pledge.createdAt), used: ledger.used, rivals: ledger.rivals, room: preliminaryRoom, choice });
+      } catch (err) {
+        const outcome = ((err as HttpError).details as { verification?: VerificationDetails } | undefined)?.verification?.outcome;
+        logEvent('receipt-check', { outcome: outcome ?? 'error', projectId, pledgeId: pledge.id });
+        throw err;
+      }
+      logEvent('receipt-check', { outcome: checked.outcome, projectId, pledgeId: pledge.id });
+      receivedAmount = checked.amount;
+      amountVerified = true;
+      transactionId = checked.transactionId;
+      // The ledger was read, not locked. Take the arrival atomically before the pledge is written,
+      // so a second confirmation racing this one cannot record the same transfer.
+      receiptToken = await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id);
+      if (!receiptToken) {
+        throw new HttpError(409, 'Another request is recording that RIPE Atlas transaction right now. Nothing was recorded. Check again in a few minutes.', { recorded: false });
       }
     }
 
-    // Conditional on the row not having changed since it was read at the top of this handler. The
-    // owner and the donor can both be looking at the same `pledged` pledge; without this, each
-    // authorises against that snapshot and whichever writes last wins, so a donor's "sent" landing
-    // after an owner's "confirmed" would make a settled pledge live again, after its slot had
-    // already been released and its credits counted as confirmed.
+    // Under the project lock only what has to be atomic: the confirmed total read afresh, the
+    // ceiling check against it, and the write. A few storage calls, far inside the lock's grace.
+    let lockToken = '';
+    let updated: Pledge;
+    // Set once the write has been attempted and may have landed; until then the reservation above is
+    // released on any refusal, since nothing was recorded.
+    let writeAttempted = false;
     try {
-      updated = await savePledge({ ...pledge, status, receivedAmount, amountVerified, transactionId }, pledge.etag);
-    } catch (err) {
-      if (err instanceof RestError && err.statusCode === 412) {
-        // Refused outright, so the arrival this request reserved is free again. Any other failure may
-        // have written the row, so the reservation stays; if the write did not land, the reservation
-        // frees itself once it is older than a request could run (receiptReservationReclaimable).
-        if (receiptToken) await releaseReceipt(project.ownerId, transactionId, receiptToken).catch(() => undefined);
-        throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.', { recorded: false });
+      if (status === 'confirmed') {
+        lockToken = await acquireConfirmLock(projectId);
+        if (!lockToken) {
+          throw new HttpError(409, 'Another pledge on this project is being confirmed right now. Nothing was recorded. Try again in a moment.', { recorded: false });
+        }
+        const room = maxCredits(project.creditsRequested) - totals(await listPledges(projectId)).confirmed;
+        const recording = amountVerified ? receivedAmount : pledge.amount;
+        if (recording > room) {
+          throw new HttpError(
+            409,
+            amountVerified
+              ? `RIPE Atlas shows ${recording.toLocaleString('en-US')} credits arrived in the transfer matched to this pledge. Recording that would now exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request, since another pledge was confirmed meanwhile. Nothing was recorded.`
+              : `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`,
+            amountVerified
+              ? { recorded: false, verification: { outcome: 'over-ceiling', pledged: pledge.amount, room: Math.max(0, room) } satisfies VerificationDetails }
+              : { recorded: false },
+          );
+        }
       }
+
+      // Conditional on the row not having changed since it was read at the top of this handler. The
+      // owner and the donor can both be looking at the same `pledged` pledge; without this, each
+      // authorises against that snapshot and whichever writes last wins, so a donor's "sent" landing
+      // after an owner's "confirmed" would make a settled pledge live again, after its slot had
+      // already been released and its credits counted as confirmed.
+      try {
+        writeAttempted = true;
+        updated = await savePledge({ ...pledge, status, receivedAmount, amountVerified, transactionId }, pledge.etag);
+      } catch (err) {
+        if (err instanceof RestError && err.statusCode === 412) {
+          // Refused outright, so nothing was written.
+          writeAttempted = false;
+          throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.', { recorded: false });
+        }
+        throw err;
+      }
+    } catch (err) {
+      // Any refusal before a write that may have landed frees the arrival this request reserved. A
+      // write whose outcome is unknown keeps it; if that write did not land, the reservation frees
+      // itself once it is older than a request could run (receiptReservationReclaimable).
+      if (receiptToken && !writeAttempted) await releaseReceipt(project.ownerId, transactionId, receiptToken).catch(() => undefined);
       throw err;
-    }
     } finally {
       // Best effort: a lock left behind frees itself (confirmLockStale).
       if (lockToken) await releaseConfirmLock(projectId, lockToken).catch(() => undefined);
