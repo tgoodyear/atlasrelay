@@ -360,3 +360,17 @@ test('the IndexNow script reads every <loc> from a sitemap and unescapes it', ()
   const xml = '<urlset><url><loc>https://atlasrelay.org/</loc></url><url><loc> https://atlasrelay.org/a?b=1&amp;c=2 </loc><lastmod>2026-09-20</lastmod></url></urlset>';
   assert.deepEqual(extractLocs(xml), ['https://atlasrelay.org/', 'https://atlasrelay.org/a?b=1&c=2']);
 });
+
+// ---------- sign-in providers ----------
+
+test('only GitHub and Microsoft sign-in are reachable; the other built-in providers answer 404', () => {
+  // Static Web Apps offers more providers than the site uses. The privacy page and SECURITY.md
+  // name GitHub and Microsoft only, so the others are closed off by route.
+  for (const provider of ['google', 'facebook', 'twitter', 'apple']) {
+    const route = config.routes.find((r) => r.route === `/.auth/login/${provider}`);
+    assert.equal(route?.statusCode, 404, `/.auth/login/${provider} should answer 404`);
+  }
+  for (const provider of ['github', 'aad']) {
+    assert.ok(!config.routes.some((r) => r.route === `/.auth/login/${provider}` && r.statusCode === 404), `${provider} must stay open`);
+  }
+});

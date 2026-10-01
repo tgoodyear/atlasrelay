@@ -273,8 +273,8 @@ The tests run in Azure. `.github/workflows/e2e-dev.yml`:
    registry has no admin user and no anonymous pull, and only the test identity is granted AcrPull;
 3. starts the Container Apps job `caj-atlasrelay-dev-e2e` with that image, pinned by digest;
 4. waits for the execution (the job gives a run 45 minutes, and never retries);
-5. downloads the results from the storage account's `results` container, uploads them as the
-   run's artifact, and fails the run unless every test passed.
+5. downloads the results from the storage account's `results` container, uploads only
+   `summary.json` as the run's artifact, and fails the run unless every test passed.
 
 Inside the job, `e2e-real/run.mjs` reads the accounts and the RIPE Atlas keys from the Key Vault
 `kv-atlasrelay-dev-<6 characters>` as the job's identity, through the vault's private endpoint,
@@ -463,8 +463,12 @@ gh variable set E2E_REGISTRY --env dev --repo tgoodyear/atlasrelay --body "$(scr
 
 #### Reading the results
 
-The run's summary page lists each test and its outcome. The artifact `e2e-dev-gh-<run id>-<attempt>`
-holds:
+The run's summary page lists each test and its outcome. The repository is public and anyone signed
+in to GitHub can download a run's artifacts, so the artifact `e2e-dev-gh-<run id>-<attempt>` holds
+`summary.json` only. Everything else stays in the private `results` container, under
+`runs/<run id>/`, for 30 days; the operator can read it (`az storage blob download-batch
+--account-name <results account> -s results --pattern 'runs/<run id>/*' -d . --auth-mode login`).
+The container holds:
 
 - `summary.json`: the outcome, the counts, each test with its error, the image and commit, and
   which files were redacted;
@@ -475,11 +479,10 @@ holds:
   `trace.zip` (open it with `npx playwright show-trace trace.zip`). There are no screenshots,
   in the trace or beside it: a secret drawn into an image cannot be redacted, so the trace shows
   each page as a DOM snapshot instead;
-- `job-logs.tsv`, when the execution did not succeed: the job's console and system logs from Log
-  Analytics, which covers a container that never started. The logs take a few minutes to arrive;
-  re-run the job if the file is empty.
 
-The same files stay in the `results` container, under `runs/<run id>/`, for 30 days.
+When the execution did not succeed, the workflow prints the platform's events for it (image
+pulled, container started, exit code) from Log Analytics in its log, which covers a container that
+never started. The events take a few minutes to arrive.
 
 Microsoft sign-in errors name the page they stopped on: "register for MFA" means the test tenant's
 sign-in policy asks this account for MFA, so check the policy or give the account a TOTP seed;

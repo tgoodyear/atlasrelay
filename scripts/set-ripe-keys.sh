@@ -6,7 +6,9 @@
 #   scripts/set-ripe-keys.sh <env> --from-vault VAULT --donor SECRET --recipient SECRET
 #                            [--from-subscription ID] [--ip ADDRESS] [--yes]
 #
-#   --from-vault VAULT        the Key Vault the keys are in now; you need to be able to read it
+#   --from-vault VAULT        the Key Vault the keys are in now; you need to be able to read it. It
+#                             should refuse every network: the script admits this machine's address
+#                             while it reads, and removes it again
 #   --donor SECRET            the secret holding the key of the account with credits: the donor
 #                             pastes it into the pledge form
 #   --recipient SECRET        the secret holding the key of the researcher's account: it receives
@@ -58,6 +60,30 @@ cd "$(dirname "$0")/.."
 az_sub
 test_vault_check
 FROM_SUB=${FROM_SUB:-$(aget AZURE_SUBSCRIPTION_ID)}
+if [ -z "$IP" ]; then
+  IP=$(curl -fsS --max-time 10 https://api.ipify.org) || die "can't find this machine's public address; pass --ip"
+fi
+[[ $IP =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "not an IPv4 address: $IP"
+
+# ---------- the source vault ----------
+
+# The source vault refuses every network. Admit this machine's address only while reading from it,
+# and remove the rule again on the way out, whatever happens.
+source_close() {
+  az keyvault network-rule remove --name "$FROM_VAULT" --subscription "$FROM_SUB" \
+    --ip-address "$IP/32" -o none 2> /dev/null ||
+    echo "WARNING: could not remove $IP/32 from $FROM_VAULT's network rules; remove it by hand" >&2
+}
+echo "opening $FROM_VAULT to $IP while reading the keys"
+az keyvault network-rule add --name "$FROM_VAULT" --subscription "$FROM_SUB" --ip-address "$IP/32" -o none ||
+  die "can't add a network rule to $FROM_VAULT"
+trap source_close EXIT
+trap 'exit 130' INT TERM
+# A new rule takes a moment to apply.
+for _ in $(seq 1 18); do
+  az keyvault secret list --vault-name "$FROM_VAULT" --subscription "$FROM_SUB" --query "[0].name" -o none 2> /dev/null && break
+  sleep 10
+done
 
 # ---------- which account is which ----------
 
@@ -96,6 +122,11 @@ key() {
 key "$DONOR" DONOR_KEY
 key "$RECIPIENT" RECIPIENT_KEY
 [ "$DONOR_KEY" != "$RECIPIENT_KEY" ] || die "$DONOR and $RECIPIENT hold the same key"
+
+# Done with the source vault: close it before opening the test vault, whose trap replaces this one.
+source_close
+trap - EXIT INT TERM
+echo "closed $FROM_VAULT again"
 
 test_vault_open "$IP"
 
