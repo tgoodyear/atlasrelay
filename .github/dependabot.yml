@@ -11,3 +11,12 @@ updates:
     groups:
       all:
         patterns: ["*"]
+    ignore:
+      # The runtime is Node 22 (web/package.json engines); newer type definitions would let code
+      # use APIs it doesn't have. Move this with the Node version.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # Test fixture only: web/e2e/flows/auth.spec.ts serves it in place of the jQuery 3 that the
+      # Static Web Apps CLI's sign-in emulator loads from a CDN, so it has to stay on 3.x.
+      - dependency-name: "jquery"
+        update-types: ["version-update:semver-major"]
