@@ -136,3 +136,16 @@ test('an owner key is only used after every rule that could refuse the confirmat
     assert.ok(at < read, `${guard} runs before the RIPE read`);
   }
 });
+
+test('a confirmation holds the project lock from reading the totals to writing the pledge', () => {
+  // Two confirmations on one project could otherwise both read a total under the ceiling and both write.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const lock = update.indexOf('await acquireConfirmLock(');
+  const totalsRead = update.indexOf('totals(await listPledges(projectId))');
+  const save = update.indexOf('await savePledge(');
+  const release = update.indexOf('releaseConfirmLock(');
+  assert.ok(lock > 0 && totalsRead > 0 && save > 0 && release > 0, 'the update handler no longer locks around the ceiling check');
+  assert.ok(lock < totalsRead, 'the lock is taken before the totals are read');
+  assert.ok(save < release, 'the lock is released after the pledge is written');
+});

@@ -89,6 +89,8 @@ test('a different amount is shown, and recording it changes the totals', async (
 
   const dialog = await checkWithKey(researcher.page, project, donor, key);
   await expect(dialog.locator('.alert-warn')).toHaveText('RIPE Atlas shows 500 credits arrived since this pledge was made (pledged 700).');
+  // The answer is in a live region, so it is announced while focus moves to the controls.
+  await expect(dialog.getByRole('status')).toHaveText('RIPE Atlas shows 500 credits arrived since this pledge was made (pledged 700).');
   // The step changed under the focused button, so focus moves to the first control of the new one.
   await expect(dialog.getByRole('radio', { name: /500 credits/ })).toBeFocused();
   // Nothing is recorded until the researcher chooses.
@@ -206,6 +208,68 @@ test('the confirm dialog takes keyboard focus, keeps it, and gives it back', asy
   await expect(opener).toBeFocused();
 });
 
+test('an answer that does not say whether the pledge was written ends the dialog without a retry', async ({ person }) => {
+  const { researcher, donor, project, pledgeId } = await manualPledge(person);
+  const key = await ownerKey({ transactions: transactionsOk([adminRow(991001, 700, 5)]) });
+  const { page } = researcher;
+  // The confirmation goes through, and the edge then answers 504 in its place.
+  await page.route('**/api/pledges/**', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.continue();
+    await route.fetch();
+    await route.fulfill({ status: 504, contentType: 'text/html', body: '<html>Gateway timeout</html>' });
+  });
+  await checkWithKey(page, project, donor, key);
+  const check = page.getByRole('dialog', { name: 'Check this pledge' });
+  await expect(check.getByRole('alert')).toHaveText('We did not get a clear answer, so this pledge may already be confirmed. Close this and check the pledge on the project page before confirming again.');
+  await expect(check.getByLabel('RIPE Atlas API key (optional)')).toHaveCount(0);
+  await expect(check.getByRole('button', { name: /Check|Confirm|Record/ })).toHaveCount(0);
+  await expect(check.getByRole('button', { name: 'Close and check' })).toBeFocused();
+  expect(await row('pledges', project.id, pledgeId)).toMatchObject({ status: 'confirmed', amountVerified: true });
+  await page.unroute('**/api/pledges/**');
+  await check.getByRole('button', { name: 'Close and check' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.pledge').filter({ hasText: donor.name }).getByText('Verified with RIPE Atlas')).toBeVisible();
+});
+
+test('a server error that says nothing was written keeps the form for another try', async ({ person }) => {
+  const { researcher, donor, project, pledgeId } = await manualPledge(person);
+  const { page } = researcher;
+  await page.route('**/api/pledges/**', (route) =>
+    route.request().method() === 'PATCH'
+      ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { status: 503, message: 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.', details: { recorded: false } } }) })
+      : route.continue(),
+  );
+  await page.goto(`/projects/${project.id}`);
+  await page.locator('.pledge').filter({ hasText: donor.name }).getByRole('button', { name: 'Confirm received' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Confirm this pledge' });
+  await dialog.getByRole('button', { name: 'Confirm 700 credits' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Nothing was recorded.');
+  await expect(dialog.getByRole('button', { name: 'Confirm 700 credits' })).toBeEnabled();
+  expect(await row('pledges', project.id, pledgeId)).toMatchObject({ status: 'sent' });
+});
+
+test('two confirmations on one project cannot together pass its ceiling', async ({ person }) => {
+  // A request of 10 has a ceiling of 1,000. Two pledges of 10 each turn out to have brought 600:
+  // either fits alone, both together would not.
+  const researcher = await person({ role: 'researcher' });
+  const project = await postProject(researcher, { creditsRequested: 10 });
+  const ids: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const donor = await person({ role: 'donor' });
+    const res = await donor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 5, method: 'manual' } });
+    expect(res.status(), await res.text()).toBe(201);
+    ids.push((await res.json()).pledge.id);
+  }
+  const key = await ownerKey({ transactions: transactionsOk([adminRow(992001, 600, 5), adminRow(992002, 600, 6)]) });
+  const results = await Promise.all([
+    researcher.request.patch(`/api/pledges/${project.id}/${ids[0]}`, { data: { status: 'confirmed', apiKey: key, transactionId: '992001' } }),
+    researcher.request.patch(`/api/pledges/${project.id}/${ids[1]}`, { data: { status: 'confirmed', apiKey: key, transactionId: '992002' } }),
+  ]);
+  expect(results.map((r) => r.status()).sort()).toEqual([200, 409]);
+  const after = (await (await researcher.request.get(`/api/projects/${project.id}`)).json()).project;
+  expect(after.creditsConfirmed).toBe(600);
+});
+
 test('two confirmations racing for one arrival record it once', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher, { creditsRequested: 1000 });
@@ -266,7 +330,7 @@ test('a key without the read permission is refused, and nothing is recorded', as
   const key = await ownerKey({ transactions: transactionsRefused() });
 
   const dialog = await checkWithKey(researcher.page, project, donor, key);
-  await expect(dialog.locator('.alert-error')).toContainText('It needs the "Get information about your credits" permission');
+  await expect(dialog.getByRole('alert')).toContainText('It needs the "Get information about your credits" permission');
   await expect(dialog.getByLabel('RIPE Atlas API key (optional)')).toHaveValue('');
   expect(await row('pledges', project.id, pledgeId)).toMatchObject({ status: 'sent', amountVerified: false });
   expect(JSON.stringify(await allRows())).not.toContain(FAKE_KEY_PREFIX);

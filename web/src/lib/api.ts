@@ -147,6 +147,11 @@ export class ApiError extends Error {
     return (this.details as { transfer?: string } | undefined)?.transfer === 'unknown';
   }
 
+  /** True when the server said outright that it wrote nothing, on a 5xx where the status cannot say so. */
+  get notRecorded(): boolean {
+    return (this.details as { recorded?: boolean } | undefined)?.recorded === false;
+  }
+
   /** Present when a check against the owner's RIPE Atlas log needs a decision or failed. */
   get verification(): VerificationDetails | undefined {
     return (this.details as { verification?: VerificationDetails } | undefined)?.verification;

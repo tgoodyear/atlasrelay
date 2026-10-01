@@ -8,7 +8,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Step = 'form' | 'decide' | 'done';
+type Step = 'form' | 'decide' | 'done' | 'unknown';
 
 function when(iso: string): string {
   const d = new Date(iso);
@@ -67,8 +67,20 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
       setResult(res.verification ?? null);
       setStep('done');
     } catch (err) {
-      const v = err instanceof ApiError ? err.verification : undefined;
-      const text = err instanceof ApiError ? err.message : 'The connection was lost. Reload the page to see whether the pledge was confirmed.';
+      // Whether the pledge may have been written. A 4xx is the handler refusing before it wrote
+      // anything, and a 5xx it raised before writing says so (details.recorded === false). Anything
+      // else, a 500 from a failure nobody planned for, an edge timeout or a lost connection, can
+      // arrive over a confirmation that was saved, so nothing here may invite another one.
+      const answered = err instanceof ApiError && (err.status < 500 || err.notRecorded);
+      if (!answered) {
+        setApiKey('');
+        setDetails(null);
+        setError('We did not get a clear answer, so this pledge may already be confirmed. Close this and check the pledge on the project page before confirming again.');
+        setStep('unknown');
+        return;
+      }
+      const v = (err as ApiError).verification;
+      const text = (err as ApiError).message;
       if (v && v.outcome !== 'key-refused' && v.outcome !== 'refused') {
         setDetails(v);
         setMessage(text);
@@ -103,10 +115,31 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && close()}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" ref={dialogRef} tabIndex={-1}>
         <div className="modal-head">
-          <h2 id="confirm-title">{step === 'done' ? 'Pledge confirmed' : 'Confirm this pledge'}</h2>
+          <h2 id="confirm-title">{step === 'done' ? 'Pledge confirmed' : step === 'unknown' ? 'Check this pledge' : 'Confirm this pledge'}</h2>
           <button className="close" aria-label="Close" onClick={close} disabled={busy}>×</button>
         </div>
         <div className="modal-body">
+          {/* One live region for the answers to a check, present on every step so a change inside
+              it is announced. Focus moves to the first control of the new step, so without this a
+              screen reader would hear "Check again" with nothing to say why. */}
+          <div role="status" aria-live="polite">
+            {step === 'decide' && details && <div className="alert alert-warn">{message}</div>}
+            {step === 'done' && result && (
+              <div className="alert alert-success">
+                RIPE Atlas shows {fmt(result.received)} credits arrived
+                {result.received !== pledged ? ` (pledged ${fmt(pledged)})` : ''}, and the pledge now records that amount.
+                {` RIPE transaction ${result.transactionId}.`}
+              </div>
+            )}
+          </div>
+          {step === 'unknown' && (
+            <>
+              <div className="alert alert-warn" role="alert">{error}</div>
+              <div className="form-actions">
+                <button className="btn" type="button" onClick={close}>Close and check</button>
+              </div>
+            </>
+          )}
           {step === 'form' && (
             <form onSubmit={submit}>
               <p>
@@ -133,7 +166,7 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
                   this one and never store the key.
                 </span>
               </div>
-              {error && <div className="alert alert-error">{error}</div>}
+              {error && <div className="alert alert-error" role="alert">{error}</div>}
               <div className="form-actions">
                 <button className="btn" type="submit" disabled={busy || (apiKey.trim() !== '' && apiKey.trim().length < 36)}>
                   {busy ? 'Confirming…' : apiKey.trim() ? 'Check and confirm' : `Confirm ${fmt(pledged)} credits`}
@@ -145,7 +178,6 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
 
           {step === 'decide' && details && (
             <>
-              <div className="alert alert-warn">{message}</div>
               {choosable && (
                 <div className="method-choice" role="radiogroup" aria-label="Transfers in your RIPE Atlas log">
                   {receipts.map((r) => (
@@ -165,7 +197,7 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
               {choosable && details.more && (
                 <p className="small muted">Your log has more transfers than are listed here. If this one is missing, confirm the pledged amount instead.</p>
               )}
-              {error && <div className="alert alert-error">{error}</div>}
+              {error && <div className="alert alert-error" role="alert">{error}</div>}
               <div className="form-actions">
                 {choosable && (
                   <button className="btn" type="button" disabled={busy || !selected} onClick={() => selected && send({ apiKey: apiKey.trim(), transactionId: selected.id })}>
@@ -187,13 +219,6 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
 
           {step === 'done' && (
             <>
-              {result && (
-                <div className="alert alert-success">
-                  RIPE Atlas shows {fmt(result.received)} credits arrived
-                  {result.received !== pledged ? ` (pledged ${fmt(pledged)})` : ''}, and the pledge now records that amount.
-                  {` RIPE transaction ${result.transactionId}.`}
-                </div>
-              )}
               <p>If you made the key only for this, you can delete it at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.</p>
               <div className="form-actions">
                 <button className="btn" type="button" onClick={close}>Done</button>

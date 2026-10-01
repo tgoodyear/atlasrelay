@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, ownerReceiptLedger, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, releaseReceipt, reserveReceipt, savePledge, totals, type ReceiptLedger } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, acquireConfirmLock, ownerReceiptLedger, pledgeInFlight, releaseConfirmLock, recomputeProjectTotals, releasePledgeClaim, releaseReceipt, reserveReceipt, savePledge, totals, type ReceiptLedger } from '../lib/store';
 import { checkReceipt, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
@@ -748,6 +748,17 @@ app.http('pledges-update', {
     let checked: CheckedConfirmation | undefined;
     // Names this request's own receipt reservation, so a refusal releases only that one.
     let receiptToken = '';
+    // Held from reading the confirmed total to writing this pledge, so two confirmations on the
+    // project cannot both pass the ceiling check (acquireConfirmLock).
+    let lockToken = '';
+    if (status === 'confirmed') {
+      lockToken = await acquireConfirmLock(projectId);
+      if (!lockToken) {
+        throw new HttpError(409, 'Another pledge on this project is being confirmed right now. Nothing was recorded. Try again in a moment.', { recorded: false });
+      }
+    }
+    let updated: Pledge;
+    try {
     if (status === 'confirmed') {
       const liveTotals = totals(await listPledges(projectId));
       const room = maxCredits(project.creditsRequested) - liveTotals.confirmed;
@@ -757,7 +768,7 @@ app.http('pledges-update', {
           ledger = await ownerReceiptLedger(project.ownerId, pledge.id);
         } catch (err) {
           logError('Could not read which RIPE Atlas transactions are already matched', err);
-          throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.');
+          throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.', { recorded: false });
         }
         try {
           checked = await checkReceipt({ key: ownerKey, pledged: pledge.amount, since: Date.parse(pledge.createdAt), used: ledger.used, rivals: ledger.rivals, room, choice });
@@ -780,22 +791,12 @@ app.http('pledges-update', {
         throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
       }
     }
-    // This check reads before it writes, so two confirmations racing each other can both pass it.
-    // Settling that would need an ETag-guarded aggregate, and it is deliberately not built: only
-    // the project's owner can confirm, so the race needs one person double-clicking rather than an
-    // adversary, and the outcome is a project recorded slightly above its own ceiling. No credits
-    // move here; confirming only records a transfer that already happened, and refusing to record
-    // one would be the worse failure. The overshoot is visible on the project and the owner can
-    // cancel a pledge back out of it. A checked confirmation records what arrived, which can be more
-    // than the pledge reserved, so the overshoot can be that much larger; the trade is the same, since
-    // it still needs the owner confirming two pledges at the same moment.
 
     // Conditional on the row not having changed since it was read at the top of this handler. The
     // owner and the donor can both be looking at the same `pledged` pledge; without this, each
     // authorises against that snapshot and whichever writes last wins, so a donor's "sent" landing
     // after an owner's "confirmed" would make a settled pledge live again, after its slot had
     // already been released and its credits counted as confirmed.
-    let updated: Pledge;
     try {
       updated = await savePledge({ ...pledge, status, receivedAmount, amountVerified, transactionId }, pledge.etag);
     } catch (err) {
@@ -804,14 +805,28 @@ app.http('pledges-update', {
         // have written the row, so the reservation stays; if the write did not land, the reservation
         // frees itself once it is older than a request could run (receiptReservationReclaimable).
         if (receiptToken) await releaseReceipt(project.ownerId, transactionId, receiptToken).catch(() => undefined);
-        throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.');
+        throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.', { recorded: false });
       }
       throw err;
     }
-    const updatedProject = await recomputeProjectTotals(projectId);
+    } finally {
+      // Best effort: a lock left behind frees itself (confirmLockStale).
+      if (lockToken) await releaseConfirmLock(projectId, lockToken).catch(() => undefined);
+    }
+    // The pledge is written. Nothing below may turn that into an error: a 5xx here would tell the
+    // owner the confirmation may not have happened, and invite one that is refused or, for a
+    // different pledge, recorded twice. Both steps repair themselves: totals are marked for the
+    // maintenance refresh, and a settled pledge's slot is reclaimable without being released.
+    let updatedProject: Project = project;
+    try {
+      updatedProject = await recomputeProjectTotals(projectId);
+    } catch (err) {
+      logError('Pledge updated but project totals could not be recomputed', err);
+      await patchProject(projectId, { totalsDirty: true }).catch(() => undefined);
+    }
     // Confirmed and cancelled are both terminal, so the donor's slot on this project is free again.
     if (status === 'confirmed' || status === 'cancelled') {
-      await releasePledgeClaim(projectId, pledge.donorId, pledge.id);
+      await releasePledgeClaim(projectId, pledge.donorId, pledge.id).catch((err) => logError('Could not release a pledge slot after settling it', err));
     }
     return json({
       pledge: privatePledge(updated),

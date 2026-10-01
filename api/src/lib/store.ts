@@ -849,6 +849,69 @@ export async function reserveReceipt(ownerId: string, transactionId: string, pro
   }
 }
 
+/**
+ * Whether a project's confirmation lock may be taken over. A holder is a request that is still
+ * running or one that died; requests are bounded far below the orphan grace (a RIPE read gives up
+ * after 5 seconds), so a lock older than that is a dead request's.
+ */
+export function confirmLockStale(heldCreatedAt: string, asOf: number = Date.now()): boolean {
+  const since = Date.parse(heldCreatedAt);
+  if (!Number.isFinite(since)) return true;
+  return asOf - since > CLAIM_ORPHAN_GRACE_MS;
+}
+
+/**
+ * One confirmation at a time per project, from reading the totals to writing the pledge.
+ *
+ * The ceiling check reads the project's confirmed total and then writes one pledge, and each pledge
+ * write is guarded only by its own version, so two confirmations of different pledges could both
+ * pass it and together take the project past its ceiling. A checked confirmation records what
+ * arrived, which can be more than the pledge reserved, so that overshoot is not bounded by the
+ * reservations. A row in the claims table, created atomically, serialises them.
+ *
+ * Waits briefly for a holder to finish, since the usual rival is the same owner's second click.
+ * Returns a token for releaseConfirmLock, or '' when the lock stayed held.
+ */
+export async function acquireConfirmLock(projectId: string, waitMs = 8_000): Promise<string> {
+  const t = await table(CLAIMS_TABLE);
+  const pk = `confirm-${projectId}`;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const token = newId();
+    const entity = { partitionKey: pk, rowKey: 'lock', token, createdAt: now() };
+    try {
+      await t.createEntity(entity);
+      return token;
+    } catch (err) {
+      if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+    }
+    const held = await getEntity(CLAIMS_TABLE, pk, 'lock');
+    if (held && confirmLockStale(String(held.createdAt ?? ''))) {
+      try {
+        await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+        return token;
+      } catch (err) {
+        if (!(err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404))) throw err;
+      }
+    }
+    if (held && Date.now() >= deadline) return '';
+    if (held) await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+/** Release the project's confirmation lock, only if the request holding `token` still holds it. */
+export async function releaseConfirmLock(projectId: string, token: string): Promise<void> {
+  const pk = `confirm-${projectId}`;
+  const held = await getEntity(CLAIMS_TABLE, pk, 'lock');
+  if (!held || String(held.token ?? '') !== token) return;
+  try {
+    await (await table(CLAIMS_TABLE)).deleteEntity(pk, 'lock', { etag: String(held.etag ?? '') });
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) return;
+    throw err;
+  }
+}
+
 /** Give a receipt reservation back, only if the request holding `token` still holds it. */
 export async function releaseReceipt(ownerId: string, transactionId: string, token: string): Promise<void> {
   const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);

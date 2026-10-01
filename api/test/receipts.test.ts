@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { AtlasRefused, AtlasUnreachable, readAdminTransactions, type TransactionPage } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 import { checkReceipt, incomingReceipts, matchReceipt, MAX_RECEIPTS_SHOWN, pageComplete, type CheckInput, type Receipt, type VerificationDetails } from '../src/lib/receipts';
-import { creditedAmount, RECEIPT_CLOCK_SKEW_MS, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, toPledge, totals, type Pledge } from '../src/lib/store';
+import { creditedAmount, RECEIPT_CLOCK_SKEW_MS, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, confirmLockStale, toPledge, totals, type Pledge } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import { invocationLog, type LogSink } from '../src/lib/telemetry';
 
@@ -360,6 +360,13 @@ test('a later write to a pledge does not hold an API transfer\'s window open', (
   // A manual pledge confirmed without a check keeps the wider bound.
   const manual = receiptLedger([{ ...apiPledge, method: 'manual' as const, transferredAt: '' }], 'self');
   assert.equal(manual.rivals[0].until, CREATED + 120_000 + RECEIPT_INDEXING_SLACK_MS);
+});
+
+test('a project confirmation lock frees itself once no request could still hold it', () => {
+  const asOf = Date.parse('2026-10-01T12:00:00.000Z');
+  assert.equal(confirmLockStale(new Date(asOf - 5_000).toISOString(), asOf), false);
+  assert.equal(confirmLockStale(new Date(asOf - 10 * 60_000).toISOString(), asOf), true);
+  assert.equal(confirmLockStale('garbage', asOf), true);
 });
 
 test('a receipt reservation is final once its pledge records the transaction, and frees itself otherwise', () => {
