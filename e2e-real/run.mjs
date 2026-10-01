@@ -1,11 +1,13 @@
 // Entry point of the test image (the Container Apps job caj-atlasrelay-<env>-e2e):
 //
-// 1. Read the two test accounts from Key Vault with the job's managed identity. Outside the job,
-//    set E2E_RESEARCHER_USERNAME, E2E_RESEARCHER_PASSWORD, E2E_DONOR_USERNAME and
-//    E2E_DONOR_PASSWORD instead (and E2E_*_TOTP when an account has a TOTP seed).
+// 1. Read the two test accounts, and the two RIPE Atlas keys with their accounts' emails, from Key
+//    Vault with the job's managed identity. Outside the job, set E2E_RESEARCHER_USERNAME,
+//    E2E_RESEARCHER_PASSWORD, E2E_DONOR_USERNAME and E2E_DONOR_PASSWORD instead (and E2E_*_TOTP
+//    when an account has a TOTP seed), plus E2E_RIPE_DONOR_KEY, E2E_RIPE_DONOR_ACCOUNT,
+//    E2E_RIPE_RECIPIENT_KEY and E2E_RIPE_RECIPIENT_ACCOUNT for the real-transfer tests.
 // 2. Run the Playwright suite. Its output is printed with every secret replaced.
-// 3. Redact the results directory: the passwords, TOTP seeds and the site's session cookies, which
-//    traces record in request headers.
+// 3. Redact the results directory: the passwords, TOTP seeds, RIPE keys and account emails, and
+//    the site's session cookies, which traces record in request headers.
 // 4. Write summary.json and upload the directory to RESULTS_CONTAINER_URL/runs/<run id>/, when set.
 // 5. Exit 0 only if the suite passed.
 //
@@ -17,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSecret, managedIdentityToken, putBlob } from './lib/azure.mjs';
-import { lineRedactor, redactText, redactTree, variants } from './lib/redact.mjs';
+import { lineRedactor, redactText, redactTree, secretValues, variants } from './lib/redact.mjs';
 import { summarize } from './lib/summary.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,7 +30,7 @@ const stateDir = mkdtempSync(join(tmpdir(), 'atlasrelay-e2e-state-'));
 
 /** @type {string[]} every secret learned so far, in all its forms */
 let needles = [];
-/** @type {string[]} the account secrets, before the session cookies are added */
+/** @type {string[]} the secrets from secrets(), before the session cookies are added */
 let accountSecrets = [];
 // The session cookies appear once global setup has saved the signed-in browser states; the output
 // is redacted for them from then on.
@@ -61,35 +63,49 @@ function safeId(s) {
   return s.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 100);
 }
 
-const ROLES = /** @type {const} */ (['researcher', 'donor']);
-const FIELDS = /** @type {const} */ (['username', 'password', 'totp']);
+/**
+ * Every value the suite is given. The Microsoft accounts are required, their TOTP seeds optional.
+ * The RIPE values are all or nothing: a job whose definition names none of them runs without the
+ * real-transfer tests (they skip and say so), and one that names them needs all four.
+ * @type {{ name: string, optional?: boolean, group: 'accounts' | 'ripe', hint: string }[]}
+ */
+const FIELDS = [
+  ...['RESEARCHER', 'DONOR'].flatMap((role) =>
+    ['USERNAME', 'PASSWORD', 'TOTP'].map((field) => ({
+      name: `E2E_${role}_${field}`,
+      optional: field === 'TOTP',
+      group: /** @type {const} */ ('accounts'),
+      hint: 'scripts/set-test-users.sh',
+    })),
+  ),
+  ...['DONOR_KEY', 'DONOR_ACCOUNT', 'RECIPIENT_KEY', 'RECIPIENT_ACCOUNT'].map((field) => ({
+    name: `E2E_RIPE_${field}`,
+    group: /** @type {const} */ ('ripe'),
+    hint: 'scripts/set-ripe-keys.sh',
+  })),
+];
 
-/** @returns {Promise<Record<string, string>>} E2E_<ROLE>_<FIELD> for every account field */
-async function accounts() {
+/** @returns {Promise<Record<string, string>>} the variables to hand the suite */
+async function secrets() {
   /** @type {Record<string, string>} */
   const env = {};
   const vaultUri = process.env.KEY_VAULT_URI;
+  const ripeNamed = FIELDS.some((f) => f.group === 'ripe' && (process.env[f.name] || process.env[`${f.name}_SECRET`]));
   let token = '';
-  for (const role of ROLES) {
-    for (const field of FIELDS) {
-      const key = `E2E_${role.toUpperCase()}_${field.toUpperCase()}`;
-      if (process.env[key]) {
-        env[key] = process.env[key] ?? '';
-        continue;
-      }
-      if (!vaultUri) {
-        if (field === 'totp') continue;
-        throw new Error(`Set ${key}, or KEY_VAULT_URI to read the accounts from Key Vault`);
-      }
-      const name = process.env[`${key}_SECRET`];
-      if (!name) {
-        if (field === 'totp') continue;
-        throw new Error(`${key}_SECRET names no Key Vault secret`);
-      }
-      token ||= await managedIdentityToken('https://vault.azure.net', process.env.AZURE_CLIENT_ID);
-      env[key] = await getSecret(vaultUri, name, token, { optional: field === 'totp' });
-      if (!env[key] && field !== 'totp') throw new Error(`Key Vault secret ${name} is empty; run scripts/set-test-users.sh`);
+  for (const f of FIELDS) {
+    if (f.group === 'ripe' && !ripeNamed) continue;
+    if (process.env[f.name]) {
+      env[f.name] = process.env[f.name] ?? '';
+      continue;
     }
+    const secretName = process.env[`${f.name}_SECRET`];
+    if (!vaultUri || !secretName) {
+      if (f.optional) continue;
+      throw new Error(vaultUri ? `${f.name}_SECRET names no Key Vault secret` : `Set ${f.name}, or KEY_VAULT_URI to read it from Key Vault`);
+    }
+    token ||= await managedIdentityToken('https://vault.azure.net', process.env.AZURE_CLIENT_ID);
+    env[f.name] = await getSecret(vaultUri, secretName, token, { optional: true });
+    if (!env[f.name] && !f.optional) throw new Error(`Key Vault secret ${secretName} is missing or empty; run ${f.hint}`);
   }
   return env;
 }
@@ -177,8 +193,9 @@ let setupError = '';
 mkdirSync(outDir, { recursive: true });
 try {
   log(`run ${runId} against ${process.env.BASE_URL ?? '(BASE_URL unset)'}`);
-  const env = await accounts();
-  accountSecrets = Object.entries(env).filter(([k]) => !k.endsWith('_USERNAME')).map(([, v]) => v);
+  const env = await secrets();
+  accountSecrets = secretValues(env);
+  if (!env.E2E_RIPE_DONOR_KEY) log('the job names no RIPE Atlas keys, so the real-transfer tests will skip');
   needles = variants(accountSecrets);
   exitCode = await runPlaywright(env);
 } catch (err) {

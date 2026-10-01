@@ -1,13 +1,15 @@
 import { randomBytes } from 'node:crypto';
-import { request as playwrightRequest, test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { confirmReceived, markSent, pledgeByHand, pledgeRow, postProjectInForm, postResults, saveProfile } from '../../web/e2e/ui';
-import { RESEARCHER_ATLAS_EMAIL, statePath, type Role } from '../accounts';
+import { RESEARCHER_ATLAS_EMAIL, type Role } from '../accounts';
+import { deleteBothProfiles, signedIn } from '../site';
 
 // The whole flow on a deployed site, as the two test accounts signed in with Microsoft
 // (global-setup.ts), with the same page steps as the local full-flow tests (web/e2e/ui.ts): the
 // researcher posts a project, the donor pledges to transfer by hand and says the credits are sent,
 // the researcher confirms them and posts results. No credits move: a manual pledge only records
 // what the donor says, and the researcher's RIPE NCC Access email is on a reserved domain.
+// ripe-transfer.spec.ts moves real credits.
 //
 // Both profiles are deleted before and after the run. Deleting a profile closes its open projects
 // and shows its projects and pledges as Anonymous; the site has no way to delete a project, so
@@ -21,34 +23,8 @@ const resultsSummary = `Results of full-flow test run ${run}.`;
 
 test.describe.configure({ mode: 'serial' });
 
-/**
- * Deletes the account's profile through the API, as "Delete my profile" does. Never calls
- * GET /api/me afterwards: that creates the profile again.
- */
-async function deleteProfile(role: Role): Promise<void> {
-  const ctx = await playwrightRequest.newContext({ baseURL: process.env.BASE_URL, storageState: statePath(role) });
-  try {
-    const res = await ctx.delete('/api/me');
-    expect(res.status(), `DELETE /api/me as the ${role}: ${await res.text()}`).toBe(200);
-  } finally {
-    await ctx.dispose();
-  }
-}
-
-// Donor first: a pledge from a donor who is gone stays on the researcher's project as Anonymous.
-const cleanUp = async () => {
-  for (const role of ['donor', 'researcher'] as const) await deleteProfile(role);
-};
-test.beforeAll(cleanUp);
-test.afterAll(cleanUp);
-
-async function signedIn(browser: Browser, role: Role): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext({ baseURL: process.env.BASE_URL, storageState: statePath(role) });
-  const page = await context.newPage();
-  // Every confirm() the flow meets is one a person would accept.
-  page.on('dialog', (d) => void d.accept());
-  return { context, page };
-}
+test.beforeAll(deleteBothProfiles);
+test.afterAll(deleteBothProfiles);
 
 test('researcher posts a project, donor pledges by hand, researcher confirms and posts results', async ({ browser }) => {
   const researcher = await signedIn(browser, 'researcher');

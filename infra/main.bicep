@@ -273,6 +273,7 @@ module testharnessRbac 'testharness-rbac.bicep' = if (harness) {
     principalId: identity.outputs.principalId
     resultsAccountName: testharness!.outputs.resultsAccountName
     resultsContainerName: testharness!.outputs.resultsContainerName
+    registryName: testharness!.outputs.registryName
   }
 }
 
@@ -304,3 +305,4 @@ output E2E_KEY_VAULT_NAME string = harness ? testharness!.outputs.vaultName : ''
 output E2E_RESULTS_ACCOUNT string = harness ? testharness!.outputs.resultsAccountName : ''
 output E2E_RESULTS_CONTAINER string = harness ? testharness!.outputs.resultsContainerName : ''
 output E2E_LOG_WORKSPACE_ID string = harness ? platform.outputs.workspaceCustomerId : ''
+output E2E_REGISTRY string = harness ? testharness!.outputs.registryName : ''

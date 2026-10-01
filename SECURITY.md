@@ -101,15 +101,23 @@ only the Functions host's state and the deployment package. No storage account a
 keys, and no storage key or storage connection string is stored anywhere.
 
 The dev environment, when it exists, adds a test harness for the full-flow tests with real
-Microsoft sign-in (docs/RUNBOOK.md, "Full-flow tests on dev"). Two test accounts in a separate
-tenant sign in there. Their passwords are in a Key Vault with public network access disabled.
-Two principals can read them: a Container Apps job inside the environment's virtual network,
-through a private endpoint, as the job's own managed identity; and the Owner recorded as the
-environment's operator, who writes them (Key Vault Secrets Officer) and can reach the vault only
-while `scripts/set-test-users.sh` has opened it to their address. The GitHub workflow that runs the tests starts that
-job and downloads its results; its identity has no role on the vault, and GitHub holds no test
-credentials. Before results leave the job, the passwords and the site's session cookies are
-replaced with `[redacted]` in the output, the report and every trace.
+Microsoft sign-in and real RIPE Atlas transfers (docs/RUNBOOK.md, "Full-flow tests on dev"). Two
+test accounts in a separate tenant sign in there, and one RIPE Atlas account sends credits to
+another through the site, which sends them back with the RIPE Atlas API. The accounts' passwords, the two live RIPE Atlas API keys
+and the RIPE account emails are in a Key Vault with public network access disabled. Two
+principals can read them: a Container Apps job inside the environment's virtual network, through a
+private endpoint, as the job's own managed identity; and the Owner recorded as the environment's
+operator, who writes them (Key Vault Secrets Officer) and can reach the vault only while
+`scripts/set-test-users.sh` or `scripts/set-ripe-keys.sh` has opened it to their address. The
+GitHub workflow that runs the tests builds the job's image in the environment's private container
+registry, starts the job and downloads its results; its identity has no role on the vault, and
+GitHub holds no test credentials. Before results leave the job, the passwords, the RIPE keys and
+account emails, and the site's session cookies are replaced with `[redacted]` in the output, the
+report and every trace, including the keys the tests paste into the pledge form.
+
+The keys can move real credits. The workflow chooses the image that runs with the job's identity,
+since it builds the image and starts the job with it. A key works only within the validity
+window set when it was created, and can be disabled or deleted on atlas.ripe.net at any time.
 
 Only the repository owner can make that workflow run. It has no pull request trigger of any kind,
 so a fork or a pull request cannot start it; every job checks the repository, the actor and the

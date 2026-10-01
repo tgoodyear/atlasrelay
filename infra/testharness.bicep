@@ -2,11 +2,13 @@
 //
 // The Container Apps job caj-atlasrelay-<env>-e2e runs the Playwright suite in e2e-real/ against
 // the environment's site. It signs two test accounts in through the real Microsoft sign-in page,
-// with passwords it reads from a Key Vault that has no public network access: the job reaches the
-// vault through a private endpoint in this virtual network, as the test identity. The results
-// (a JSON summary, the Playwright report, screenshots and traces, redacted) go to a blob container
-// that only identities can read. The CI identity starts the job and reads the results; it has no
-// role on the vault. docs/RUNBOOK.md, "Full-flow tests on dev".
+// and moves real credits between two RIPE Atlas accounts, with passwords and API keys it reads
+// from a Key Vault that has no public network access: the job reaches the vault through a private
+// endpoint in this virtual network, as the test identity. Its image is private, in this
+// environment's container registry. The results (a JSON summary, the Playwright report,
+// screenshots and traces, redacted) go to a blob container that only identities can read. The CI
+// identity builds the image, starts the job and reads the results; it has no role on the vault.
+// docs/RUNBOOK.md, "Full-flow tests on dev".
 //
 //   vnet-atlasrelay-<env>          snet-cae (delegated to the Container Apps environment),
 //                                  snet-pe (private endpoints)
@@ -14,7 +16,8 @@
 //   kv-atlasrelay-<env>-<suffix>   RBAC, public network access disabled, private endpoint (the
 //                                  suffix fills the name to 24 characters: 6 for dev)
 //   id-atlasrelay-<env>-e2e        Key Vault Secrets User on the vault, Blob Data Contributor on
-//                                  the results container
+//                                  the results container, AcrPull on the registry
+//   cratlasrelay<env><6>           container registry for the test image (Basic, Entra ID only)
 //   stare2e<env><6>/results        test results; Entra ID only, no shared keys
 //   cae-atlasrelay-<env>           workload-profiles environment (Consumption), in snet-cae
 //   caj-atlasrelay-<env>-e2e       manual job, one replica, 20 minutes, no retry
@@ -31,19 +34,20 @@ param baseUrl string
 @description('Resource id of the environment\'s Log Analytics workspace; the job\'s console and system logs go there')
 param workspaceId string
 
-@description('''Image the job runs when started without an override. The workflow e2e-dev.yml starts
-every run with the image it has just built, pinned by digest, so this only matters for a start
-from the portal.''')
+@description('''Image the job runs when started without an override. The workflow e2e-dev.yml and
+scripts/run-e2e.sh start every run with the image they have just built in the registry, pinned by
+digest, so this only matters for a start from the portal.''')
 param image string = 'mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27'
 
-@description('Object id of the person who writes the test accounts into the vault (scripts/set-test-users.sh). Empty: nobody gets write access.')
+@description('Object id of the person who writes the test accounts and RIPE Atlas keys into the vault (scripts/set-test-users.sh, scripts/set-ripe-keys.sh). Empty: nobody gets write access.')
 param operatorPrincipalId string = ''
 
 param tags object = {}
 
 var baseName = 'atlasrelay-${environmentName}'
 var suffix = uniqueString(subscription().id, environmentName)
-// scripts/set-test-users.sh writes these names, and e2e-real/run.mjs reads them.
+// scripts/set-test-users.sh and scripts/set-ripe-keys.sh write these names, and e2e-real/run.mjs
+// reads them. The job's definition holds the names only, never a value.
 var secretNames = {
   researcherUsername: 'e2e-researcher-username'
   researcherPassword: 'e2e-researcher-password'
@@ -51,6 +55,12 @@ var secretNames = {
   donorUsername: 'e2e-donor-username'
   donorPassword: 'e2e-donor-password'
   donorTotp: 'e2e-donor-totp'
+  // RIPE Atlas: the donor key pays through the pledge form; the recipient key belongs to the
+  // account the researcher's profile names, and sends the credits back after each run.
+  ripeDonorKey: 'ripe-donor-key'
+  ripeDonorAccount: 'ripe-donor-account'
+  ripeRecipientKey: 'ripe-recipient-key'
+  ripeRecipientAccount: 'ripe-recipient-account'
 }
 var resultsContainer = 'results'
 
@@ -116,10 +126,10 @@ resource vaultZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@20
 // ---------- vault ----------
 
 // Soft delete is always on; retention is the 7-day minimum. Purge protection stays off (it cannot
-// be switched off once on): the vault holds only test-account passwords, which can be reset in
-// the test tenant, and the vault's name is fixed per environment, so scripts/teardown.sh purges the
-// deleted vault to let the environment be bootstrapped again the same day. Against accidental
-// deletion the stack's deny settings already apply.
+// be switched off once on): the vault holds only test-account passwords and the test RIPE Atlas
+// keys, which can be reset or replaced, and the vault's name is fixed per environment, so
+// scripts/teardown.sh purges the deleted vault to let the environment be bootstrapped again the
+// same day. Against accidental deletion the stack's deny settings already apply.
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: take('kv-${baseName}-${suffix}', 24)
   location: location
@@ -133,8 +143,8 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
-    // scripts/set-test-users.sh opens it to the operator's address for the few seconds it writes,
-    // then closes it again. The next deployment closes it too.
+    // scripts/set-test-users.sh and scripts/set-ripe-keys.sh open it to the operator's address for
+    // the few seconds they write, then close it again. The next deployment closes it too.
     publicNetworkAccess: 'Disabled'
     networkAcls: {
       defaultAction: 'Deny'
@@ -247,7 +257,26 @@ resource results 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
+// The test image. Private: only the test identity pulls, and only the CI identity (testharness-rbac.bicep)
+// and the subscription Owner build. No admin user, so no registry password exists.
+resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
+  name: 'cratlasrelay${environmentName}${take(suffix, 6)}'
+  location: location
+  tags: tags
+  sku: {
+    name: 'Basic'
+  }
+  properties: {
+    adminUserEnabled: false
+    anonymousPullEnabled: false
+    // The CI identity builds with ACR Tasks from a GitHub-hosted runner, and the job pulls from the
+    // Container Apps environment, so the endpoint is public; every request needs an Entra ID token.
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
 var roles = {
+  acrPull: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
   keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
   keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
   storageBlobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -260,7 +289,18 @@ resource testReadsSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
     principalId: testIdentity.properties.principalId
     principalType: 'ServicePrincipal'
-    description: 'The full-flow test job reads the test accounts'
+    description: 'The full-flow test job reads the test accounts and RIPE Atlas keys'
+  }
+}
+
+resource testPullsImage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: registry
+  name: guid(registry.id, testIdentity.id, roles.acrPull)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.acrPull)
+    principalId: testIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'The full-flow test job pulls its image'
   }
 }
 
@@ -270,7 +310,7 @@ resource operatorWritesSecrets 'Microsoft.Authorization/roleAssignments@2022-04-
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsOfficer)
     principalId: operatorPrincipalId
-    description: 'scripts/set-test-users.sh writes the test accounts'
+    description: 'scripts/set-test-users.sh and scripts/set-ripe-keys.sh write the test secrets'
   }
 }
 
@@ -352,8 +392,16 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
       }
       // The suite takes a few minutes; a hung sign-in page should not hold a replica for longer.
       replicaTimeout: 1200
-      // A failed run is reported, not repeated: a retry would sign in and write to the site again.
+      // A failed run is reported, not repeated: a retry would sign in and write to the site again,
+      // and send real credits again.
       replicaRetryLimit: 0
+      // The test image is private; the job pulls it as the test identity.
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: testIdentity.id
+        }
+      ]
     }
     template: {
       containers: [
@@ -376,6 +424,10 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
             { name: 'E2E_DONOR_USERNAME_SECRET', value: secretNames.donorUsername }
             { name: 'E2E_DONOR_PASSWORD_SECRET', value: secretNames.donorPassword }
             { name: 'E2E_DONOR_TOTP_SECRET', value: secretNames.donorTotp }
+            { name: 'E2E_RIPE_DONOR_KEY_SECRET', value: secretNames.ripeDonorKey }
+            { name: 'E2E_RIPE_DONOR_ACCOUNT_SECRET', value: secretNames.ripeDonorAccount }
+            { name: 'E2E_RIPE_RECIPIENT_KEY_SECRET', value: secretNames.ripeRecipientKey }
+            { name: 'E2E_RIPE_RECIPIENT_ACCOUNT_SECRET', value: secretNames.ripeRecipientAccount }
           ]
         }
       ]
@@ -387,6 +439,7 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
     vaultZoneLink
     testReadsSecrets
     testWritesResults
+    testPullsImage
   ]
 }
 
@@ -395,3 +448,4 @@ output vaultName string = vault.name
 output resultsAccountName string = results.name
 output resultsContainerName string = resultsContainer
 output resultsContainerId string = results::blobs::container.id
+output registryName string = registry.name

@@ -1,13 +1,34 @@
 // Removes the test accounts' secrets from everything a run writes before it leaves the container:
 // the console output, the Playwright report, and every file under the results directory, including
-// the files inside trace archives. The secrets are the passwords, the TOTP seeds and the site's
-// session cookies (a trace records every request's Cookie header).
+// the files inside trace archives. The secrets are the passwords, the TOTP seeds, the two RIPE
+// Atlas API keys and their accounts' email addresses, and the site's session cookies (a trace
+// records every request's Cookie header). A key pasted into the pledge form reaches a trace three
+// ways, all as plain text: the fill action's value, the request body of the pledge, and the
+// action log; test/trace-redaction.test.mjs checks a real trace.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
 export const MASK = '[redacted]';
+
+/**
+ * The values to redact among the variables run.mjs hands the suite (E2E_*): everything but the
+ * Microsoft usernames, which name throwaway accounts. The RIPE keys and account emails are matched
+ * in upper and lower case too, since a UUID or an address can be printed in either.
+ * @param {Record<string, string>} env
+ * @returns {string[]}
+ */
+export function secretValues(env) {
+  /** @type {string[]} */
+  const out = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (!value || name.endsWith('_USERNAME')) continue;
+    out.push(value);
+    if (name.startsWith('E2E_RIPE_')) out.push(value.toLowerCase(), value.toUpperCase());
+  }
+  return out;
+}
 
 /**
  * Every form a secret takes in the files a run writes: as is, escaped inside a JSON string, and

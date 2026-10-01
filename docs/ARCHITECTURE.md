@@ -340,8 +340,8 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Custom role "Atlas Relay CI Deployer (prod)": read the resource group, the static site and its linked backend, and list the site's deployment token; assigned to the CI identity on the group | `infra/rbac.bicep` | |
 | Custom role "Atlas Relay CI API Deployer (prod)": read the Function App and publish a package to it; assigned to the CI identity on the Function App only | `infra/rbac.bicep` | |
 | Public DNS zone `atlasrelay.org` with the apex A record, a `www` CNAME to the site, the apex TXT set and mail-rejection records (prod only) | `infra/dns.bicep` | Azure DNS |
-| Full-flow test harness (dev only): virtual network `vnet-atlasrelay-dev`, Key Vault `kv-atlasrelay-dev-<6 characters>` (RBAC, public network access disabled) with a private endpoint and the `privatelink.vaultcore.azure.net` zone, test identity `id-atlasrelay-dev-e2e`, results storage `stare2edev<6 characters>` (Entra ID only), Container Apps environment `cae-atlasrelay-dev` (Consumption profile, in the network) and job `caj-atlasrelay-dev-e2e` | `infra/testharness.bicep` | Standard vault; Consumption |
-| Custom role "Atlas Relay e2e runner (dev)": read and start the test job, read and stop its executions, read two Container Apps log tables; plus Storage Blob Data Reader on the results container; both for the CI identity (dev only) | `infra/testharness-rbac.bicep` | |
+| Full-flow test harness (dev only): virtual network `vnet-atlasrelay-dev`, Key Vault `kv-atlasrelay-dev-<6 characters>` (RBAC, public network access disabled) with a private endpoint and the `privatelink.vaultcore.azure.net` zone, test identity `id-atlasrelay-dev-e2e`, results storage `stare2edev<6 characters>` (Entra ID only), container registry `cratlasrelaydev<6 characters>` for the test image (no admin user, no anonymous pull; AcrPull for the test identity only), Container Apps environment `cae-atlasrelay-dev` (Consumption profile, in the network) and job `caj-atlasrelay-dev-e2e` | `infra/testharness.bicep` | Standard vault; Basic registry; Consumption |
+| Custom role "Atlas Relay e2e runner (dev)": read and start the test job, read and stop its executions, read two Container Apps log tables; custom role "Atlas Relay e2e image builder (dev)" on the registry: queue an ACR Tasks build and read its status, output image and log; plus Storage Blob Data Reader on the results container; all for the CI identity (dev only) | `infra/testharness-rbac.bicep` | |
 
 The stack deploys with `--action-on-unmanage deleteResources`, so a resource removed from the
 templates is deleted on the next deployment, and `--deny-settings-mode denyDelete`, so nobody can
@@ -353,8 +353,9 @@ CI deploys no Bicep. Its roles can read the resource group, the site and its lin
 the deployment token the upload action needs, and read the Function App and publish a package to
 it. They grant nothing else. A compromised workflow run cannot change RBAC, re-federate the identity,
 read or change app settings, touch storage, DNS or monitoring, or delete anything. It can replace
-the site's content and the API's code, which is what a deploy is. In dev it can also start the
-test job, follow it and read its results and its two log tables; it has no role on the vault.
+the site's content and the API's code, which is what a deploy is. In dev it can also build the
+test image in the registry, start the test job, follow it and read its results and its two log
+tables; it has no role on the vault.
 
 ### Storage access
 
@@ -407,14 +408,26 @@ functions back.
 ### Full-flow test harness (dev)
 
 The full-flow tests on dev (`e2e-real/`, runbook "Full-flow tests on dev") sign real Microsoft
-accounts into the site, so they need the accounts' passwords. The passwords are in a Key Vault
-with public network access disabled and RBAC authorization. The tests run as a Container Apps job
-in a workload-profiles environment inside the environment's virtual network; the job reads the
-vault through a private endpoint, as a user-assigned identity with Key Vault Secrets User on that
-vault, and uploads redacted results to a storage account that accepts only Entra ID. The GitHub
-workflow `e2e-dev.yml` builds the test image, starts the job with it, and downloads the results.
-Its identity can start the job and read the results, and has no role on the vault. GitHub holds
-no copy of the passwords, and the job redacts them from its logs and results.
+accounts into the site and move real credits between two RIPE Atlas accounts, so they need the
+accounts' passwords and two live RIPE Atlas API keys. All of these are in a Key Vault with public
+network access disabled and RBAC authorization, with the email of each RIPE account beside its
+key. The tests run as a Container Apps job in a workload-profiles environment inside the
+environment's virtual network; the job reads the vault through a private endpoint, as a
+user-assigned identity with Key Vault Secrets User on that vault, and uploads redacted results to a
+storage account that accepts only Entra ID. The GitHub workflow `e2e-dev.yml` builds the test image
+in the environment's container registry with ACR Tasks, starts the job with it, and downloads the
+results. The image is private: the registry has no admin user and no anonymous pull, and the test
+identity alone has AcrPull. The CI identity can queue a build, start the job and read the results,
+and has no role on the vault. GitHub holds no copy of the passwords or the keys, and the job
+redacts them, and the two RIPE account emails, from its logs and results.
+
+The RIPE keys belong to the harness, not to donors. The site's rule that it keeps no donor's key
+is unchanged: the donor key reaches the site the way any donor's would, pasted into the pledge
+form, and the site uses it only for the requests that carry it and keeps nothing. The job uses the
+recipient key directly with the RIPE Atlas API to check the credits arrived and to send them back,
+so each run nets to zero. The test that pledges more than a key holds pays with the key whose
+balance is lower, which can be the recipient key; the site handles it like any donor's key and
+refuses before sending.
 
 Why a Container Apps job rather than a self-hosted GitHub runner inside the network: the repository
 is public, and a self-hosted runner in a public repository can be handed a job by a pull request
@@ -422,19 +435,22 @@ from a fork. A job that only Azure can start, from an image the workflow names, 
 listening for GitHub work.
 
 Why the vault, not GitHub secrets: a GitHub secret reaches every step of the job that reads it,
-and any code that step runs. In the vault, the test identity reads the passwords from inside the
-network. The only other principal with access is the Owner recorded as the operator, who writes
-them (Key Vault Secrets Officer, which can read as well) and reaches the vault only while
-`scripts/set-test-users.sh` has opened it to their address.
+and any code that step runs. In the vault, the test identity reads the passwords and keys from
+inside the network. The only other principal with access is the Owner recorded as the operator,
+who writes them (Key Vault Secrets Officer, which can read as well) and reaches the vault only
+while `scripts/set-test-users.sh` or `scripts/set-ripe-keys.sh` has opened it to their address.
 
-What is trusted: the CI identity can start the job with an image of its choosing, and that image
-runs as the test identity and can read the passwords. Only a workflow run on `main`, by the
-owner, approved in the GitHub Environment `dev`, gets that identity's token, and the passwords
-belong to throwaway accounts in a tenant that holds nothing else.
+What is trusted: the CI identity chooses the image that runs with the test identity, since it
+builds that image in the registry and starts the job with it, and that image can read the
+passwords and the RIPE keys. The keys can move real credits out of both RIPE accounts, up to their
+balances, for as long as they are valid. Only a workflow run on `main`, by the owner, approved in
+the GitHub Environment `dev`, gets the CI identity's token. The passwords belong to throwaway
+accounts in a tenant that holds nothing else. A RIPE key works only within the validity window set
+when it was created, and can be disabled or deleted at https://atlas.ripe.net/keys/ at any time.
 
 Soft delete is always on for a Key Vault; retention is the 7-day minimum. Purge protection is off:
 the vault's name is fixed per environment and `scripts/teardown.sh` purges it, so dev can be
-bootstrapped again the same day, and the passwords can be reset in the test tenant at any time.
+bootstrapped again the same day, and the passwords and keys can be replaced at any time.
 The stack's deny settings already stop the vault from being deleted outside the stack.
 
 ## Repository layout
@@ -446,8 +462,11 @@ infra/    main.bicep (subscription scope, one deployment stack per environment) 
           main.bicepparam reads the environment's settings
 .azure/   env.example; each environment's settings in .azure/<env>/.env (git-ignored)
 scripts/  bootstrap.sh, provision.sh, teardown.sh, settings.sh (lib/env.sh); bind-custom-domain.sh;
-          logs.sh; check-params.sh; set-test-users.sh (test accounts into the dev vault)
-e2e-real/ full-flow tests against dev with real Microsoft sign-in; Dockerfile for the job's image
+          logs.sh; check-params.sh; set-test-users.sh and set-ripe-keys.sh (test accounts and
+          RIPE Atlas keys into the dev vault); run-e2e.sh (lib/e2e-job.sh: build the test image,
+          start the test job)
+e2e-real/ full-flow tests against dev with real Microsoft sign-in and real RIPE Atlas transfers;
+          Dockerfile for the job's image
 ops/queries/  saved KQL queries that scripts/logs.sh runs against the Log Analytics workspace
 .github/workflows/deploy.yml   build + test on PRs; on main, publish the API to the Function App, then upload the site
 .github/workflows/infra.yml    Bicep build + lint, settings check, ShellCheck; deploys nothing
@@ -487,15 +506,15 @@ docs/     this spec, RIPE research notes, runbook
   It logs failures as warnings and is `continue-on-error`, so it cannot fail a deploy.
 - `infra.yml`: builds and lints every template (a warning fails it), runs
   `scripts/check-params.sh` and ShellCheck, on PRs and on `main`. It holds no Azure identity.
-- `e2e-dev.yml` (push to `main` that touches the app, the templates or `e2e-real/`, and manual;
-  never on pull requests; every job checks that the repository is `tgoodyear/atlasrelay`, the
-  actor `tgoodyear` and the ref `main`): job `image` builds `e2e-real/Dockerfile` and pushes it to
-  GHCR with the job's `GITHUB_TOKEN` (`packages: write`, no Azure identity); job `run`, in the
-  GitHub Environment `dev` (main only, waits for the owner's approval), logs in with OIDC as the
-  dev CI identity, starts the Container Apps job with the new image pinned by digest, polls the
-  execution, downloads the results from blob storage and uploads them as an artifact, reads the
-  job's logs from Log Analytics when the execution failed, and fails unless every test passed.
-  Without the repository variable `DEV_ENABLED=true` it only prints a notice.
+- `e2e-dev.yml` (push to `main` that touches the app, the templates, `e2e-real/` or
+  `scripts/lib/e2e-job.sh`, and manual; never on pull requests; every job checks that the
+  repository is `tgoodyear/atlasrelay`, the actor `tgoodyear` and the ref `main`): job `run`, in
+  the GitHub Environment `dev` (main only, waits for the owner's approval), logs in with OIDC as the
+  dev CI identity, builds `e2e-real/Dockerfile` in dev's registry with ACR Tasks, starts the
+  Container Apps job with the new image pinned by digest, polls the execution, downloads the
+  results from blob storage and uploads them as an artifact, reads the job's logs from Log
+  Analytics when the execution failed, and fails unless every test passed. Without the repository
+  variable `DEV_ENABLED=true` it only prints a notice.
 - `e2e-image.yml` (PRs that change `e2e-real/` or `web/e2e/ui.ts`): builds the test image and
   lists the tests inside it. Pushes nothing, holds no identity.
 - `deploy.yml` degrades to build-only until bootstrap has run; after that

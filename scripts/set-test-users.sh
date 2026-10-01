@@ -16,7 +16,9 @@
 # line, in a file or in the shell history.
 #
 # Needs: az, curl and jq, signed in as the Owner scripts/bootstrap.sh recorded as
-# ATLASRELAY_OPERATOR_PRINCIPAL_ID (Key Vault Secrets Officer on the vault).
+# ATLASRELAY_OPERATOR_PRINCIPAL_ID (Key Vault Secrets Officer on the vault). scripts/lib/test-vault.sh
+# opens, writes and closes the vault. The RIPE Atlas keys for the real-transfer tests go in with
+# scripts/set-ripe-keys.sh.
 set -euo pipefail
 usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 2; }
 [ $# -ge 1 ] || usage
@@ -30,23 +32,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 die() { echo "error: $*" >&2; exit 1; }
-for tool in az curl jq; do command -v "$tool" > /dev/null || die "$tool is not installed"; done
 cd "$(dirname "$0")/.."
 . scripts/lib/env.sh
-[ -s "$ENV_FILE" ] || die "no settings for $ENV_NAME; run scripts/bootstrap.sh $ENV_NAME first"
+. scripts/lib/test-vault.sh
 az_sub
-az account show "${AZ_SUB[@]}" -o none 2> /dev/null ||
-  die "run: az login (the environment is in subscription $(aget AZURE_SUBSCRIPTION_ID))"
-KV=$(aget E2E_KEY_VAULT_NAME)
-RG=$(aget AZURE_RESOURCE_GROUP)
-[ -n "$KV" ] || die "$ENV_NAME has no test vault (E2E_KEY_VAULT_NAME is empty); the harness is not deployed there"
-
-operator=$(aget ATLASRELAY_OPERATOR_PRINCIPAL_ID)
-me=$(az ad signed-in-user show --query id -o tsv 2> /dev/null || true)
-if [ -n "$me" ] && [ "$me" != "$operator" ]; then
-  die "only ATLASRELAY_OPERATOR_PRINCIPAL_ID ($operator) may write to the vault. To make it you:
-  scripts/settings.sh $ENV_NAME ATLASRELAY_OPERATOR_PRINCIPAL_ID $me && scripts/provision.sh $ENV_NAME"
-fi
+test_vault_check
 
 # ---------- the accounts ----------
 
@@ -72,77 +62,7 @@ ask E2E_DONOR_USERNAME "Donor account (user@tenant.onmicrosoft.com)" false
 ask E2E_DONOR_PASSWORD "Donor password" true
 [ "$E2E_RESEARCHER_USERNAME" != "$E2E_DONOR_USERNAME" ] || die "the researcher and the donor must be two accounts"
 
-if [ -z "$IP" ]; then
-  IP=$(curl -fsS --max-time 10 https://api.ipify.org) || die "can't find this machine's public address; pass --ip"
-fi
-[[ $IP =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "not an IPv4 address: $IP"
-
-# ---------- open the vault to this address, and close it on the way out ----------
-
-# Every address rule on the vault. The template declares none, so any rule found is removed.
-ip_rules() {
-  az keyvault show -n "$KV" -g "$RG" "${AZ_SUB[@]}" --query "properties.networkAcls.ipRules[].value" -o tsv
-}
-remove_ip_rules() {
-  local rule
-  for rule in $(ip_rules); do
-    az keyvault network-rule remove -n "$KV" -g "$RG" "${AZ_SUB[@]}" --ip-address "$rule" -o none || return 1
-  done
-}
-
-close() {
-  local status=$? state rules
-  trap - EXIT INT TERM
-  echo "closing $KV"
-  az keyvault update -n "$KV" -g "$RG" "${AZ_SUB[@]}" --public-network-access Disabled -o none || true
-  remove_ip_rules || true
-  state=$(az keyvault show -n "$KV" -g "$RG" "${AZ_SUB[@]}" --query properties.publicNetworkAccess -o tsv 2> /dev/null || true)
-  rules=$(ip_rules 2> /dev/null || echo unknown)
-  if [ "$state" = Disabled ] && [ -z "$rules" ]; then
-    echo "$KV: public network access disabled, no address rules"
-  else
-    echo "WARNING: $KV is not closed (public network access: ${state:-unknown}; address rules: ${rules:-none})." >&2
-    echo "Run scripts/provision.sh $ENV_NAME, which closes it." >&2
-    status=1
-  fi
-  exit "$status"
-}
-trap close EXIT
-trap 'exit 130' INT TERM
-
-# A rule left behind by an earlier run that could not clean up would admit that address too.
-remove_ip_rules || die "can't remove the address rules already on $KV"
-echo "opening $KV to $IP for this run"
-az keyvault network-rule add -n "$KV" -g "$RG" "${AZ_SUB[@]}" --ip-address "$IP/32" -o none
-az keyvault update -n "$KV" -g "$RG" "${AZ_SUB[@]}" --public-network-access Enabled \
-  --default-action Deny --bypass None -o none
-[ "$(ip_rules)" = "$IP/32" ] || [ "$(ip_rules)" = "$IP" ] || die "$KV admits other addresses than $IP"
-
-token=$(az account get-access-token --tenant "$(aget AZURE_TENANT_ID)" --resource https://vault.azure.net \
-  --query accessToken -o tsv) || die "can't get a Key Vault token"
-
-# put_secret NAME VALUE. The value reaches curl through a pipe from printf (a shell builtin), and
-# the token through a header file on a file descriptor. The response echoes the value back, so it
-# is kept only long enough to read the status. A new network rule or role assignment can take a
-# minute or two to apply, so a 403 is retried.
-put_secret() {
-  local name=$1 value=$2 attempt resp code
-  for attempt in $(seq 1 18); do
-    resp=$(printf '%s' "$value" | jq -Rs '{value: ., contentType: "text/plain"}' |
-      curl -sS -X PUT --data-binary @- \
-        -H @<(printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$token") \
-        -w '\n%{http_code}' "https://$KV.vault.azure.net/secrets/$name?api-version=7.4") || resp=$'\n000'
-    code=${resp##*$'\n'}
-    case "$code" in
-      2??) echo "  stored $name"; return 0 ;;
-      403|000) ;;
-      *) die "storing $name: HTTP $code $(jq -r '.error.code // empty' <<< "${resp%$'\n'*}" 2> /dev/null)" ;;
-    esac
-    echo "  $name: HTTP $code $(jq -r '.error.code // empty' <<< "${resp%$'\n'*}" 2> /dev/null), retrying ($attempt/18)"
-    sleep 10
-  done
-  die "could not store $name"
-}
+test_vault_open "$IP"
 
 # The names infra/testharness.bicep gives the job.
 put_secret e2e-researcher-username "$E2E_RESEARCHER_USERNAME"

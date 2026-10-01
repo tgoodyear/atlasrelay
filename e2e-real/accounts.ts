@@ -30,3 +30,37 @@ export function statePath(role: Role): string {
 
 /** The RIPE NCC Access email the researcher's profile carries. A reserved domain: nothing is sent to it. */
 export const RESEARCHER_ATLAS_EMAIL = process.env.E2E_RESEARCHER_ATLAS_EMAIL || 'atlasrelay-e2e-researcher@example.org';
+
+/** One side of the real transfers: a RIPE Atlas API key and the RIPE NCC Access email of its account. */
+export interface RipeSide {
+  key: string;
+  account: string;
+}
+
+/**
+ * The two RIPE Atlas accounts the real-transfer tests move credits between, from run.mjs (the
+ * vault secrets ripe-donor-key, ripe-donor-account, ripe-recipient-key and ripe-recipient-account,
+ * written by scripts/set-ripe-keys.sh), or null when the job names none. The donor account holds
+ * the credits; the recipient account is the researcher's, and sends them back after each run.
+ */
+export function ripeAccounts(): { donor: RipeSide; recipient: RipeSide } | null {
+  const get = (name: string) => process.env[`E2E_RIPE_${name}`] ?? '';
+  const donor = { key: get('DONOR_KEY'), account: get('DONOR_ACCOUNT') };
+  const recipient = { key: get('RECIPIENT_KEY'), account: get('RECIPIENT_ACCOUNT') };
+  if (![donor.key, donor.account, recipient.key, recipient.account].some(Boolean)) return null;
+  if (![donor.key, donor.account, recipient.key, recipient.account].every(Boolean)) {
+    throw new Error('Set all four of E2E_RIPE_DONOR_KEY, E2E_RIPE_DONOR_ACCOUNT, E2E_RIPE_RECIPIENT_KEY and E2E_RIPE_RECIPIENT_ACCOUNT, or none');
+  }
+  if (donor.account.toLowerCase() === recipient.account.toLowerCase() || donor.key === recipient.key) {
+    throw new Error('The donor and the recipient must be two different RIPE Atlas accounts');
+  }
+  return { donor, recipient };
+}
+
+/** Credits each real-transfer run sends and returns: E2E_RIPE_TRANSFER_CREDITS, 100 by default. */
+export function ripeTransferCredits(): number {
+  const raw = process.env.E2E_RIPE_TRANSFER_CREDITS || '100';
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`E2E_RIPE_TRANSFER_CREDITS must be a whole number of credits, not ${raw}`);
+  return n;
+}

@@ -185,7 +185,8 @@ else
     for kv in "AZURE_CLIENT_ID=$(aget CI_CLIENT_ID)" "AZURE_TENANT_ID=$(aget AZURE_TENANT_ID)" \
       "AZURE_SUBSCRIPTION_ID=$SUBSCRIPTION" "E2E_RESOURCE_GROUP=$(aget AZURE_RESOURCE_GROUP)" \
       "E2E_JOB_NAME=$(aget E2E_JOB_NAME)" "E2E_RESULTS_ACCOUNT=$(aget E2E_RESULTS_ACCOUNT)" \
-      "E2E_RESULTS_CONTAINER=$(aget E2E_RESULTS_CONTAINER)" "E2E_LOG_WORKSPACE_ID=$(aget E2E_LOG_WORKSPACE_ID)"; do
+      "E2E_RESULTS_CONTAINER=$(aget E2E_RESULTS_CONTAINER)" "E2E_LOG_WORKSPACE_ID=$(aget E2E_LOG_WORKSPACE_ID)" \
+      "E2E_REGISTRY=$(aget E2E_REGISTRY)"; do
       gh variable set "${kv%%=*}" --env "$ENV_NAME" --repo "$REPO" --body "${kv#*=}"
     done
     # e2e-dev.yml tests dev only, and skips while this is unset (scripts/teardown.sh dev clears it).
@@ -208,6 +209,7 @@ elif [ -n "$domain" ]; then
 fi
 [ "$ENV_NAME" != prod ] || echo "Deploy the app: gh workflow run deploy.yml --repo $REPO --ref main"
 if [ -n "$(aget E2E_JOB_NAME)" ]; then
-  echo "Full-flow tests: create the test accounts and store them with scripts/set-test-users.sh $ENV_NAME"
+  echo "Full-flow tests: create the test accounts and store them with scripts/set-test-users.sh $ENV_NAME,"
+  echo "and copy the RIPE Atlas keys with scripts/set-ripe-keys.sh $ENV_NAME"
   echo "(docs/RUNBOOK.md, Full-flow tests on dev)."
 fi

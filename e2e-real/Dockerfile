@@ -1,11 +1,13 @@
 # The full-flow test image: the Container Apps job caj-atlasrelay-<env>-e2e runs it.
-# .github/workflows/e2e-dev.yml builds it from the repository root and pushes it to GHCR:
+# .github/workflows/e2e-dev.yml and scripts/run-e2e.sh build it from the repository root in the
+# environment's private container registry, with ACR Tasks (scripts/lib/e2e-job.sh):
 #
-#   docker build -f e2e-real/Dockerfile .
+#   az acr build -r <registry> -g <resource group> -f e2e-real/Dockerfile -t atlasrelay-e2e:<tag> .
 #
 # It holds the test code (e2e-real/ and the page steps it shares with the local tests,
-# web/e2e/ui.ts) and Playwright, nothing else: the test accounts are read from Key Vault at run
-# time. Dockerfile.dockerignore keeps the rest of the repository out of the build context.
+# web/e2e/ui.ts) and Playwright, nothing else: the test accounts and RIPE Atlas keys are read from
+# Key Vault at run time. Dockerfile.dockerignore keeps the rest of the repository out of the build
+# context, for az acr build and docker build alike.
 #
 # The base image and @playwright/test (package.json and its lockfile) must be the same version as
 # web/package.json; e2e-real/test/versions.test.mjs checks it.
