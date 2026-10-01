@@ -258,7 +258,10 @@ module testharness 'testharness.bicep' = if (harness) {
   params: {
     environmentName: env
     location: location
-    baseUrl: 'https://${siteHostname}'
+    // The site's own azurestaticapps.net hostname, not <env>.<domain>: it serves as soon as the site
+    // exists, while a newly bound custom domain answered the platform's 404 on some requests for
+    // hours (2026-10-01), which no test run should depend on.
+    baseUrl: 'https://${app.outputs.staticWebAppHostname}'
     workspaceId: platform.outputs.workspaceId
     operatorPrincipalId: operatorPrincipalId
     tags: tags

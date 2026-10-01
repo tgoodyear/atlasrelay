@@ -249,9 +249,11 @@ The same file runs against the local stack in every full-flow run.
 
 ### Full-flow tests on dev
 
-`e2e-real/` signs two test accounts into https://dev.atlasrelay.org through the real Microsoft
-sign-in page and runs the flow there, with the page steps the local full-flow tests use
-(`web/e2e/ui.ts`). It has two spec files:
+`e2e-real/` signs two test accounts into the dev site through the real Microsoft sign-in page and
+runs the flow there. It uses the site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`), not
+dev.atlasrelay.org: a newly bound custom domain can answer the platform's 404 on some requests for
+hours, and a test run should not wait on that. It runs with the page steps the local full-flow
+tests use (`web/e2e/ui.ts`). It has two spec files:
 
 - `full-flow.spec.ts`: the researcher saves a profile and posts a project, the donor pledges to
   transfer by hand and marks the credits sent, the researcher confirms them and posts results, and
@@ -308,7 +310,7 @@ Once per dev environment, as the Owner:
      - "Block legacy authentication": users, all users; target resources, all resources;
        conditions, client apps, Exchange ActiveSync clients and other clients; grant, block
        access; on.
-   - Sign in once with each test user at https://dev.atlasrelay.org/login/microsoft in a private
+   - Sign in once with each test user at `https://<SWA_HOSTNAME>/login/microsoft` in a private
      window. Microsoft may ask for a new password (set one, and use that below) and whether the
      site may read the profile (accept).
 3. Store the accounts in the vault:
