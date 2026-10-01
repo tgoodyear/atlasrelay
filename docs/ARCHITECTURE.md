@@ -506,8 +506,9 @@ docs/     this spec, RIPE research notes, runbook
   It logs failures as warnings and is `continue-on-error`, so it cannot fail a deploy.
 - `infra.yml`: builds and lints every template (a warning fails it), runs
   `scripts/check-params.sh` and ShellCheck, on PRs and on `main`. It holds no Azure identity.
-- `e2e-dev.yml` (push to `main` that touches the app, the templates, `e2e-real/` or
-  `scripts/lib/e2e-job.sh`, and manual; never on pull requests; every job checks that the
+- `e2e-dev.yml` (push to `main` that touches `e2e-real/`, `web/e2e/ui.ts`,
+  `scripts/lib/e2e-job.sh` or the workflow, and manual; never on pull requests; it tests the site
+  as deployed on dev and deploys nothing there; every job checks that the
   repository is `tgoodyear/atlasrelay`, the actor `tgoodyear` and the ref `main`): job `run`, in
   the GitHub Environment `dev` (main only; waits for the owner's approval unless
   `scripts/bootstrap.sh dev` last ran with `--no-approval`), logs in with OIDC as the dev CI identity, builds

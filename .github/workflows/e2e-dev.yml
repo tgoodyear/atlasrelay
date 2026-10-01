@@ -9,22 +9,25 @@ name: Full-flow tests on dev
 #
 # Only the owner can make it run:
 # - It runs after a push to main (only the owner can merge under the "Protect main" ruleset) that
-#   touches code the flow depends on, or by hand. There is no pull request trigger of any kind, so
-#   a fork or a pull request cannot start it.
+#   changes the tests, or by hand. There is no pull request trigger of any kind, so a fork or a
+#   pull request cannot start it.
 # - Every job checks the repository, the actor and the branch.
 # - The job that gets an Azure token runs in the GitHub Environment dev, which only main may use and
 #   which waits for the owner's approval (unless scripts/bootstrap.sh dev last ran with
 #   --no-approval). The CI identity trusts that environment and nothing else.
 # - While dev does not exist (the repository variable DEV_ENABLED is not true), it only prints a
 #   notice.
+#
+# It tests the site as it is deployed on dev and deploys nothing there, so the push trigger covers
+# only what it builds and runs: the test image (e2e-real/ and web/e2e/ui.ts), the code that builds
+# and starts it, and this file. To test a change to web/, api/ or infra/, put it on dev first
+# (docs/RUNBOOK.md, "Dev environment") and then start this workflow by hand.
 on:
   push:
     branches: [main]
     paths:
-      - 'web/**'
-      - 'api/**'
-      - 'infra/**'
       - 'e2e-real/**'
+      - 'web/e2e/ui.ts'
       - 'scripts/lib/e2e-job.sh'
       - '.github/workflows/e2e-dev.yml'
   workflow_dispatch:
@@ -55,7 +58,7 @@ jobs:
     # The CI identity trusts jobs in this GitHub Environment only; scripts/bootstrap.sh restricts it
     # to main and, unless run with --no-approval, makes it wait for the owner's approval.
     environment: dev
-    timeout-minutes: 45
+    timeout-minutes: 70
     permissions:
       id-token: write
       contents: read
@@ -118,14 +121,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "started $execution (run $run_id) with $IMAGE_REF"
 
-      # The job's replica timeout is 20 minutes; a start can wait a few minutes for capacity.
+      # The job's replica timeout is 45 minutes; a start can wait a few minutes for capacity.
       - name: Wait for the execution
         id: wait
         env:
           EXECUTION: ${{ steps.start.outputs.execution }}
           JOB_URL: ${{ steps.start.outputs.job_url }}
         run: |
-          deadline=$(( $(date +%s) + 30 * 60 ))
+          deadline=$(( $(date +%s) + 55 * 60 ))
           status=""
           while [ "$(date +%s)" -lt "$deadline" ]; do
             status="$(az rest --method get --url "$JOB_URL/executions/$EXECUTION?api-version=$API" --query properties.status -o tsv 2> /dev/null || true)"
@@ -138,7 +141,7 @@ jobs:
           case "$status" in
             Succeeded|Failed|Stopped|Degraded) ;;
             *)
-              echo "::error::execution $EXECUTION did not finish in 30 minutes (last status: ${status:-unknown}); stopping it"
+              echo "::error::execution $EXECUTION did not finish in 55 minutes (last status: ${status:-unknown}); stopping it"
               az rest --method post --url "$JOB_URL/executions/$EXECUTION/stop?api-version=$API" -o none || true
               status=TimedOut ;;
           esac
@@ -199,6 +202,8 @@ jobs:
             echo "### Full-flow tests on dev"
             echo
             echo "Execution status: ${STATUS:-unknown}"
+            echo
+            echo "The site under test is the build deployed on dev; this workflow does not deploy it."
             if [ -f "$summary" ]; then
               jq -r '"Result: \(.status) (\(.stats.expected) passed, \(.stats.unexpected) failed, \(.stats.skipped) skipped)",
                 "", "| Test | Outcome |", "| --- | --- |",

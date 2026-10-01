@@ -76,7 +76,7 @@ echo "environment $ENV_NAME, subscription $SUBSCRIPTION, repository $REPO"
 step "Registering resource providers"
 for ns in Microsoft.Web Microsoft.Storage Microsoft.ManagedIdentity Microsoft.Consumption \
   Microsoft.OperationalInsights Microsoft.Insights Microsoft.AlertsManagement Microsoft.Network \
-  Microsoft.App Microsoft.KeyVault; do
+  Microsoft.App Microsoft.KeyVault Microsoft.ContainerRegistry; do
   [ "$(az provider show -n "$ns" "${AZ_SUB[@]}" --query registrationState -o tsv 2> /dev/null)" = Registered ] ||
     az provider register -n "$ns" "${AZ_SUB[@]}" --wait -o none
   echo "  $ns: Registered"

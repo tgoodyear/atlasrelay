@@ -20,7 +20,7 @@
 //   cratlasrelay<env><6>           container registry for the test image (Basic, Entra ID only)
 //   stare2e<env><6>/results        test results; Entra ID only, no shared keys
 //   cae-atlasrelay-<env>           workload-profiles environment (Consumption), in snet-cae
-//   caj-atlasrelay-<env>-e2e       manual job, one replica, 20 minutes, no retry
+//   caj-atlasrelay-<env>-e2e       manual job, one replica, 45 minutes, no retry
 targetScope = 'resourceGroup'
 
 @description('Environment name, e.g. dev')
@@ -401,8 +401,12 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
         parallelism: 1
         replicaCompletionCount: 1
       }
-      // The suite takes a few minutes; a hung sign-in page should not hold a replica for longer.
-      replicaTimeout: 1200
+      // The limit sits above the suite's own worst case: about 30 minutes plus the two sign-ins,
+      // which have no limit of their own (the full-flow test at 3, its profile cleanups at 3 each,
+      // the RIPE permission checks at 3, two real-transfer tests at 6 each with credit-return hooks
+      // at 3 each). Reaching it kills the container outright: no afterEach hook runs, so credits a
+      // test moved would not go back.
+      replicaTimeout: 2700
       // A failed run is reported, not repeated: a retry would sign in and write to the site again,
       // and send real credits again.
       replicaRetryLimit: 0

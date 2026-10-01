@@ -146,7 +146,16 @@ test('donor pastes a RIPE Atlas key, the credits reach the researcher, and the r
   expect(before.donor, `the donor account holds fewer than the ${amount} credits a run sends; seed it (docs/RUNBOOK.md)`).toBeGreaterThanOrEqual(amount);
   const researcher = await signedIn(browser, 'researcher');
   const donor = await signedIn(browser, 'donor');
-  const ret: Return = { from: 'recipient', to: 'donor', amount, fromBefore: before.recipient, outcome: 'not sent' };
+  // On 'unknown', the recipient's balance alone is not evidence: the account may earn credits on its
+  // own, and the amount can be as small as 1. The donor's must have fallen too.
+  const ret: Return = {
+    from: 'recipient',
+    to: 'donor',
+    amount,
+    fromBefore: before.recipient,
+    outcome: 'not sent',
+    alsoMoved: async () => (await api.donor.balance()) < before.donor,
+  };
   pending = { contexts: [researcher.context, donor.context], ret };
   let projectPath = '';
   const resultsSummary = `Results of real-transfer test run ${run}.`;

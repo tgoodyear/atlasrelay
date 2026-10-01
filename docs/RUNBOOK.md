@@ -272,7 +272,7 @@ The tests run in Azure. `.github/workflows/e2e-dev.yml`:
    `cratlasrelaydev<6 characters>` with ACR Tasks, tagged with the commit. The image is private: the
    registry has no admin user and no anonymous pull, and only the test identity is granted AcrPull;
 3. starts the Container Apps job `caj-atlasrelay-dev-e2e` with that image, pinned by digest;
-4. waits for the execution (the job gives a run 20 minutes, and never retries);
+4. waits for the execution (the job gives a run 45 minutes, and never retries);
 5. downloads the results from the storage account's `results` container, uploads them as the
    run's artifact, and fails the run unless every test passed.
 
@@ -372,9 +372,10 @@ stopped after the credits moved still returns them. The hook closes the test's b
 before it looks at what happened, so a test that timed out cannot click **Transfer** once the hook
 has read the outcome. If the site said the transfer went through, the credits go back. If the
 test stopped before the site answered, they go back only when the recipient's balance shows them
-arrived. The return is one request, never retried; if it fails, the run's output says
-`RETURN FAILED` and how many credits to send back by hand. A passing run leaves both balances where
-they started, apart from whatever the accounts earn or spend on their own meanwhile.
+arrived and the donor's balance fell. The return is one request, never retried; if it fails, the
+run's output says `RETURN FAILED` and how many credits to send back by hand. A passing run leaves
+both balances where they started, apart from whatever the accounts earn or spend on their own
+meanwhile.
 
 The second test pledges more than a key holds. It reads both balances and pays with the key whose
 balance is lower, asking for that balance plus one. The project names the other account. The site
@@ -420,8 +421,10 @@ To set it up:
 
 #### Running it
 
-The workflow runs after every push to `main` that changes `web/`, `api/`, `infra/`, `e2e-real/`,
-`scripts/lib/e2e-job.sh` or the workflow, and by hand:
+The workflow runs after every push to `main` that changes `e2e-real/`, `web/e2e/ui.ts`,
+`scripts/lib/e2e-job.sh` or the workflow, and by hand. It tests the site as deployed on dev and
+deploys nothing there, so to test a change to `web/`, `api/` or `infra/`, put it on dev first
+([Dev environment](#dev-environment)), then start the workflow by hand:
 
 ```bash
 gh workflow run e2e-dev.yml --ref main

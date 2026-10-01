@@ -13,7 +13,7 @@
 # tree, committed or not, and tagged local-<commit>-<time>. The run's results go to the results
 # container under runs/local-<time>/, as a workflow run's do.
 #
-# Needs: az and jq, signed in as an Owner of the environment's subscription. Run
+# Needs: az, jq and git, signed in to Azure as an Owner of the environment's subscription. Run
 # scripts/provision.sh <env> first when the templates have changed (the registry, the job's
 # variables).
 set -euo pipefail
@@ -61,8 +61,8 @@ echo "started $execution (run $run_id)"
 echo "results: storage account $(aget E2E_RESULTS_ACCOUNT), container $(aget E2E_RESULTS_CONTAINER), runs/$run_id/"
 [ "$WAIT" = true ] || exit 0
 
-# The job gives a run 20 minutes; a start can wait a few minutes for capacity.
-deadline=$(( $(date +%s) + 30 * 60 ))
+# The job gives a run 45 minutes; a start can wait a few minutes for capacity.
+deadline=$(( $(date +%s) + 55 * 60 ))
 status=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
   status=$(az rest --method get --url "$job_url/executions/$execution?api-version=$E2E_API" --query properties.status -o tsv 2> /dev/null || true)
