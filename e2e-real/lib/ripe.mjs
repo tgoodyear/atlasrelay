@@ -128,6 +128,33 @@ export function ripeClient(key, opts) {
     },
 
     /**
+     * One page of the account's `admin` transactions, newest first, as the site reads it when a
+     * researcher checks a manual pledge (api/src/lib/atlas.ts, readAdminTransactions): the same
+     * query, so a run shows whether the live API accepts it. Rows keep only the fields the site
+     * looks at, and `note` is RIPE's reason and description with anything shaped like an email
+     * address masked, so it can be printed.
+     * @returns {Promise<{ status: number, count: number | null, hasMore: boolean, rows: { id: string, type: string, amount: number, date: number, note: string }[] }>} date in milliseconds
+     */
+    async adminPage() {
+      const r = await call('GET', '/credits/transactions/?sort=-date&type=admin&page_size=100');
+      if (!r.ok) throw new RipeError(`${label}: reading the transactions: HTTP ${r.status}${detail(r.body)}`, r.status);
+      const page = /** @type {{ results?: unknown[], count?: unknown, next?: unknown } | unknown[] | null} */ (r.body);
+      const list = Array.isArray(page) ? page : (page?.results ?? []);
+      const rows = list.map((row) => {
+        const { id, type, amount, date, reason, description } = /** @type {Record<string, unknown>} */ (row);
+        const when = typeof date === 'number' ? date * 1000 : typeof date === 'string' ? Date.parse(date) : NaN;
+        const note = [reason, description].filter((x) => typeof x === 'string' && x).join(' / ');
+        return { id: String(id), type: String(type), amount: Number(amount), date: when, note: maskEmails(note) };
+      });
+      return {
+        status: r.status,
+        count: !Array.isArray(page) && typeof page?.count === 'number' ? page.count : null,
+        hasMore: !Array.isArray(page) && typeof page?.next === 'string' && page.next !== '',
+        rows,
+      };
+    },
+
+    /**
      * Sends `amount` credits to the RIPE NCC Access account `recipient`. One POST, never retried:
      * a retry could send the credits twice. Throws a RipeError with status 0 or 5xx when the
      * outcome is unknown, and with a 4xx when RIPE refused (nothing moved).
@@ -143,6 +170,14 @@ export function ripeClient(key, opts) {
 }
 
 /** @typedef {ReturnType<typeof ripeClient>} RipeClient */
+
+/**
+ * Replaces anything shaped like an email address, so RIPE's free text can be logged.
+ * @param {string} text
+ */
+export function maskEmails(text) {
+  return text.replace(/[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi, '[email]');
+}
 
 /**
  * Polls `read` until `done` holds for its value or the time runs out, and returns the last value
