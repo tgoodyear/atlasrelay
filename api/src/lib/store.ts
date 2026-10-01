@@ -703,22 +703,65 @@ export async function listPledgesByDonor(donorId: string): Promise<Pledge[]> {
 }
 
 /**
- * RIPE Atlas transaction ids already recorded against a pledge on any of this owner's projects,
- * leaving out `exceptPledgeId`.
- *
- * One RIPE account receives the credits for every project its owner posts, so the same arrival
- * must not be matched to two pledges, on one project or across several. Read before a check and
- * not locked: two confirmations racing each other could both pick the same row. Only the owner can
- * confirm, so that needs one person acting twice at once, the same trade the ceiling check makes.
+ * How long after a pledge was last written its transfer could still show up in RIPE's list. RIPE was
+ * measured listing a transfer 40 to 70 seconds after it happened; ten minutes leaves room for that
+ * being slower on another day without reaching far into later arrivals.
  */
-export async function receiptIdsInUse(ownerId: string, exceptPledgeId: string): Promise<Set<string>> {
+export const RECEIPT_INDEXING_SLACK_MS = 10 * 60 * 1000;
+
+/** What a receipt check needs to know about the owner's other pledges. */
+export interface ReceiptLedger {
+  /** RIPE transaction ids already recorded against another pledge. */
+  used: Set<string>;
+  /** Other pledges that could own an arrival without having recorded which one. */
+  rivals: { amount: number; from: number; until: number | null }[];
+}
+
+/**
+ * Separate from the storage reads so the rules can be tested.
+ *
+ * `used` stops one recorded arrival being matched twice. `rivals` covers what `used` cannot see:
+ * a pledge that owns an arrival without having recorded its id. That is every API transfer (the
+ * server never looks its row up), every manual pledge confirmed without a check, and every pledge
+ * still waiting, whose donor may already have sent. A rival can own an arrival of its own amount
+ * recorded after it was created; a settled one, no later than shortly after it was last written,
+ * since its transfer had happened by the time it was confirmed. updatedAt only moves forward (a
+ * later name scrub moves it too), so that bound errs towards calling more rows contested, which
+ * only means the owner is asked rather than a row being matched for them.
+ */
+export function receiptLedger(pledges: Pledge[], exceptPledgeId: string): ReceiptLedger {
   const used = new Set<string>();
-  for (const project of await listProjectsByOwner(ownerId)) {
-    for (const p of await listPledges(project.id)) {
-      if (p.id !== exceptPledgeId && p.transactionId) used.add(p.transactionId);
+  const rivals: ReceiptLedger['rivals'] = [];
+  for (const p of pledges) {
+    if (p.id === exceptPledgeId || p.status === 'cancelled') continue;
+    if (p.transactionId) {
+      used.add(p.transactionId);
+      continue;
+    }
+    const from = Date.parse(p.createdAt);
+    if (!Number.isFinite(from)) continue;
+    if (p.status === 'confirmed') {
+      const last = Date.parse(p.updatedAt);
+      rivals.push({ amount: creditedAmount(p), from, until: Number.isFinite(last) ? last + RECEIPT_INDEXING_SLACK_MS : null });
+    } else {
+      rivals.push({ amount: p.amount, from, until: null });
     }
   }
-  return used;
+  return { used, rivals };
+}
+
+/**
+ * The receipt ledger across every project this owner has posted. One RIPE account receives the
+ * credits for all of them, so an arrival has to be weighed against all of their pledges.
+ *
+ * Read before a check and not locked: two confirmations racing each other could both pick the same
+ * row. Only the owner can confirm, so that needs one person acting twice at once, the same trade the
+ * ceiling check makes.
+ */
+export async function ownerReceiptLedger(ownerId: string, exceptPledgeId: string): Promise<ReceiptLedger> {
+  const all: Pledge[] = [];
+  for (const project of await listProjectsByOwner(ownerId)) all.push(...(await listPledges(project.id)));
+  return receiptLedger(all, exceptPledgeId);
 }
 
 export async function getPledge(projectId: string, id: string): Promise<Pledge | null> {

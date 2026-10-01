@@ -30,6 +30,23 @@ export interface Receipt {
    * documented and it may name the sending account.
    */
   note: string;
+  /**
+   * Another of this owner's pledges of the same amount could account for this row: one still
+   * waiting to be settled, or one confirmed without a reference (every API transfer, and every
+   * manual pledge confirmed without a check) whose time fits. Such a row is never matched
+   * automatically, so one donor's transfer cannot be counted a second time against another pledge.
+   */
+  contested: boolean;
+}
+
+/**
+ * One of the owner's other pledges that could own an arrival of `amount` recorded between `from`
+ * and `until` (milliseconds; `until` null means no upper bound). See ledgerRivals in store.ts.
+ */
+export interface Rival {
+  amount: number;
+  from: number;
+  until: number | null;
 }
 
 export type ReceiptMatch =
@@ -39,11 +56,12 @@ export type ReceiptMatch =
   | { kind: 'different'; receipt: Receipt }
   /** More than one row could be this pledge's, or the list may be incomplete. */
   | { kind: 'several'; receipts: Receipt[]; more: boolean }
-  | { kind: 'none' };
+  /** `more` when the page may be incomplete, so a qualifying row could be on a page not read. */
+  | { kind: 'none'; more: boolean };
 
 /** What the browser is told when a check needs the owner, or failed. Mirrored in web/src/lib/api.ts. */
 export interface VerificationDetails {
-  outcome: 'none' | 'different' | 'several' | 'choice-unavailable' | 'over-ceiling' | 'key-refused' | 'refused';
+  outcome: 'none' | 'different' | 'several' | 'choice-unavailable' | 'over-ceiling' | 'unreachable' | 'key-refused' | 'refused';
   pledged?: number;
   receipts?: Receipt[];
   /** The candidate list was cut short; there may be older rows that also qualify. */
@@ -54,11 +72,10 @@ export interface VerificationDetails {
 
 /** A check that settled on an amount to record. */
 export interface CheckedConfirmation {
-  /** exact: the one arrival of the pledged amount. chosen: the owner picked a row. unreachable: RIPE did not answer, so nothing was checked. */
-  outcome: 'exact' | 'chosen' | 'unreachable';
-  /** Credits to record. What arrived when verified, what was pledged otherwise. */
+  /** exact: the one arrival of the pledged amount. chosen: the owner picked a row. */
+  outcome: 'exact' | 'chosen';
+  /** Credits to record: what arrived, read from the owner's log in this request. */
   amount: number;
-  verified: boolean;
   transactionId: string;
 }
 
@@ -95,7 +112,7 @@ function noteOf(row: Record<string, unknown>): string {
  * that created the pledge, so their transfer cannot be older. A row whose date cannot be read is
  * left out, as is one with no usable id: a match with no reference cannot be shown to be unique.
  */
-export function incomingReceipts(rows: unknown[], since: number, used: ReadonlySet<string>): Receipt[] {
+export function incomingReceipts(rows: unknown[], since: number, used: ReadonlySet<string>, rivals: readonly Rival[] = []): Receipt[] {
   if (!Number.isFinite(since)) return [];
   const earliest = Math.floor(since / 1000) * 1000;
   const out: Receipt[] = [];
@@ -110,7 +127,8 @@ export function incomingReceipts(rows: unknown[], since: number, used: ReadonlyS
     const date = row.date;
     const when = typeof date === 'number' || typeof date === 'string' ? transactionTime(date) : null;
     if (when === null || when < earliest || !Number.isFinite(new Date(when).getTime())) continue;
-    out.push({ id, amount, at: new Date(when).toISOString(), note: noteOf(row) });
+    const contested = rivals.some((r) => r.amount === amount && when >= Math.floor(r.from / 1000) * 1000 && (r.until === null || when <= r.until));
+    out.push({ id, amount, at: new Date(when).toISOString(), note: noteOf(row), contested });
   }
   return out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 }
@@ -125,15 +143,16 @@ export function incomingReceipts(rows: unknown[], since: number, used: ReadonlyS
  * An arrival of the pledged amount is the match even when arrivals of other amounts sit beside it:
  * amount is one of the three things a match rests on, and those others are other donors' transfers
  * as far as anything here can tell. Two arrivals of the pledged amount cannot be told apart, so the
- * owner chooses.
+ * owner chooses, and so they do when the one arrival is contested: another pledge of the same
+ * amount could own it, and matching it here would count the same credits twice.
  */
 export function matchReceipt(receipts: Receipt[], pledged: number, complete: boolean): ReceiptMatch {
-  if (receipts.length === 0) return { kind: 'none' };
+  if (receipts.length === 0) return { kind: 'none', more: !complete };
   const shown = receipts.slice(0, MAX_RECEIPTS_SHOWN);
   const more = !complete || receipts.length > shown.length;
   if (!complete) return { kind: 'several', receipts: shown, more };
   const exact = receipts.filter((r) => r.amount === pledged);
-  if (exact.length === 1) return { kind: 'exact', receipt: exact[0] };
+  if (exact.length === 1 && !exact[0].contested) return { kind: 'exact', receipt: exact[0] };
   if (exact.length === 0 && receipts.length === 1) return { kind: 'different', receipt: receipts[0] };
   return { kind: 'several', receipts: shown, more };
 }
@@ -167,6 +186,8 @@ export interface CheckInput {
   since: number;
   /** Transaction ids already recorded against other pledges of this owner's. */
   used: ReadonlySet<string>;
+  /** This owner's other pledges that could own an arrival without having recorded one. */
+  rivals?: readonly Rival[];
   /** Credits the project can still record before its ceiling. */
   room: number;
   /** A transaction id the owner chose from an earlier answer. */
@@ -181,14 +202,19 @@ const CEILING = `the project's ceiling of ${OVERFUND_MULTIPLIER}× its request`;
  * Read the owner's transactions and settle on what to record, or raise an HttpError whose details
  * tell the browser what the owner has to decide. Nothing here writes anything.
  *
- * RIPE not answering is the one failure that still confirms, at the pledged amount and marked
- * unchecked: the key is optional, and without it the owner would have confirmed that amount anyway.
- * A refusal does not, because a key the owner meant to check with and that does not work is
- * something they should hear about before anything is recorded.
+ * Every failure leaves the pledge as it was. RIPE not answering is offered back to the owner with
+ * confirm-as-pledged one click away, rather than confirmed on their behalf: confirming is final,
+ * and a read that timed out after five seconds says nothing about what arrived.
  */
 export async function checkReceipt(input: CheckInput): Promise<CheckedConfirmation> {
   const { pledged, since, used, room, choice } = input;
   const read = input.read ?? readAdminTransactions;
+  // A project already at its ceiling cannot record anything, whatever arrived, so the key is not
+  // sent to RIPE for an answer that could only end in a refusal.
+  if (room < 1) throw new HttpError(409, `Confirming this pledge would exceed ${CEILING}; cancel it instead`);
+  // RIPE's own refusal text is passed on to the owner. Should it ever quote the key it was sent,
+  // the key must not ride back out in our response.
+  const redact = (text: string) => text.split(input.key).join('[key]');
   let page: TransactionPage;
   try {
     page = await read(input.key);
@@ -201,16 +227,17 @@ export async function checkReceipt(input: CheckInput): Promise<CheckedConfirmati
           { verification: { outcome: 'key-refused' } satisfies VerificationDetails },
         );
       }
-      throw new HttpError(err.status, `${err.message} Nothing was recorded.`, { verification: { outcome: 'refused' } satisfies VerificationDetails });
+      throw new HttpError(err.status, `${redact(err.message)} Nothing was recorded.`, { verification: { outcome: 'refused' } satisfies VerificationDetails });
     }
     if (!(err instanceof AtlasUnreachable)) throw err;
-    if (pledged > room) {
-      throw new HttpError(409, `Confirming this pledge would exceed ${CEILING}; cancel it instead`);
-    }
-    return { outcome: 'unreachable', amount: pledged, verified: false, transactionId: '' };
+    throw new HttpError(
+      409,
+      `RIPE Atlas did not answer, so the amount could not be checked. Nothing was recorded. Check again, or confirm the pledged ${credits(pledged)} without checking.`,
+      { verification: { outcome: 'unreachable', pledged } satisfies VerificationDetails },
+    );
   }
 
-  const receipts = incomingReceipts(page.rows, since, used);
+  const receipts = incomingReceipts(page.rows, since, used, input.rivals ?? []);
   const complete = pageComplete(page, since);
 
   let picked: Receipt;
@@ -220,7 +247,7 @@ export async function checkReceipt(input: CheckInput): Promise<CheckedConfirmati
     if (!found) {
       throw new HttpError(
         409,
-        'That RIPE Atlas transaction can no longer be matched to this pledge. It may be recorded against another pledge already. Nothing was recorded.',
+        'That RIPE Atlas transaction can no longer be matched to this pledge. It may already be recorded against another pledge. Nothing was recorded.',
         { verification: { outcome: 'choice-unavailable', pledged, receipts: receipts.slice(0, MAX_RECEIPTS_SHOWN), more: !complete || receipts.length > MAX_RECEIPTS_SHOWN } satisfies VerificationDetails },
       );
     }
@@ -236,8 +263,10 @@ export async function checkReceipt(input: CheckInput): Promise<CheckedConfirmati
       case 'none':
         throw new HttpError(
           409,
-          `RIPE Atlas shows no incoming transfer since this pledge was made that is not already matched to another pledge. A new transfer can take a minute or two to appear. Check again later, or confirm the pledged ${credits(pledged)} without checking.`,
-          { verification: { outcome: 'none', pledged } satisfies VerificationDetails },
+          match.more
+            ? `RIPE Atlas may have more transfers since this pledge was made than one read returns, and none of those it returned could be this one. A new transfer can take a minute or two to appear. Check again later, or confirm the pledged ${credits(pledged)} without checking.`
+            : `RIPE Atlas shows no incoming transfer since this pledge was made, apart from any already matched to other pledges. A new transfer can take a minute or two to appear. Check again later, or confirm the pledged ${credits(pledged)} without checking.`,
+          { verification: { outcome: 'none', pledged, more: match.more } satisfies VerificationDetails },
         );
       case 'different':
         throw new HttpError(
@@ -248,7 +277,11 @@ export async function checkReceipt(input: CheckInput): Promise<CheckedConfirmati
       case 'several':
         throw new HttpError(
           409,
-          `RIPE Atlas shows more than one incoming transfer since this pledge was made that could be this one. Choose the one from this donor, or confirm the pledged ${credits(pledged)} without checking.`,
+          match.receipts.length >= 2
+            ? `RIPE Atlas shows more than one incoming transfer since this pledge was made that could be this one. Choose the one from this donor, or confirm the pledged ${credits(pledged)} without checking.`
+            : match.more
+              ? `RIPE Atlas lists more transfers since this pledge was made than one read returns, so this one cannot be picked out automatically. Choose it from the list, or confirm the pledged ${credits(pledged)} without checking.`
+              : `RIPE Atlas shows ${credits(match.receipts[0].amount)} arrived since this pledge was made, but another pledge of the same amount could account for that transfer. Choose it only if you know it came from this donor, or confirm the pledged ${credits(pledged)} without checking.`,
           { verification: { outcome: 'several', pledged, receipts: match.receipts, more: match.more } satisfies VerificationDetails },
         );
     }
@@ -259,15 +292,15 @@ export async function checkReceipt(input: CheckInput): Promise<CheckedConfirmati
     // project past its ceiling, so the owner chooses: record the pledged amount if that still fits,
     // which understates what arrived and is labelled unchecked, or cancel.
     if (picked.amount === pledged || pledged > room) {
-      throw new HttpError(409, `RIPE Atlas shows ${credits(picked.amount)} arrived for this pledge. Recording that would exceed ${CEILING}; cancel it instead.`, {
+      throw new HttpError(409, `RIPE Atlas shows ${credits(picked.amount)} arrived in the transfer matched to this pledge. Recording that would exceed ${CEILING}; cancel the pledge instead.`, {
         verification: { outcome: 'over-ceiling', pledged, receipts: [picked], room: Math.max(0, room) } satisfies VerificationDetails,
       });
     }
     throw new HttpError(
       409,
-      `RIPE Atlas shows ${credits(picked.amount)} arrived for this pledge (pledged ${fmt(pledged)}). Recording that would exceed ${CEILING}. You can confirm the pledged ${credits(pledged)} without the check, or cancel the pledge.`,
+      `RIPE Atlas shows ${credits(picked.amount)} arrived in the transfer matched to this pledge (pledged ${fmt(pledged)}). Recording that would exceed ${CEILING}. You can confirm the pledged ${credits(pledged)} without checking, or cancel the pledge.`,
       { verification: { outcome: 'over-ceiling', pledged, receipts: [picked], room: Math.max(0, room) } satisfies VerificationDetails },
     );
   }
-  return { outcome, amount: picked.amount, verified: true, transactionId: picked.id };
+  return { outcome, amount: picked.amount, transactionId: picked.id };
 }

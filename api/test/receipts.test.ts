@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { AtlasRefused, AtlasUnreachable, readAdminTransactions, type TransactionPage } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 import { checkReceipt, incomingReceipts, matchReceipt, MAX_RECEIPTS_SHOWN, pageComplete, type CheckInput, type Receipt, type VerificationDetails } from '../src/lib/receipts';
-import { creditedAmount, toPledge, totals, type Pledge } from '../src/lib/store';
+import { creditedAmount, RECEIPT_INDEXING_SLACK_MS, receiptLedger, toPledge, totals, type Pledge } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import { invocationLog, type LogSink } from '../src/lib/telemetry';
 
@@ -102,7 +102,7 @@ test('the note is RIPE reason and description, deduplicated, collapsed and cut s
 
 // ---------- matching ----------
 
-const r = (id: string, amount: number): Receipt => ({ id, amount, at: '2026-09-30T12:01:00.000Z', note: '' });
+const r = (id: string, amount: number, contested = false): Receipt => ({ id, amount, at: '2026-09-30T12:01:00.000Z', note: '', contested });
 
 test('exactly one arrival of the pledged amount is the match', () => {
   assert.deepEqual(matchReceipt([r('1', 700)], 700, true), { kind: 'exact', receipt: r('1', 700) });
@@ -125,7 +125,8 @@ test('several arrivals of other amounts are listed for the owner', () => {
 });
 
 test('nothing arrived', () => {
-  assert.deepEqual(matchReceipt([], 700, true), { kind: 'none' });
+  assert.deepEqual(matchReceipt([], 700, true), { kind: 'none', more: false });
+  assert.deepEqual(matchReceipt([], 700, false), { kind: 'none', more: true });
 });
 
 test('an incomplete list never produces an automatic match', () => {
@@ -155,7 +156,7 @@ test('a page is complete unless RIPE has more and the oldest row seen is still i
 
 test('an exact arrival is recorded as verified, with its reference', async () => {
   const got = await checkReceipt(input([row(640025999, 700, 45)]));
-  assert.deepEqual(got, { outcome: 'exact', amount: 700, verified: true, transactionId: '640025999' });
+  assert.deepEqual(got, { outcome: 'exact', amount: 700, transactionId: '640025999' });
 });
 
 test('a different amount is shown to the owner first, and recorded once they choose it', async () => {
@@ -167,7 +168,7 @@ test('a different amount is shown to the owner first, and recorded once they cho
   assert.deepEqual(err.details.verification.receipts?.map((x) => [x.id, x.amount]), [['77', 500]]);
 
   const got = await checkReceipt(input([row(77, 500, 45)], { choice: '77' }));
-  assert.deepEqual(got, { outcome: 'chosen', amount: 500, verified: true, transactionId: '77' });
+  assert.deepEqual(got, { outcome: 'chosen', amount: 500, transactionId: '77' });
 });
 
 test('nothing yet: the owner is told it may not be indexed, and can confirm as pledged', async () => {
@@ -185,7 +186,17 @@ test('several candidates are listed, and the owner picks one', async () => {
   assert.deepEqual(err.details.verification.receipts?.map((x) => x.id), ['2', '1']);
   const got = await checkReceipt(input(rows, { choice: '1' }));
   assert.equal(got.transactionId, '1');
-  assert.equal(got.verified, true);
+});
+
+test('an incomplete page with one candidate is offered, and does not claim there were several', async () => {
+  const err = await refusal(checkReceipt(input([row(1, 700, 45), row(2, 5, 30)], { read: async () => page([row(1, 700, 45), row(2, 5, 30)], true) })));
+  assert.equal(err.details.verification.outcome, 'several');
+  assert.equal(err.details.verification.more, true);
+  const one = await refusal(checkReceipt(input([], { read: async () => page([row(1, 700, 45), row(3, -5, 30)], true) })));
+  assert.equal(one.details.verification.outcome, 'several');
+  assert.deepEqual(one.details.verification.receipts?.map((x) => x.id), ['1']);
+  assert.match(one.message, /cannot be picked out automatically/);
+  assert.doesNotMatch(one.message, /more than one/);
 });
 
 test('a chosen row has to still qualify when it is read again', async () => {
@@ -211,20 +222,20 @@ test('an actual amount past the ceiling is explained, with the pledged amount of
   assert.equal(err.status, 409);
   assert.equal(err.details.verification.outcome, 'over-ceiling');
   assert.equal(err.details.verification.room, 800);
-  assert.match(err.message, /RIPE Atlas shows 900 credits arrived for this pledge \(pledged 700\)/);
-  assert.match(err.message, /You can confirm the pledged 700 credits without the check, or cancel the pledge\./);
+  assert.match(err.message, /RIPE Atlas shows 900 credits arrived in the transfer matched to this pledge \(pledged 700\)/);
+  assert.match(err.message, /You can confirm the pledged 700 credits without checking, or cancel the pledge\./);
 });
 
 test('when neither amount fits, the owner is told to cancel, as before', async () => {
   const err = await refusal(checkReceipt(input([row(1, 700, 45)], { pledged: 700, room: 600 })));
   assert.equal(err.details.verification.outcome, 'over-ceiling');
-  assert.match(err.message, /cancel it instead/);
+  assert.match(err.message, /cancel the pledge instead/);
   assert.doesNotMatch(err.message, /confirm the pledged/);
 });
 
 test('a smaller actual amount can be recorded even when the pledged one would not fit', async () => {
   const got = await checkReceipt(input([row(1, 400, 45)], { pledged: 700, room: 500, choice: '1' }));
-  assert.deepEqual(got, { outcome: 'chosen', amount: 400, verified: true, transactionId: '1' });
+  assert.deepEqual(got, { outcome: 'chosen', amount: 400, transactionId: '1' });
 });
 
 test('exactly at the ceiling is allowed', async () => {
@@ -251,18 +262,80 @@ test('other refusals keep their status and say nothing was recorded', async () =
   assert.match(err.message, /Nothing was recorded\.$/);
 });
 
-test('RIPE not answering confirms the pledged amount, unverified', async () => {
-  const got = await checkReceipt(input([], { read: async () => { throw new AtlasUnreachable('Could not reach RIPE Atlas'); } }));
-  assert.deepEqual(got, { outcome: 'unreachable', amount: 700, verified: false, transactionId: '' });
-  // Still bounded by the ceiling.
-  const err = await refusal(checkReceipt(input([], { room: 100, read: async () => { throw new AtlasUnreachable('x'); } })));
+test('RIPE not answering records nothing, and offers the pledged amount without the check', async () => {
+  const err = await refusal(checkReceipt(input([], { read: async () => { throw new AtlasUnreachable('Could not reach RIPE Atlas'); } })));
+  assert.equal(err.status, 409);
+  assert.equal(err.details.verification.outcome, 'unreachable');
+  assert.equal(err.message, 'RIPE Atlas did not answer, so the amount could not be checked. Nothing was recorded. Check again, or confirm the pledged 700 credits without checking.');
+});
+
+test('a project already at its ceiling is refused before the key is sent anywhere', async () => {
+  let reads = 0;
+  const err = await refusal(checkReceipt(input([row(1, 700, 45)], { room: 0, read: async () => { reads += 1; return page([]); } })));
   assert.equal(err.status, 409);
   assert.match(err.message, /exceed the project's ceiling/);
+  assert.equal(reads, 0);
+});
+
+test('a key quoted back in a RIPE refusal is removed from what the owner is sent', async () => {
+  const err = await refusal(checkReceipt(input([], { read: async () => { throw new AtlasRefused(400, 400, `Bad key ${KEY} in request`); } })));
+  assert.equal(err.message.includes(KEY), false);
+  assert.match(err.message, /Bad key \[key\] in request/);
 });
 
 test('an unexpected failure is not mistaken for RIPE being down', async () => {
   const err = await checkReceipt(input([], { read: async () => { throw new TypeError('boom'); } })).then(() => null, (e) => e);
   assert.ok(err instanceof TypeError);
+});
+
+// ---------- other pledges that could own an arrival ----------
+
+test('an arrival another pledge of the same amount could own is marked contested', () => {
+  const from = CREATED - 60_000;
+  const got = incomingReceipts([row(1, 700, 30), row(2, 500, 30), row(3, 700, 4000)], CREATED, new Set(), [
+    // Confirmed without a reference: its transfer was listed no later than shortly after it was last written.
+    { amount: 700, from, until: (SEC + 60) * 1000 },
+    { amount: 500, from: CREATED + 3_600_000, until: null },
+  ]);
+  const byId = Object.fromEntries(got.map((x) => [x.id, x.contested]));
+  assert.deepEqual(byId, { '1': true, '2': false, '3': false });
+});
+
+test('a contested exact arrival is never matched automatically, and the owner is told why', async () => {
+  // An API transfer of the same amount landed after this manual pledge was made, and was confirmed
+  // by the server without a reference. Its arrival must not be counted again for this pledge.
+  const rivals = [{ amount: 700, from: CREATED + 10_000, until: CREATED + 600_000 }];
+  const err = await refusal(checkReceipt(input([row(1, 700, 45)], { rivals })));
+  assert.equal(err.details.verification.outcome, 'several');
+  assert.equal(err.details.verification.receipts?.[0].contested, true);
+  assert.match(err.message, /another pledge of the same amount could account for that transfer/);
+  // The owner can still choose it, deliberately.
+  const got = await checkReceipt(input([row(1, 700, 45)], { rivals, choice: '1' }));
+  assert.equal(got.transactionId, '1');
+});
+
+test('another donor still waiting with the same amount makes an arrival contested', async () => {
+  const rivals = [{ amount: 700, from: CREATED - 1000, until: null }];
+  const err = await refusal(checkReceipt(input([row(1, 700, 45)], { rivals })));
+  assert.equal(err.details.verification.outcome, 'several');
+});
+
+test('the ledger: recorded ids are used, unrecorded pledges are rivals, cancelled ones are neither', () => {
+  const at = (s: number) => new Date(CREATED + s * 1000).toISOString();
+  const p = (over: Partial<Pledge>): Pledge => ({ ...base, createdAt: at(0), updatedAt: at(0), ...over });
+  const ledger = receiptLedger([
+    p({ id: 'self', status: 'sent' }),
+    p({ id: 'a', status: 'confirmed', transactionId: '55', receivedAmount: 500, amountVerified: true }),
+    p({ id: 'b', status: 'confirmed', method: 'api', amount: 300, transferredAt: at(5), updatedAt: at(5) }),
+    p({ id: 'c', status: 'sent', amount: 200, createdAt: at(10) }),
+    p({ id: 'd', status: 'cancelled', amount: 900 }),
+    p({ id: 'e', status: 'confirmed', amount: 400, receivedAmount: 0, createdAt: 'garbage' }),
+  ], 'self');
+  assert.deepEqual([...ledger.used], ['55']);
+  assert.deepEqual(ledger.rivals, [
+    { amount: 300, from: CREATED, until: CREATED + 5000 + RECEIPT_INDEXING_SLACK_MS },
+    { amount: 200, from: CREATED + 10_000, until: null },
+  ]);
 });
 
 // ---------- the request to RIPE ----------

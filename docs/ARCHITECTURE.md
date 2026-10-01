@@ -147,34 +147,42 @@ the partition after each change, so the project row never drifts.
 ### Checking a manual pledge
 
 A manual pledge records what the donor said they would send. The donor transfers on
-atlas.ripe.net, out of the site's sight, and may send a different amount. When the owner confirms,
+atlas.ripe.net, where the site cannot see it, and may send a different amount. When the owner confirms,
 they may paste a key of their own with only "Get information about your credits". The API reads
 `GET /credits/transactions/?sort=-date&type=admin&page_size=100` once with it, keeps nothing of the
 key, and looks for the arrival.
 
 RIPE's rows carry `id`, `type`, a signed `amount`, `date` in epoch seconds, `reason`,
 `description` and balances. No documented field names the other account, so a row cannot be tied
-to a donor. A row is a candidate when it is `admin`, its amount is positive (money in), it is no
+to a donor. A row is a candidate when it is `admin`, its amount is positive (credits in), it is no
 older than the pledge (to the second, since RIPE stamps whole seconds), and its id is not already
-recorded against another pledge on any of the owner's projects. Then:
+recorded against another pledge on any of the owner's projects.
+
+A candidate is *contested* when another of the owner's pledges of the same amount, with no RIPE
+transaction id recorded, could account for it: a pledge still waiting (its donor may have sent), an
+API transfer (the server never looks its row up), or a manual pledge confirmed without a check. A
+waiting pledge could account for any arrival after it was created; a confirmed one, any arrival
+between its creation and ten minutes after it was last updated. Then:
 
 | Candidates | What happens |
 | --- | --- |
-| Exactly one of the pledged amount | Confirmed, verified, with RIPE's transaction id. Other amounts beside it are ignored. |
-| One, of another amount | 409. The owner sees "RIPE shows N arrived (pledged M)" and chooses to record N, confirm M unchecked, or wait. |
-| Several, or the page may be incomplete | 409 with the list. The owner picks one, or confirms M unchecked. Nothing is guessed. |
+| Exactly one of the pledged amount, not contested | Confirmed, verified, with RIPE's transaction id. Other amounts beside it are ignored. |
+| One, of another amount | 409. The owner sees "RIPE Atlas shows N credits arrived since this pledge was made (pledged M)" and chooses to record N, confirm M unchecked, or wait. |
+| Several, a contested one, or the page may be incomplete | 409 with the list, contested rows marked and none preselected. The owner picks one, or confirms M unchecked. Nothing is guessed. |
 | None | 409. The row may not be indexed yet (RIPE lists a transfer some time after it happens). Check again, or confirm M unchecked. |
 | Key refused (401/403) | 400 naming the permission. Nothing recorded. |
-| RIPE does not answer | Confirmed at M, unverified, and the response says so. |
+| RIPE does not answer | 409. Nothing recorded. Check again, or confirm M unchecked. Confirming is final, so the site does not confirm for the owner when the read times out. |
 
 A row the owner picks is read again in the request that records it, and has to pass the same
 tests, so the browser never supplies an amount. Recording never takes the project past its 100×
 ceiling: if what arrived would, the owner is told and offered M unchecked when M fits, or cancel.
+A project already at its ceiling is refused before the key is sent. What arrived is not held to the
+per-pledge maximum, which limits what a donor may reserve, not what can be recorded as received.
 
 The pledge keeps `amount` (what was pledged) and gains `receivedAmount` (what arrived, 0 when
 unchecked), `amountVerified`, and RIPE's id in `transactionId`. Totals count `receivedAmount`
 when it is set and `amount` otherwise, and the public pledge shows the counted amount, the pledged
-one, and a "Verified with RIPE Atlas" marker. Rows written before these fields read as unchecked.
+one when they differ, and a "Verified with RIPE Atlas" marker when `amountVerified` is set. Rows written before these fields read as unchecked.
 
 ### Ordering, and what happens when a transfer fails
 

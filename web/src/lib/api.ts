@@ -102,11 +102,13 @@ export interface Receipt {
   amount: number;
   at: string;
   note: string;
+  /** Another of the owner's pledges of the same amount could account for this transfer. */
+  contested: boolean;
 }
 
 /** What the server says when checking a pledge against RIPE Atlas needs the owner, or failed. */
 export interface VerificationDetails {
-  outcome: 'none' | 'different' | 'several' | 'choice-unavailable' | 'over-ceiling' | 'key-refused' | 'refused';
+  outcome: 'none' | 'different' | 'several' | 'choice-unavailable' | 'over-ceiling' | 'unreachable' | 'key-refused' | 'refused';
   pledged?: number;
   receipts?: Receipt[];
   more?: boolean;
@@ -115,10 +117,10 @@ export interface VerificationDetails {
 
 /** What a confirmation made with a key found. */
 export interface VerificationResult {
-  outcome: 'exact' | 'chosen' | 'unreachable';
+  outcome: 'exact' | 'chosen';
   pledged: number;
-  received?: number;
-  transactionId?: string;
+  received: number;
+  transactionId: string;
 }
 
 export class ApiError extends Error {

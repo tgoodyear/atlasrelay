@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, pledgeInFlight, receiptIdsInUse, recomputeProjectTotals, releasePledgeClaim, savePledge, totals } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, ownerReceiptLedger, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals, type ReceiptLedger } from '../lib/store';
 import { checkReceipt, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
@@ -660,8 +660,8 @@ app.http('pledges-update', {
       if (!isOwner || status !== 'confirmed' || pledge.method !== 'manual') {
         throw new HttpError(400, 'A RIPE Atlas key is only used when the project owner confirms a manual pledge. Nothing was recorded.');
       }
-      if (!wantsCheck) throw new HttpError(400, 'Choosing a RIPE Atlas transaction needs the key it is read with. Nothing was recorded.');
-      if (choice !== undefined && !/^[1-9][0-9]{0,19}$/.test(choice)) throw new HttpError(400, 'Transaction id must be a RIPE Atlas transaction id');
+      if (!wantsCheck) throw new HttpError(400, 'Choosing a RIPE Atlas transaction needs your key, so the site can read the transaction again. Nothing was recorded.');
+      if (choice !== undefined && !/^[1-9][0-9]{0,19}$/.test(choice)) throw new HttpError(400, 'Transaction id must be a RIPE Atlas transaction id, a positive whole number');
     }
     const ownerKey = wantsCheck ? assertKeyFormat(body.apiKey) : '';
 
@@ -750,26 +750,24 @@ app.http('pledges-update', {
       const liveTotals = totals(await listPledges(projectId));
       const room = maxCredits(project.creditsRequested) - liveTotals.confirmed;
       if (ownerKey) {
-        let used: Set<string>;
+        let ledger: ReceiptLedger;
         try {
-          used = await receiptIdsInUse(project.ownerId, pledge.id);
+          ledger = await ownerReceiptLedger(project.ownerId, pledge.id);
         } catch (err) {
           logError('Could not read which RIPE Atlas transactions are already matched', err);
           throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.');
         }
         try {
-          checked = await checkReceipt({ key: ownerKey, pledged: pledge.amount, since: Date.parse(pledge.createdAt), used, room, choice });
+          checked = await checkReceipt({ key: ownerKey, pledged: pledge.amount, since: Date.parse(pledge.createdAt), used: ledger.used, rivals: ledger.rivals, room, choice });
         } catch (err) {
           const outcome = ((err as HttpError).details as { verification?: VerificationDetails } | undefined)?.verification?.outcome;
           logEvent('receipt-check', { outcome: outcome ?? 'error', projectId, pledgeId: pledge.id });
           throw err;
         }
         logEvent('receipt-check', { outcome: checked.outcome, projectId, pledgeId: pledge.id });
-        if (checked.verified) {
-          receivedAmount = checked.amount;
-          amountVerified = true;
-          transactionId = checked.transactionId;
-        }
+        receivedAmount = checked.amount;
+        amountVerified = true;
+        transactionId = checked.transactionId;
       } else if (pledge.amount > room) {
         throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
       }
@@ -804,10 +802,9 @@ app.http('pledges-update', {
     return json({
       pledge: privatePledge(updated),
       project: publicProject(updatedProject),
-      // Present only when the owner sent a key: what the check found, so the page can say whether
-      // the amount was verified or RIPE did not answer and the pledge was confirmed as pledged.
+      // Present only when the owner sent a key: what the check found and recorded.
       verification: checked
-        ? { outcome: checked.outcome, pledged: pledge.amount, received: checked.verified ? checked.amount : undefined, transactionId: checked.verified ? checked.transactionId : undefined }
+        ? { outcome: checked.outcome, pledged: pledge.amount, received: checked.amount, transactionId: checked.transactionId }
         : undefined,
     });
   }),

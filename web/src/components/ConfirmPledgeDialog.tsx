@@ -62,8 +62,10 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
       if (v && v.outcome !== 'key-refused' && v.outcome !== 'refused') {
         setDetails(v);
         setMessage(text);
+        // Pre-selected only where the server offered exactly one arrival as this pledge's. Anywhere
+        // else, including a fresh list after a choice went stale, the owner picks for themselves.
         const list = v.receipts ?? [];
-        setPicked(list.length === 1 ? list[0].id : '');
+        setPicked(v.outcome === 'different' && list.length === 1 && !list[0].contested ? list[0].id : '');
         setStep('decide');
       } else {
         if (v?.outcome === 'key-refused') setApiKey('');
@@ -117,8 +119,8 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
                 <span className="hint">
                   To record the amount that actually arrived, paste a key of your own from{' '}
                   <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a> with only the
-                  {' '}<strong>Get information about your credits</strong> permission. We read your recent transfers once to find
-                  this one, then discard the key. It is never stored.
+                  {' '}<strong>Get information about your credits</strong> permission. We read your recent transfers to find
+                  this one and never store the key.
                 </span>
               </div>
               {error && <div className="alert alert-error">{error}</div>}
@@ -141,7 +143,10 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
                       <input type="radio" name="receipt" checked={picked === r.id} disabled={busy} onChange={() => setPicked(r.id)} />
                       <div>
                         <strong>{fmt(r.amount)} credits</strong>
-                        <span>{when(r.at)} · transaction {r.id}{r.note ? ` · ${r.note}` : ''}</span>
+                        <span>
+                          {when(r.at)} · transaction {r.id}{r.note ? ` · ${r.note}` : ''}
+                          {r.contested ? ' · another pledge of the same amount could account for this one' : ''}
+                        </span>
                       </div>
                     </label>
                   ))}
@@ -172,15 +177,11 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
 
           {step === 'done' && (
             <>
-              {result && result.outcome !== 'unreachable' && result.received !== undefined ? (
+              {result && (
                 <div className="alert alert-success">
                   RIPE Atlas shows {fmt(result.received)} credits arrived
                   {result.received !== pledged ? ` (pledged ${fmt(pledged)})` : ''}, and the pledge now records that amount.
-                  {result.transactionId ? ` RIPE transaction ${result.transactionId}.` : ''}
-                </div>
-              ) : (
-                <div className="alert alert-warn">
-                  RIPE Atlas did not answer, so the pledge was confirmed at the pledged {fmt(pledged)} credits without checking.
+                  {` RIPE transaction ${result.transactionId}.`}
                 </div>
               )}
               <p>If you made the key only for this, you can delete it at <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noreferrer">atlas.ripe.net/keys</a>.</p>

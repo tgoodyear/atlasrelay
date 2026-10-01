@@ -160,9 +160,17 @@ test('one arrival is never matched to two pledges', async ({ person }) => {
   }
   const key = await ownerKey({ transactions: transactionsOk([adminRow(950001, 300, 5)]) });
 
-  const ok = await researcher.request.patch(`/api/pledges/${project.id}/${ids[0]}`, { data: { status: 'confirmed', apiKey: key } });
+  // Both donors pledged 300 and either could have sent it, so it is not matched for the owner.
+  const asked = await researcher.request.patch(`/api/pledges/${project.id}/${ids[0]}`, { data: { status: 'confirmed', apiKey: key } });
+  expect(asked.status()).toBe(409);
+  const asking = (await asked.json()).error.details.verification;
+  expect(asking.outcome).toBe('several');
+  expect(asking.receipts).toMatchObject([{ id: '950001', amount: 300, contested: true }]);
+
+  // The owner chooses it for the first pledge.
+  const ok = await researcher.request.patch(`/api/pledges/${project.id}/${ids[0]}`, { data: { status: 'confirmed', apiKey: key, transactionId: '950001' } });
   expect(ok.status(), await ok.text()).toBe(200);
-  expect((await ok.json()).verification).toMatchObject({ outcome: 'exact', received: 300, transactionId: '950001' });
+  expect((await ok.json()).verification).toMatchObject({ outcome: 'chosen', received: 300, transactionId: '950001' });
 
   const again = await researcher.request.patch(`/api/pledges/${project.id}/${ids[1]}`, { data: { status: 'confirmed', apiKey: key } });
   expect(again.status()).toBe(409);
@@ -172,6 +180,42 @@ test('one arrival is never matched to two pledges', async ({ person }) => {
   expect(named.status()).toBe(409);
   expect((await named.json()).error.details.verification.outcome).toBe('choice-unavailable');
   expect(await row('pledges', project.id, ids[1])).toMatchObject({ status: 'pledged' });
+});
+
+test('an API transfer that arrived after a manual pledge is not matched to it', async ({ person }) => {
+  const researcher = await person({ role: 'researcher' });
+  const manualDonor = await person({ role: 'donor' });
+  const apiDonor = await person({ role: 'donor' });
+  const project = await postProject(researcher, { creditsRequested: 2000 });
+  const manual = await manualDonor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 700, method: 'manual' } });
+  expect(manual.status()).toBe(201);
+  const manualId = (await manual.json()).pledge.id as string;
+
+  // A second donor sends the same amount through the API, which the server confirms with no reference.
+  const donorKey = fakeKey();
+  await ripe.scenario(donorKey, {});
+  const api = await apiDonor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 700, method: 'api', apiKey: donorKey } });
+  expect(api.status(), await api.text()).toBe(201);
+  expect((await api.json()).pledge.status).toBe('confirmed');
+
+  // The only arrival in the researcher's log is that API transfer.
+  const key = await ownerKey({ transactions: transactionsOk([adminRow(980001, 700, 5)]) });
+  const res = await researcher.request.patch(`/api/pledges/${project.id}/${manualId}`, { data: { status: 'confirmed', apiKey: key } });
+  expect(res.status()).toBe(409);
+  const v = (await res.json()).error.details.verification;
+  expect(v.outcome).toBe('several');
+  expect(v.receipts).toMatchObject([{ id: '980001', contested: true }]);
+  expect(await row('pledges', project.id, manualId)).toMatchObject({ status: 'pledged' });
+
+  // In the dialog nothing is pre-selected and the row says why.
+  await researcher.page.goto(`/projects/${project.id}`);
+  await researcher.page.locator('.pledge').filter({ hasText: manualDonor.name }).getByRole('button', { name: 'Confirm received' }).click();
+  const dialog = researcher.page.getByRole('dialog', { name: 'Confirm this pledge' });
+  await dialog.getByLabel('RIPE Atlas API key (optional)').fill(key);
+  await dialog.getByRole('button', { name: 'Check and confirm' }).click();
+  await expect(dialog.locator('.alert-warn')).toContainText('another pledge of the same amount could account for that transfer');
+  await expect(dialog.getByRole('radio', { name: /another pledge of the same amount could account for this one/ })).not.toBeChecked();
+  await expect(dialog.getByRole('button', { name: 'Choose a transfer' })).toBeDisabled();
 });
 
 test('a key without the read permission is refused, and nothing is recorded', async ({ person }) => {
@@ -185,13 +229,15 @@ test('a key without the read permission is refused, and nothing is recorded', as
   expect(JSON.stringify(await allRows())).not.toContain(FAKE_KEY_PREFIX);
 });
 
-test('RIPE not answering confirms the pledged amount, labelled unchecked', async ({ person }) => {
+test('RIPE not answering records nothing, and the pledged amount is one click away', async ({ person }) => {
   const { researcher, donor, project, pledgeId } = await manualPledge(person);
   const key = await ownerKey({ transactions: { kind: 'json', status: 503, body: {} } });
 
   const dialog = await checkWithKey(researcher.page, project, donor, key);
-  await expect(dialog.locator('.alert-warn')).toHaveText('RIPE Atlas did not answer, so the pledge was confirmed at the pledged 700 credits without checking.');
-  await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog.locator('.alert-warn')).toHaveText('RIPE Atlas did not answer, so the amount could not be checked. Nothing was recorded. Check again, or confirm the pledged 700 credits without checking.');
+  expect(await row('pledges', project.id, pledgeId)).toMatchObject({ status: 'sent' });
+  await dialog.getByRole('button', { name: 'Confirm the pledged 700 credits without checking' }).click();
+  await expect(dialog).toHaveCount(0);
   const pledge = researcher.page.locator('.pledge').filter({ hasText: donor.name });
   await expect(pledge.getByText('Confirmed', { exact: true })).toBeVisible();
   await expect(pledge.getByText('Verified with RIPE Atlas')).toHaveCount(0);
