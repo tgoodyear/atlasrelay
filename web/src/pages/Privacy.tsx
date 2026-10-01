@@ -77,7 +77,8 @@ export default function Privacy() {
               <li>
                 Google: the site uses Azure's default request to Google, which asked for your name and
                 email address (the openid, email and profile scopes) when this page was written. The
-                account name it passes on can be your email address.
+                account name it passes on can be your email address, so a Google account's display
+                name starts as a placeholder such as user-1a2b3c instead.
               </li>
             )}
             {offers('orcid') && (
