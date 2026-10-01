@@ -16,9 +16,11 @@
 //   kv-atlasrelay-<env>-<suffix>   RBAC, public network access disabled, private endpoint (the
 //                                  suffix fills the name to 24 characters: 6 for dev)
 //   id-atlasrelay-<env>-e2e        Key Vault Secrets User on the vault, Blob Data Contributor on
-//                                  the results container, AcrPull on the registry
+//                                  the results and locks containers, AcrPull on the registry
 //   cratlasrelay<env><6>           container registry for the test image (Basic, Entra ID only)
 //   stare2e<env><6>/results        test results; Entra ID only, no shared keys
+//   stare2e<env><6>/locks          the lease that lets one run at a time deploy to the
+//                                  environment and run the tests (e2e-real/lib/lock.mjs)
 //   cae-atlasrelay-<env>           workload-profiles environment (Consumption), in snet-cae
 //   caj-atlasrelay-<env>-e2e       manual job, one replica, 45 minutes, no retry
 targetScope = 'resourceGroup'
@@ -63,6 +65,8 @@ var secretNames = {
   ripeRecipientAccount: 'ripe-recipient-account'
 }
 var resultsContainer = 'results'
+// e2e-real/lib/lock.mjs (LOCK_CONTAINER) and scripts/lib/e2e-job.sh use this name.
+var locksContainer = 'locks'
 
 // ---------- network ----------
 
@@ -226,6 +230,15 @@ resource results 'Microsoft.Storage/storageAccounts@2023-05-01' = {
         publicAccess: 'None'
       }
     }
+
+    // One blob, full-flow, leased by the run that is deploying to the environment or testing it.
+    // Its own container, so the roles that renew the lease grant nothing on the results.
+    resource locks 'containers' = {
+      name: locksContainer
+      properties: {
+        publicAccess: 'None'
+      }
+    }
   }
 
   resource lifecycle 'managementPolicies' = {
@@ -322,6 +335,29 @@ resource operatorReadsResults 'Microsoft.Authorization/roleAssignments@2022-04-0
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.storageBlobDataReader)
     principalId: operatorPrincipalId
     description: 'The operator reads the results of runs started with scripts/run-e2e.sh'
+  }
+}
+
+// scripts/run-e2e.sh takes the lock as the operator before it deploys to the environment.
+resource operatorHoldsLock 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(operatorPrincipalId)) {
+  scope: results::blobs::locks
+  name: guid(results::blobs::locks.id, operatorPrincipalId, roles.storageBlobDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.storageBlobDataContributor)
+    principalId: operatorPrincipalId
+    description: 'scripts/run-e2e.sh takes, renews and releases the full-flow lock'
+  }
+}
+
+// The job renews the lease its orchestrator took, or takes one when started without it.
+resource testHoldsLock 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: results::blobs::locks
+  name: guid(results::blobs::locks.id, testIdentity.id, roles.storageBlobDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.storageBlobDataContributor)
+    principalId: testIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'The full-flow test job renews the full-flow lock'
   }
 }
 
@@ -433,6 +469,7 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
             // Selects the test identity at the managed identity endpoint.
             { name: 'AZURE_CLIENT_ID', value: testIdentity.properties.clientId }
             { name: 'RESULTS_CONTAINER_URL', value: '${results.properties.primaryEndpoints.blob}${resultsContainer}' }
+            { name: 'LOCK_CONTAINER_URL', value: '${results.properties.primaryEndpoints.blob}${locksContainer}' }
             { name: 'E2E_RESEARCHER_USERNAME_SECRET', value: secretNames.researcherUsername }
             { name: 'E2E_RESEARCHER_PASSWORD_SECRET', value: secretNames.researcherPassword }
             { name: 'E2E_RESEARCHER_TOTP_SECRET', value: secretNames.researcherTotp }
@@ -454,6 +491,7 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
     vaultZoneLink
     testReadsSecrets
     testWritesResults
+    testHoldsLock
     testPullsImage
   ]
 }
@@ -463,4 +501,5 @@ output vaultName string = vault.name
 output resultsAccountName string = results.name
 output resultsContainerName string = resultsContainer
 output resultsContainerId string = results::blobs::container.id
+output locksContainerName string = locksContainer
 output registryName string = registry.name

@@ -3,13 +3,20 @@
 // registry, starts the test job with it, waits for the execution, reads the job's logs and
 // downloads the results. That is all this grants:
 //
-// - a custom role on the registry: read it, upload a build context, queue a build (ACR Tasks) and
-//   read the build's status, output image and log. No push or pull of its own, no registry
-//   settings, no tokens;
+// - a custom role on the registry: read it, upload a build context, queue a build or a run (ACR
+//   Tasks), read its status, output image and log, and cancel it. No push or pull of its own, no
+//   registry settings, no tokens. Besides the test image, the workflow uses it to run the Static
+//   Web Apps upload client, and cancels that run when it stops early;
 // - a custom role on the resource group: read the job, start it, read and stop its executions,
 //   and query the two Container Apps log tables in the workspace (table-level read, so none of the
 //   site's telemetry);
-// - Storage Blob Data Reader on the results container.
+// - Storage Blob Data Reader on the results container;
+// - Storage Blob Data Contributor on the locks container, to take, renew and release the lease
+//   that keeps one run at a time on the environment. The container holds that one blob.
+//
+// The workflow also deploys the commit's site and API to the environment before it tests them;
+// the roles in rbac.bicep, which every environment's CI identity has, cover the API and the
+// site's deployment token, and the builder role covers the run that uploads the site.
 //
 // No role on the Key Vault, control plane or data: CI cannot read, list or change the test
 // accounts or RIPE Atlas keys, open the vault's network, or grant itself access. It cannot change
@@ -29,6 +36,9 @@ param resultsAccountName string
 @description('Name of the results container')
 param resultsContainerName string
 
+@description('Name of the container that holds the full-flow lock')
+param locksContainerName string
+
 @description('Name of the container registry that holds the test image')
 param registryName string
 
@@ -40,7 +50,7 @@ resource builderRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(subscription().id, resourceGroup().id, 'atlasrelay-e2e-image-builder')
   properties: {
     roleName: 'Atlas Relay e2e image builder (${environmentName})'
-    description: 'Build the Atlas Relay full-flow test image in the registry with ACR Tasks and read the build.'
+    description: 'Build the Atlas Relay full-flow test image and run the site upload in the registry with ACR Tasks, and read or cancel those runs.'
     type: 'CustomRole'
     assignableScopes: [resourceGroup().id]
     permissions: [
@@ -51,6 +61,7 @@ resource builderRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
           'Microsoft.ContainerRegistry/registries/scheduleRun/action'
           'Microsoft.ContainerRegistry/registries/runs/read'
           'Microsoft.ContainerRegistry/registries/runs/listLogSasUrl/action'
+          'Microsoft.ContainerRegistry/registries/runs/cancel/action'
         ]
         notActions: []
         dataActions: []
@@ -123,6 +134,10 @@ resource results 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
     resource container 'containers' existing = {
       name: resultsContainerName
     }
+
+    resource locks 'containers' existing = {
+      name: locksContainerName
+    }
   }
 }
 
@@ -136,5 +151,18 @@ resource readResults 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: principalId
     principalType: 'ServicePrincipal'
     description: 'GitHub Actions (OIDC) downloads the full-flow test results'
+  }
+}
+
+var storageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource holdLock 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: results::blobs::locks
+  name: guid(results::blobs::locks.id, principalId, storageBlobDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+    principalId: principalId
+    principalType: 'ServicePrincipal'
+    description: 'GitHub Actions (OIDC) takes, renews and releases the full-flow lock'
   }
 }

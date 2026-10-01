@@ -421,6 +421,19 @@ identity alone has AcrPull. The CI identity can queue a build, start the job and
 and has no role on the vault. GitHub holds no copy of the passwords or the keys, and the job
 redacts them, and the two RIPE account emails, from its logs and results.
 
+dev is one site, one API and one set of tables. Each run deploys the build it tests there, and
+keeps every other run off dev until its tests end. The orchestrator (the workflow, or
+`scripts/run-e2e.sh` on the owner's machine) takes a 60-second lease on one blob, `full-flow` in
+the results account's `locks` container, before it publishes the API and uploads the site, and
+renews it every 20 seconds. It starts the job with the lease's id; the job renews the same lease
+while its tests run, and the orchestrator releases it at the end. A run that finds it held waits
+up to 45 minutes. A lease that nobody renews lapses within a minute, so a run that dies frees dev
+on its own, and with only one lock, no two runs can each wait for the other. The
+deploy uses the roles the CI identity has in every environment (`infra/rbac.bicep`), on dev's
+resources only; `scripts/lib/e2e-job.sh` refuses prod and checks each resource's `environment` tag.
+The CI identity, the operator and the test identity have Storage Blob Data Contributor on the
+`locks` container, which holds nothing else.
+
 The RIPE keys belong to the harness, not to donors. The site's rule that it keeps no donor's key
 is unchanged: the donor key reaches the site the way any donor's would, pasted into the pledge
 form, and the site uses it only for the requests that carry it and keeps nothing. The job uses the
@@ -507,16 +520,22 @@ docs/     this spec, RIPE research notes, runbook
 - `infra.yml`: builds and lints every template (a warning fails it), runs
   `scripts/check-params.sh` and ShellCheck, on PRs and on `main`. It holds no Azure identity.
 - `e2e-dev.yml` (push to `main` that touches `e2e-real/`, `web/e2e/ui.ts`,
-  `scripts/lib/e2e-job.sh` or the workflow, and manual; never on pull requests; it tests the site
-  as deployed on dev and deploys nothing there; every job checks that the
-  repository is `tgoodyear/atlasrelay`, the actor `tgoodyear` and the ref `main`): job `run`, in
-  the GitHub Environment `dev` (main only; waits for the owner's approval unless
-  `scripts/bootstrap.sh dev` last ran with `--no-approval`), logs in with OIDC as the dev CI identity, builds
-  `e2e-real/Dockerfile` in dev's registry with ACR Tasks, starts the Container Apps job with the
-  new image pinned by digest, polls the execution, downloads the results from blob storage and
-  uploads only the summary as an artifact (the repository is public), reads the job's logs from Log Analytics when the execution failed,
-  and fails unless every test passed. Without the repository variable `DEV_ENABLED=true` it only
-  prints a notice.
+  `scripts/lib/e2e-job.sh` or the workflow, and manual; never on pull requests; every job checks
+  that the repository is `tgoodyear/atlasrelay`, the actor `tgoodyear` and the ref `main`): job
+  `build` (no Azure identity) builds the site and the API at the commit and stages the API zip;
+  job `run`, in the GitHub Environment `dev` (main only; waits for the owner's approval unless
+  `scripts/bootstrap.sh dev` last ran with `--no-approval`), logs in with OIDC as the dev CI
+  identity, builds `e2e-real/Dockerfile` in dev's registry with ACR Tasks, takes the full-flow
+  lock, publishes the API and uploads the site to dev, starts the Container Apps job with the new
+  image pinned by digest and the lock's lease, polls the execution, releases the lock, downloads
+  the results from blob storage and uploads only the summary as an artifact (the repository is
+  public), reads the job's logs from Log Analytics when the execution failed, and fails unless
+  every test passed. It uploads the site by running the Static Web Apps upload client
+  (`mcr.microsoft.com/appsvc/staticappsclient:stable`, the image the Deploy workflow's action
+  runs) as an ACR Tasks run in dev's registry, with the deployment token as a secret value of the
+  run, and installs no packages. It signs az in again with a fresh OIDC token during the run,
+  since az cannot renew the first sign-in. Without the repository variable `DEV_ENABLED=true` it only prints a
+  notice.
 - `e2e-image.yml` (PRs that change `e2e-real/` or `web/e2e/ui.ts`): builds the test image and
   lists the tests inside it. Pushes nothing, holds no identity.
 - `deploy.yml` degrades to build-only until bootstrap has run; after that
