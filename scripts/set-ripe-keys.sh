@@ -69,14 +69,27 @@ fi
 
 # The source vault refuses every network. Admit this machine's address only while reading from it,
 # and remove the rule again on the way out, whatever happens.
-# Fails when the rule is still there, so `set -e` stops the script with the EXIT trap still set,
+# source_acl: "<default action> <public network access> <ip rule count> <vnet rule count>"
+source_acl() {
+  az keyvault show --name "$FROM_VAULT" --subscription "$FROM_SUB" \
+    --query "[properties.networkAcls.defaultAction, properties.publicNetworkAccess, length(properties.networkAcls.ipRules || \`[]\`), length(properties.networkAcls.virtualNetworkRules || \`[]\`)]" \
+    -o tsv | tr '\t\n' '  ' | sed 's/ *$//'
+}
+# The vault must refuse every network before this script touches it, so the one rule it adds is
+# the only way in, and removing it closes the vault again.
+acl=$(source_acl) || die "can't read $FROM_VAULT's network settings"
+[ "$acl" = "Deny Enabled 0 0" ] ||
+  die "$FROM_VAULT must refuse every network first (default action Deny, public network access Enabled, no address or network rules); it has: $acl. docs/RUNBOOK.md, \"Full-flow tests on dev\""
+
+# Fails when the vault is still open, so `set -e` stops the script with the EXIT trap still set,
 # which tries again.
 source_close() {
-  if az keyvault network-rule remove --name "$FROM_VAULT" --subscription "$FROM_SUB" \
-    --ip-address "$IP/32" -o none 2> /dev/null; then
+  az keyvault network-rule remove --name "$FROM_VAULT" --subscription "$FROM_SUB" \
+    --ip-address "$IP/32" -o none 2> /dev/null || true
+  if [ "$(source_acl 2> /dev/null)" = "Deny Enabled 0 0" ]; then
     return 0
   fi
-  echo "WARNING: could not remove $IP/32 from $FROM_VAULT's network rules; remove it by hand" >&2
+  echo "WARNING: $FROM_VAULT still has a network rule; remove $IP/32 from it by hand" >&2
   return 1
 }
 # The traps go first: the add can be interrupted, or fail after Azure has applied it.

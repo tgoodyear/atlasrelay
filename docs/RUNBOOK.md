@@ -393,7 +393,9 @@ To set it up:
    permissions above and nothing else. Set a validity window you are willing to renew; once it
    ends, the permission check stops the file.
 2. Store each key in a Key Vault you can read, with the account's RIPE NCC Access email in the tag
-   `ripe-user`. The vault can be any vault you already keep secrets in.
+   `ripe-user`. Use a vault that refuses every network (default action Deny, no address or
+   network rules); `scripts/set-ripe-keys.sh` checks this, admits your address only while it reads
+   the keys, and checks the vault is closed again afterwards.
 3. Copy them into the test vault, saying which is which:
 
    ```bash
