@@ -210,34 +210,41 @@ e2e_lock_end() {
 
 # What is deploying right now, so an exit can wait for it (or cancel it) before it releases the
 # lock: a deploy that lands after the release would overwrite the next run's build.
-#   api <scm host> <deployment id> <token>   or   site <registry> <resource group> <run id>
+#   api <scm host> <deployment id> <token> <start>   or   site <registry> <resource group> <run id> <start>
 E2E_IN_FLIGHT=()
+# The registry ends an upload run 20 minutes after it is queued (--timeout 1200), whatever happens.
+# A Flex Consumption deployment has no such limit, so its wait stops at the same 20 minutes.
+E2E_DEPLOY_LIMIT=1200
 
-# e2e_settle_deploy: waits for the deploy in flight, if any, to end, cancelling a site upload.
-# Bounded: 10 minutes for the API, 2 for the upload to stop.
+# e2e_settle_deploy: true once the deploy in flight, if any, has ended. It cancels a site upload
+# and waits for it to stop, which the registry's own timeout guarantees; it waits for an API
+# deployment. Bounded by E2E_DEPLOY_LIMIT from the deploy's start, plus a minute.
 e2e_settle_deploy() {
   [ ${#E2E_IN_FLIGHT[@]} -gt 0 ] || return 0
-  local status
+  local status="" until=$(( ${E2E_IN_FLIGHT[4]} + E2E_DEPLOY_LIMIT + 60 ))
   case "${E2E_IN_FLIGHT[0]}" in
     api)
       echo "waiting for the API deployment to end before giving up the lock" >&2
-      for _ in $(seq 1 120); do
+      while [ "$(date +%s)" -lt "$until" ]; do
         status=$(curl -sS --max-time 30 "https://${E2E_IN_FLIGHT[1]}/api/deployments/${E2E_IN_FLIGHT[2]}" \
           -H @<(printf 'Authorization: Bearer %s\n' "${E2E_IN_FLIGHT[3]}") | jq -r '.status // empty' 2> /dev/null || true)
-        case "$status" in 4|3|-1|5|6) break ;; esac
+        case "$status" in 4|3|-1|5|6) E2E_IN_FLIGHT=(); return 0 ;; esac
         sleep 5
       done ;;
     site)
       echo "cancelling the site upload (${E2E_IN_FLIGHT[3]}) before giving up the lock" >&2
       az acr task cancel-run ${AZ_SUB[@]+"${AZ_SUB[@]}"} -r "${E2E_IN_FLIGHT[1]}" -g "${E2E_IN_FLIGHT[2]}" --run-id "${E2E_IN_FLIGHT[3]}" -o none 2> /dev/null || true
-      for _ in $(seq 1 24); do
+      while [ "$(date +%s)" -lt "$until" ]; do
         status=$(az acr task show-run ${AZ_SUB[@]+"${AZ_SUB[@]}"} -r "${E2E_IN_FLIGHT[1]}" -g "${E2E_IN_FLIGHT[2]}" --run-id "${E2E_IN_FLIGHT[3]}" \
           --query status -o tsv 2> /dev/null || true)
-        case "$status" in Succeeded|Failed|Canceled|Error|Timeout) break ;; esac
-        sleep 5
+        case "$status" in Succeeded|Failed|Canceled|Error|Timeout) E2E_IN_FLIGHT=(); return 0 ;; esac
+        sleep 10
       done ;;
   esac
-  E2E_IN_FLIGHT=()
+  local what="API deployment ${E2E_IN_FLIGHT[2]}"
+  [ "${E2E_IN_FLIGHT[0]}" = api ] || what="site upload run ${E2E_IN_FLIGHT[3]}"
+  _e2e_error "the $what had not ended (last status: ${status:-unknown}); leaving the lock to lapse rather than releasing it. Check dev's build before the next run."
+  return 1
 }
 
 # e2e_upload_site REGISTRY RESOURCE_GROUP SITE_DIR DEPLOYMENT_TOKEN
@@ -249,7 +256,7 @@ e2e_settle_deploy() {
 # out of the run's log and its stored definition, and az's command log records no values, but it
 # is on az's command line while az queues the run. The build context is SITE_DIR alone.
 e2e_upload_site() {
-  local registry=$1 rg=$2 site_dir=$3 token=$4 ctx run_id status=""
+  local registry=$1 rg=$2 site_dir=$3 token=$4 ctx run_id queued status=""
   ctx=$(mktemp -d) || return 1
   cp -R "$site_dir" "$ctx/app" || { rm -rf "$ctx"; return 1; }
   # The variables are the ones the Static Web Apps CLI (swa deploy) sets for the client.
@@ -271,11 +278,12 @@ steps:
       - DEPLOYMENT_TOKEN={{.Values.token}}
 YAML
   # Queued, not followed, so its id is known: an exit while it runs cancels it (e2e_settle_deploy).
+  queued=$(date +%s)
   run_id=$(az acr run ${AZ_SUB[@]+"${AZ_SUB[@]}"} -r "$registry" -g "$rg" --set-secret "token=$token" -f acr-upload.yaml \
-    --timeout 1200 --no-wait "$ctx" 2>&1 >/dev/null | sed -n 's/.*Queued a run with ID: \([A-Za-z0-9]*\).*/\1/p' | tail -1)
+    --timeout "$E2E_DEPLOY_LIMIT" --no-wait "$ctx" 2>&1 >/dev/null | sed -n 's/.*Queued a run with ID: \([A-Za-z0-9]*\).*/\1/p' | tail -1)
   rm -rf "$ctx"
   [ -n "$run_id" ] || { _e2e_error "the registry returned no run id for the upload"; return 1; }
-  E2E_IN_FLIGHT=(site "$registry" "$rg" "$run_id")
+  E2E_IN_FLIGHT=(site "$registry" "$rg" "$run_id" "$queued")
   az acr task logs ${AZ_SUB[@]+"${AZ_SUB[@]}"} -r "$registry" -g "$rg" --run-id "$run_id" || echo "warning: could not read the upload's log" >&2
   for _ in $(seq 1 120); do
     status=$(az acr task show-run ${AZ_SUB[@]+"${AZ_SUB[@]}"} -r "$registry" -g "$rg" --run-id "$run_id" --query status -o tsv) || return 1
@@ -292,7 +300,7 @@ YAML
 # workflow, with the same roles (infra/rbac.bicep), against ENV's resources only: each must carry
 # the tag environment=ENV.
 e2e_deploy() {
-  local sub=$1 env=$2 rg=$3 swa=$4 registry=$5 site_dir=$6 api_zip=$7 site_url site host ids lower app app_env scm token code id status script
+  local sub=$1 env=$2 rg=$3 swa=$4 registry=$5 site_dir=$6 api_zip=$7 site_url site host ids lower app app_env scm token code id status script published
   site_url="https://management.azure.com/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Web/staticSites/$swa"
   site=$(az rest --subscription "$sub" --method get --url "$site_url?api-version=2024-04-01" -o json) || return 1
   host=$(jq -r '.properties.defaultHostname // empty' <<< "$site")
@@ -316,6 +324,7 @@ e2e_deploy() {
   echo "publishing the API to $(basename "$ids")"
   token=$(az account get-access-token --subscription "$sub" --query accessToken -o tsv) || return 1
   _e2e_mask "$token"
+  published=$(date +%s)
   code=$(curl -sS --max-time 300 -o "$E2E_LOCK_DIR/publish.txt" -w '%{http_code}' -X POST "https://$scm/api/publish?RemoteBuild=false" \
     -H @<(printf 'Authorization: Bearer %s\n' "$token") -H 'Content-Type: application/zip' --data-binary "@$api_zip") || return 1
   case "$code" in
@@ -325,7 +334,7 @@ e2e_deploy() {
       # 6 partly succeeded. The endpoint can miss a poll while the app restarts.
       id=$(tr -d '"[:space:]' < "$E2E_LOCK_DIR/publish.txt")
       [[ $id =~ ^[A-Za-z0-9-]+$ ]] || { _e2e_error "publish returned no deployment id"; return 1; }
-      E2E_IN_FLIGHT=(api "$scm" "$id" "$token")
+      E2E_IN_FLIGHT=(api "$scm" "$id" "$token" "$published")
       status=""
       for _ in $(seq 1 120); do
         _e2e_sleep 5
@@ -378,8 +387,11 @@ _e2e_execution_status() {
 _e2e_on_exit() {
   local code=$?
   trap - INT TERM HUP
-  [ -z "$E2E_LOCK_PID" ] || e2e_settle_deploy
-  if [ -n "$E2E_LOCK_PID" ] && [ -n "${E2E_EXECUTION:-}" ] && ! _e2e_terminal "${E2E_STATUS:-}"; then
+  local settled=true
+  [ ${#E2E_IN_FLIGHT[@]} -eq 0 ] || e2e_settle_deploy || settled=false
+  if [ "$settled" = false ]; then
+    e2e_lock_end leave
+  elif [ -n "$E2E_LOCK_PID" ] && [ -n "${E2E_EXECUTION:-}" ] && ! _e2e_terminal "${E2E_STATUS:-}"; then
     echo "the test job ($E2E_EXECUTION) is still running and keeps the lock until it ends (45 minutes at most); this run no longer renews it" >&2
     e2e_lock_end leave
   else
@@ -420,9 +432,18 @@ e2e_run() {
   _e2e_output run_id "$E2E_RUN_ID"
   _e2e_output job_url "$E2E_JOB_URL"
 
+  # The lock this run takes must be the one the job renews: the job definition names it.
+  e2e_az_refresh now || return 1
+  local job_lock
+  job_lock=$(az rest ${AZ_SUB[@]+"${AZ_SUB[@]}"} --method get --url "$E2E_JOB_URL?api-version=$E2E_API" -o json |
+    jq -r '[.properties.template.containers[].env[]? | select(.name == "LOCK_CONTAINER_URL") | .value][0] // empty') || return 1
+  if [ "${job_lock%/}/full-flow" != "$blob_url" ]; then
+    _e2e_error "the job's lock (${job_lock:-none; run scripts/provision.sh}) is not $blob_url; check the settings (E2E_RESULTS_ACCOUNT)"
+    return 1
+  fi
+
   # The test image first: building it changes nothing on the environment, so it needs no lock,
   # and a run that waits for the lock waits with its image ready.
-  e2e_az_refresh now || return 1
   echo "building the test image in $E2E_REGISTRY_NAME"
   E2E_IMAGE=$(e2e_build_image "$E2E_REGISTRY_NAME" "$E2E_RG" "$E2E_IMAGE_TAG") || return 1
   echo "built $E2E_IMAGE"
