@@ -14,7 +14,7 @@ Atlas Relay is a community project and is not affiliated with or endorsed by the
 
 ## Run it locally
 
-Needs Node 22.12 or later and [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local#install-the-azure-functions-core-tools)
+Needs Node 24.11 or later and [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local#install-the-azure-functions-core-tools)
 (`func`) on your PATH; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```bash
@@ -24,7 +24,7 @@ npm run dev        # http://localhost:4280 (SWA emulator + API + Azurite)
 
 ## How it is built
 
-A React single-page app on Azure Static Web Apps, with its API on an Azure Function App (Node 22,
+A React single-page app on Azure Static Web Apps, with its API on an Azure Function App (Node 24,
 Flex Consumption plan) linked to the site, and data in Azure Table Storage, which the API reaches
 with a managed identity instead of a key. All Azure resources are defined in Bicep under
 `infra/` and deployed as one deployment stack per environment by `scripts/bootstrap.sh` and

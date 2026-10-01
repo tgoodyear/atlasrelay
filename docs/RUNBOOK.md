@@ -79,7 +79,7 @@ deleting it.
 
 Prerequisites: `az` 2.61 or later, signed in as an Owner of the subscription
 (`az login --tenant <tenant-id>` if the tenant enforces MFA); `gh`, signed in as an admin of the
-repository; `jq`, `dig` and Node 22.12+.
+repository; `jq`, `dig` and Node 24.11+.
 
 ```bash
 scripts/bootstrap.sh prod --subscription <id> --alert-email you@example.org --domain atlasrelay.org
@@ -113,7 +113,7 @@ npm run dev            # Azurite + Functions host (:7071) + Vite (:5173) + SWA e
 is missing; that file points `TABLES_CONNECTION_STRING` at Azurite. Only local runs and tests use
 a connection string; in Azure the API has `TABLES_ENDPOINT` and a managed identity instead. Open
 http://localhost:4280. The SWA emulator lets you "log in" as any username without a real
-GitHub account. Node 22.12 or newer is required; newer major versions work with a warning
+GitHub account. Node 24.11 or newer is required; newer major versions work with a warning
 from the Functions host. `func` comes from Azure Functions Core Tools v4, installed
 separately (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 

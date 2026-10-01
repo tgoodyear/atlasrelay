@@ -23,7 +23,7 @@ the project, the pledge and its confirmation.
    │  /api/*  (x-ms-client-principal injected by SWA edge)
    ▼
  Azure Static Web Apps (Standard) ── linked backend: Function App (Flex Consumption,
-   │                                   Node 22, HTTP only; refuses requests the site
+   │                                   Node 24, HTTP only; refuses requests the site
    │                                   did not send)
    │ static assets (global CDN)         │ @azure/data-tables, managed identity
    │                                    ▼
@@ -376,7 +376,7 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Resource group `rg-atlasrelay-prod` (westus2) | `infra/main.bicep` | |
 | Static Web App `swa-atlasrelay-prod` (staging environments disabled), no app settings | `infra/app.bicep` | Standard |
 | Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims`; shared keys refused | `infra/app.bicep` | Standard LRS |
-| Function App `func-atlasrelay-prod-<6 characters>` (Node 22) on plan `plan-atlasrelay-prod-api`, linked to the site as its backend, with its app settings | `infra/api.bicep` | Flex Consumption, on demand only |
+| Function App `func-atlasrelay-prod-<6 characters>` (Node 24) on plan `plan-atlasrelay-prod-api`, linked to the site as its backend, with its app settings | `infra/api.bicep` | Flex Consumption, on demand only |
 | User-assigned managed identity `id-atlasrelay-prod-api`, the Function App's identity for storage | `infra/api.bicep` | |
 | Storage account `stfnatlasrelayprod<4 characters>` for the Functions host and the deployment package (container `deployments`); shared keys refused | `infra/api.bicep` | Standard LRS |
 | Log Analytics `log-atlasrelay-prod` (0.1 GB/day cap; App Insights tables kept 90 days, other tables 30) + App Insights `appi-atlasrelay-prod` | `infra/platform.bicep` | Pay-as-you-go |
@@ -443,7 +443,7 @@ lets the API sign in to storage with a managed identity (managed functions have 
 also allows custom OIDC providers, which RIPE NCC Access sign-in would need.
 
 Why Flex Consumption: it takes identity-based host storage with no Azure Files share (on the
-Consumption and Premium plans the share's connection needs a key), runs Node 22, scales to zero
+Consumption and Premium plans the share's connection needs a key), runs Node 24, scales to zero
 and is available in westus2. The table on Microsoft's Static Web Apps page for Azure Functions
 lists Consumption, Premium and Dedicated as the plans a linked Function App may use. Flex
 Consumption is not on that list. The runbook's cutover checks the Function App directly before the
@@ -515,7 +515,7 @@ The stack's deny settings already stop the vault from being deleted outside the 
 
 ```
 web/      Vite + React + TypeScript SPA; public/staticwebapp.config.json
-api/      Azure Functions v4 (Node 22, TypeScript)
+api/      Azure Functions v4 (Node 24, TypeScript)
 infra/    main.bicep (subscription scope, one deployment stack per environment) and its modules;
           main.bicepparam reads the environment's settings
 .azure/   env.example; each environment's settings in .azure/<env>/.env (git-ignored)
