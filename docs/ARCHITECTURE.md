@@ -162,8 +162,10 @@ recorded against another pledge on any of the owner's projects.
 A candidate is *contested* when another of the owner's pledges of the same amount, with no RIPE
 transaction id recorded, could account for it: a pledge still waiting (its donor may have sent), an
 API transfer (the server never looks its row up), or a manual pledge confirmed without a check. A
-waiting pledge could account for any arrival after it was created; a confirmed one, any arrival
-between its creation and ten minutes after it was last updated. Then:
+waiting pledge could account for any arrival after it was created; a confirmed API transfer, any
+arrival from its creation to a minute after the server saw RIPE accept it (a row is dated when the
+transfer happened); any other confirmed pledge, any arrival from its creation to ten minutes after
+it was last updated. Then:
 
 | Candidates | What happens |
 | --- | --- |

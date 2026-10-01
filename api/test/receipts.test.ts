@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { AtlasRefused, AtlasUnreachable, readAdminTransactions, type TransactionPage } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 import { checkReceipt, incomingReceipts, matchReceipt, MAX_RECEIPTS_SHOWN, pageComplete, type CheckInput, type Receipt, type VerificationDetails } from '../src/lib/receipts';
-import { creditedAmount, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, toPledge, totals, type Pledge } from '../src/lib/store';
+import { creditedAmount, RECEIPT_CLOCK_SKEW_MS, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, toPledge, totals, type Pledge } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import { invocationLog, type LogSink } from '../src/lib/telemetry';
 
@@ -337,9 +337,29 @@ test('the ledger: recorded ids are used, unrecorded pledges are rivals, cancelle
   assert.deepEqual([...api.used], ['77']);
   assert.equal(api.rivals.length, 1);
   assert.deepEqual(ledger.rivals, [
-    { amount: 300, from: CREATED, until: CREATED + 5000 + RECEIPT_INDEXING_SLACK_MS },
+    // An API transfer: bounded by when the server saw RIPE accept it, not by its last write.
+    { amount: 300, from: CREATED, until: CREATED + 5000 + RECEIPT_CLOCK_SKEW_MS },
     { amount: 200, from: CREATED + 10_000, until: null },
   ]);
+});
+
+test('a later write to a pledge does not hold an API transfer\'s window open', () => {
+  // Seen on dev: deleting the donor's profile rewrote the name on an API pledge, moving updatedAt,
+  // and a later arrival of the same amount was put to the owner instead of being matched.
+  const at = (s: number) => new Date(CREATED + s * 1000).toISOString();
+  const apiPledge = { ...base, id: 'api', method: 'api' as const, status: 'confirmed' as const, amount: 100, createdAt: at(0), transferredAt: at(3), updatedAt: at(120) };
+  const { rivals } = receiptLedger([apiPledge], 'self');
+  assert.deepEqual(rivals, [{ amount: 100, from: CREATED, until: CREATED + 3000 + RECEIPT_CLOCK_SKEW_MS }]);
+  const later = incomingReceipts([row(1, 100, 300)], CREATED, new Set(), rivals);
+  assert.equal(later[0].contested, false);
+  const sameMoment = incomingReceipts([row(2, 100, 3)], CREATED, new Set(), rivals);
+  assert.equal(sameMoment[0].contested, true);
+  // An uncertain API transfer the owner confirmed has no transferredAt: its last write bounds it.
+  const uncertain = receiptLedger([{ ...apiPledge, transferredAt: '' }], 'self');
+  assert.equal(uncertain.rivals[0].until, CREATED + 120_000 + RECEIPT_INDEXING_SLACK_MS);
+  // A manual pledge confirmed without a check keeps the wider bound.
+  const manual = receiptLedger([{ ...apiPledge, method: 'manual' as const, transferredAt: '' }], 'self');
+  assert.equal(manual.rivals[0].until, CREATED + 120_000 + RECEIPT_INDEXING_SLACK_MS);
 });
 
 test('a receipt reservation is final once its pledge records the transaction, and frees itself otherwise', () => {

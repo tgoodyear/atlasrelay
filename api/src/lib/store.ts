@@ -704,11 +704,18 @@ export async function listPledgesByDonor(donorId: string): Promise<Pledge[]> {
 }
 
 /**
- * How long after a pledge was last written its transfer could still show up in RIPE's list. RIPE was
- * measured listing a transfer 40 to 70 seconds after it happened; ten minutes leaves room for that
- * being slower on another day without reaching far into later arrivals.
+ * How long after a confirmed manual pledge was last written its transfer could still be dated. A
+ * row's date is when RIPE made the transfer, not when it was listed (seen live on dev: dated the
+ * second the request was sent), so this is not about RIPE's indexing delay. It allows for an owner
+ * who confirmed a little before the credits actually arrived, which nothing here can see.
  */
 export const RECEIPT_INDEXING_SLACK_MS = 10 * 60 * 1000;
+
+/**
+ * Allowance for the clocks of this server and RIPE disagreeing, applied to an API transfer's
+ * transferredAt: the moment this server saw RIPE accept it, so its row is dated no later than that.
+ */
+export const RECEIPT_CLOCK_SKEW_MS = 60 * 1000;
 
 /** What a receipt check needs to know about the owner's other pledges. */
 export interface ReceiptLedger {
@@ -725,10 +732,14 @@ export interface ReceiptLedger {
  * a pledge that owns an arrival without having recorded its id. That is every API transfer (the
  * server never looks its row up), every manual pledge confirmed without a check, and every pledge
  * still waiting, whose donor may already have sent. A rival can own an arrival of its own amount
- * recorded after it was created; a settled one, no later than shortly after it was last written,
- * since its transfer had happened by the time it was confirmed. updatedAt only moves forward (a
- * later name scrub moves it too), so that bound errs towards calling more rows contested, which
- * only means the owner is asked rather than a row being matched for them.
+ * recorded after it was created. A confirmed API transfer's row is dated no later than
+ * transferredAt, when this server saw RIPE accept it, give or take the clocks. Any other confirmed
+ * pledge's row is dated no later than shortly after it was last written, since its transfer had
+ * happened by the time it was confirmed. updatedAt only moves forward (a later name scrub moves it
+ * too), so that bound errs towards calling more rows contested, which only means the owner is asked
+ * rather than a row being matched for them. transferredAt is used where it exists because a scrub
+ * after a test run or a profile deletion would otherwise hold an API transfer's window open, and
+ * every later arrival of that amount would be put to the owner (seen on dev).
  */
 export function receiptLedger(pledges: Pledge[], exceptPledgeId: string): ReceiptLedger {
   const used = new Set<string>();
@@ -744,8 +755,14 @@ export function receiptLedger(pledges: Pledge[], exceptPledgeId: string): Receip
     const from = Date.parse(p.createdAt);
     if (!Number.isFinite(from)) continue;
     if (p.status === 'confirmed') {
+      const accepted = p.method === 'api' ? Date.parse(p.transferredAt) : Number.NaN;
       const last = Date.parse(p.updatedAt);
-      rivals.push({ amount: creditedAmount(p), from, until: Number.isFinite(last) ? last + RECEIPT_INDEXING_SLACK_MS : null });
+      const until = Number.isFinite(accepted)
+        ? accepted + RECEIPT_CLOCK_SKEW_MS
+        : Number.isFinite(last)
+          ? last + RECEIPT_INDEXING_SLACK_MS
+          : null;
+      rivals.push({ amount: creditedAmount(p), from, until });
     } else {
       rivals.push({ amount: p.amount, from, until: null });
     }
