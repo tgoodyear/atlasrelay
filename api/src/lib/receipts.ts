@@ -51,6 +51,33 @@ export interface Rival {
   until: number | null;
 }
 
+/** Whether any rival could account for an arrival of `amount` recorded at `when` (milliseconds). */
+function rivalFor(amount: number, when: number, rivals: readonly Rival[]): boolean {
+  return rivals.some((r) => r.amount === amount && when >= Math.floor(r.from / 1000) * 1000 && (r.until === null || when <= r.until));
+}
+
+/**
+ * Whether an arrival matched automatically is still the pledge's alone, against a ledger read
+ * after RIPE answered. The first ledger read and the RIPE read are seconds apart, and an API
+ * transfer of the same amount started in between would not be in the first: its row lands in the
+ * owner's log, looks uncontested, and recording it here would count one transfer twice.
+ */
+export function stillUncontested(receipt: Pick<Receipt, 'id' | 'amount' | 'at'>, ledger: { used: ReadonlySet<string>; rivals: readonly Rival[] }): boolean {
+  if (ledger.used.has(receipt.id)) return false;
+  const when = Date.parse(receipt.at);
+  if (!Number.isFinite(when)) return false;
+  return !rivalFor(receipt.amount, when, ledger.rivals);
+}
+
+/** The answer when an automatic match turned out to be contested on a second look: the owner decides. */
+export function contestedOnRecheck(receipt: Receipt, pledged: number): HttpError {
+  return new HttpError(
+    409,
+    `RIPE Atlas shows ${credits(receipt.amount)} arrived since this pledge was made, but another pledge of the same amount could account for that transfer. Choose it only if you know it came from this donor, or confirm the pledged ${credits(pledged)} without checking.`,
+    { recorded: false, verification: { outcome: 'several', pledged, receipts: [{ ...receipt, contested: true }], more: false } satisfies VerificationDetails },
+  );
+}
+
 export type ReceiptMatch =
   /** Exactly one arrival of the pledged amount. */
   | { kind: 'exact'; receipt: Receipt }
@@ -79,6 +106,8 @@ export interface CheckedConfirmation {
   /** Credits to record: what arrived, read from the owner's log in this request. */
   amount: number;
   transactionId: string;
+  /** The row itself, so the match can be weighed again against a fresher ledger before it is written. */
+  receipt: Receipt;
 }
 
 /** The most rows offered to the owner to choose from. */
@@ -129,7 +158,7 @@ export function incomingReceipts(rows: unknown[], since: number, used: ReadonlyS
     const date = row.date;
     const when = typeof date === 'number' || typeof date === 'string' ? transactionTime(date) : null;
     if (when === null || when < earliest || !Number.isFinite(new Date(when).getTime())) continue;
-    const contested = rivals.some((r) => r.amount === amount && when >= Math.floor(r.from / 1000) * 1000 && (r.until === null || when <= r.until));
+    const contested = rivalFor(amount, when, rivals);
     out.push({ id, amount, at: new Date(when).toISOString(), note: noteOf(row), contested });
   }
   return out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
@@ -304,5 +333,5 @@ export async function checkReceipt(input: CheckInput): Promise<CheckedConfirmati
       { verification: { outcome: 'over-ceiling', pledged, receipts: [picked], room: Math.max(0, room) } satisfies VerificationDetails },
     );
   }
-  return { outcome, amount: picked.amount, transactionId: picked.id };
+  return { outcome, amount: picked.amount, transactionId: picked.id, receipt: picked };
 }

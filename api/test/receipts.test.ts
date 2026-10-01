@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AtlasRefused, AtlasUnreachable, readAdminTransactions, type TransactionPage } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
-import { checkReceipt, incomingReceipts, matchReceipt, MAX_RECEIPTS_SHOWN, pageComplete, type CheckInput, type Receipt, type VerificationDetails } from '../src/lib/receipts';
+import { checkReceipt, contestedOnRecheck, incomingReceipts, stillUncontested, matchReceipt, MAX_RECEIPTS_SHOWN, pageComplete, type CheckInput, type Receipt, type VerificationDetails } from '../src/lib/receipts';
 import { creditedAmount, RECEIPT_CLOCK_SKEW_MS, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, confirmLockStale, toPledge, totals, type Pledge } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import { invocationLog, type LogSink } from '../src/lib/telemetry';
@@ -156,7 +156,8 @@ test('a page is complete unless RIPE has more and the oldest row seen is still i
 
 test('an exact arrival is recorded as verified, with its reference', async () => {
   const got = await checkReceipt(input([row(640025999, 700, 45)]));
-  assert.deepEqual(got, { outcome: 'exact', amount: 700, transactionId: '640025999' });
+  assert.deepEqual({ ...got, receipt: undefined }, { outcome: 'exact', amount: 700, transactionId: '640025999', receipt: undefined });
+  assert.deepEqual(got.receipt, { id: '640025999', amount: 700, at: new Date((SEC + 45) * 1000).toISOString(), note: '', contested: false });
 });
 
 test('a different amount is shown to the owner first, and recorded once they choose it', async () => {
@@ -168,7 +169,7 @@ test('a different amount is shown to the owner first, and recorded once they cho
   assert.deepEqual(err.details.verification.receipts?.map((x) => [x.id, x.amount]), [['77', 500]]);
 
   const got = await checkReceipt(input([row(77, 500, 45)], { choice: '77' }));
-  assert.deepEqual(got, { outcome: 'chosen', amount: 500, transactionId: '77' });
+  assert.deepEqual({ ...got, receipt: undefined }, { outcome: 'chosen', amount: 500, transactionId: '77', receipt: undefined });
 });
 
 test('nothing yet: the owner is told it may not be indexed, and can confirm as pledged', async () => {
@@ -235,7 +236,7 @@ test('when neither amount fits, the owner is told to cancel, as before', async (
 
 test('a smaller actual amount can be recorded even when the pledged one would not fit', async () => {
   const got = await checkReceipt(input([row(1, 400, 45)], { pledged: 700, room: 500, choice: '1' }));
-  assert.deepEqual(got, { outcome: 'chosen', amount: 400, transactionId: '1' });
+  assert.deepEqual({ ...got, receipt: undefined }, { outcome: 'chosen', amount: 400, transactionId: '1', receipt: undefined });
 });
 
 test('exactly at the ceiling is allowed', async () => {
@@ -367,6 +368,30 @@ test('a project confirmation lock frees itself once no request could still hold 
   assert.equal(confirmLockStale(new Date(asOf - 5_000).toISOString(), asOf), false);
   assert.equal(confirmLockStale(new Date(asOf - 10 * 60_000).toISOString(), asOf), true);
   assert.equal(confirmLockStale('garbage', asOf), true);
+});
+
+test('an automatic match is weighed again against a ledger read after RIPE answered', async () => {
+  const got = await checkReceipt(input([row(5, 700, 45)]));
+  assert.equal(got.outcome, 'exact');
+  // Nothing new: still the pledge's alone.
+  assert.equal(stillUncontested(got.receipt, { used: new Set(), rivals: [] }), true);
+  // An API transfer of the same amount started between the first ledger read and RIPE's answer.
+  const apiRival = { amount: 700, from: CREATED + 30_000, until: CREATED + 120_000 };
+  assert.equal(stillUncontested(got.receipt, { used: new Set(), rivals: [apiRival] }), false);
+  // Another amount, or a window that does not reach the row, changes nothing.
+  assert.equal(stillUncontested(got.receipt, { used: new Set(), rivals: [{ ...apiRival, amount: 500 }] }), true);
+  assert.equal(stillUncontested(got.receipt, { used: new Set(), rivals: [{ ...apiRival, from: CREATED + 60_000 }] }), true);
+  // Recorded against another pledge meanwhile.
+  assert.equal(stillUncontested(got.receipt, { used: new Set(['5']), rivals: [] }), false);
+  // An unreadable time is never taken as uncontested.
+  assert.equal(stillUncontested({ ...got.receipt, at: 'x' }, { used: new Set(), rivals: [] }), false);
+  // The owner is asked, with the row marked, and told nothing was recorded.
+  const err = contestedOnRecheck(got.receipt, 700) as HttpError & { details: { recorded: boolean; verification: VerificationDetails } };
+  assert.equal(err.status, 409);
+  assert.equal(err.details.recorded, false);
+  assert.equal(err.details.verification.outcome, 'several');
+  assert.deepEqual(err.details.verification.receipts?.map((x) => [x.id, x.contested]), [['5', true]]);
+  assert.match(err.message, /another pledge of the same amount could account for that transfer/);
 });
 
 test('a receipt reservation is final once its pledge records the transaction, and frees itself otherwise', () => {

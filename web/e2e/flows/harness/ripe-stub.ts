@@ -16,7 +16,9 @@ export type Reply =
   /** Read the request and never answer, so the API's own deadline fires. */
   | { kind: 'hang' }
   /** Close the connection without a response. */
-  | { kind: 'drop' };
+  | { kind: 'drop' }
+  /** Read the request and answer with `reply` only once a test releases this key (POST /__stub/release). */
+  | { kind: 'held'; reply: Reply };
 
 export interface Scenario {
   balance?: Reply;
@@ -76,9 +78,24 @@ export async function startRipeStub(port: number): Promise<RipeStub> {
   const scenarios = new Map<string, Scenario>();
   const requests: RecordedRequest[] = [];
   const hanging = new Set<ServerResponse>();
+  const held = new Map<string, { res: ServerResponse; reply: Reply }[]>();
 
-  const reply = (res: ServerResponse, r: Reply) => {
-    if (r.kind === 'json') return sendJson(res, r.status, r.body);
+  // A row dated '@now' takes the moment it is served, in epoch seconds, so a test can make an arrival
+  // that is newer than whatever it did while the request was held.
+  const stamp = (body: unknown): unknown => {
+    const results = (body as { results?: unknown[] } | null)?.results;
+    if (!Array.isArray(results)) return body;
+    const now = Math.floor(Date.now() / 1000);
+    return { ...(body as object), results: results.map((r) => ((r as { date?: unknown }).date === '@now' ? { ...(r as object), date: now } : r)) };
+  };
+  const reply = (res: ServerResponse, r: Reply, key = '') => {
+    if (r.kind === 'held') {
+      held.set(key, [...(held.get(key) ?? []), { res, reply: r.reply }]);
+      hanging.add(res);
+      res.on('close', () => hanging.delete(res));
+      return;
+    }
+    if (r.kind === 'json') return sendJson(res, r.status, stamp(r.body));
     if (r.kind === 'drop') return res.socket?.destroy();
     hanging.add(res);
     res.on('close', () => hanging.delete(res));
@@ -93,6 +110,16 @@ export async function startRipeStub(port: number): Promise<RipeStub> {
       const { key, scenario } = parse(text) as { key: string; scenario: Scenario };
       scenarios.set(key, scenario);
       return sendJson(res, 204, undefined);
+    }
+    if (url.pathname === '/__stub/release' && req.method === 'POST') {
+      const { key } = parse(text) as { key: string };
+      const waiting = held.get(key) ?? [];
+      held.delete(key);
+      for (const w of waiting) {
+        hanging.delete(w.res);
+        reply(w.res, w.reply, key);
+      }
+      return sendJson(res, 200, { released: waiting.length });
     }
     if (url.pathname === '/__stub/requests' && req.method === 'GET') {
       const key = url.searchParams.get('key') ?? '';
@@ -114,7 +141,7 @@ export async function startRipeStub(port: number): Promise<RipeStub> {
       return reply(res, scenario ? (scenario.transfer ?? transferCreated()) : UNKNOWN_KEY);
     }
     if (path === '/credits/transactions/' && req.method === 'GET') {
-      return reply(res, scenario ? (scenario.transactions ?? transactionsOk([])) : UNKNOWN_KEY);
+      return reply(res, scenario ? (scenario.transactions ?? transactionsOk([])) : UNKNOWN_KEY, key);
     }
     return sendJson(res, 404, { error: { status: 404, title: 'Not Found', detail: `e2e stub has no route for ${req.method} ${url.pathname}` } });
   });
@@ -185,7 +212,8 @@ export interface TransactionRow {
   id: number;
   type: 'admin' | 'measurement' | 'probe';
   amount: number;
-  date: number;
+  /** Epoch seconds, or '@now' for the moment the stub serves it. */
+  date: number | '@now';
   reason?: string;
   description?: string;
 }
@@ -197,7 +225,7 @@ export function adminRow(id: number, amount: number, secondsFromNow = 0, descrip
 
 /** The paginated list the live API returns, newest first. */
 export function transactionsOk(rows: TransactionRow[], next: string | null = null): Reply {
-  const sorted = [...rows].sort((a, b) => b.date - a.date);
+  const sorted = [...rows].sort((a, b) => (b.date === '@now' ? Infinity : b.date) - (a.date === '@now' ? Infinity : a.date));
   return { kind: 'json', status: 200, body: { count: sorted.length, next, previous: null, results: sorted } };
 }
 

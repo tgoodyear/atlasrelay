@@ -181,6 +181,11 @@ export const ripe = {
     const res = await fetch(`${RIPE_STUB_URL}/__stub/requests?key=${encodeURIComponent(key)}`);
     return ((await res.json()) as { requests: RecordedRequest[] }).requests;
   },
+  /** Answer the requests this key's `held` scenario is holding. */
+  async release(key: string): Promise<number> {
+    const res = await fetch(`${RIPE_STUB_URL}/__stub/release`, { method: 'POST', body: JSON.stringify({ key }) });
+    return ((await res.json()) as { released: number }).released;
+  },
   async transactionReads(key: string): Promise<RecordedRequest[]> {
     return (await this.requests(key)).filter((r) => r.method === 'GET' && r.path.startsWith('/api/v2/credits/transactions/'));
   },

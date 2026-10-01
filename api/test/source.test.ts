@@ -161,3 +161,13 @@ test('a confirmation holds the project lock only around the totals read, the cei
     assert.equal(locked.includes(slow), false, `${slow} runs under the lock`);
   }
 });
+
+test('an automatic match is checked against a fresh ledger after the RIPE read and before the write', () => {
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const ripe = update.indexOf('await checkReceipt(');
+  const recheck = update.indexOf('stillUncontested(');
+  const save = update.indexOf('await savePledge(');
+  assert.ok(ripe > 0 && recheck > 0 && save > 0, 'the update handler no longer re-checks an automatic match');
+  assert.ok(ripe < recheck && recheck < save, 'the fresh ledger is weighed after RIPE answers and before the pledge is written');
+});

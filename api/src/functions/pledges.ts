@@ -5,7 +5,7 @@ import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCr
 import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, acquireConfirmLock, ownerReceiptLedger, pledgeInFlight, releaseConfirmLock, recomputeProjectTotals, releasePledgeClaim, releaseReceipt, reserveReceipt, savePledge, totals, type ReceiptLedger } from '../lib/store';
-import { checkReceipt, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
+import { checkReceipt, contestedOnRecheck, stillUncontested, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
 import { privatePledge, publicProject } from '../lib/views';
@@ -779,6 +779,24 @@ app.http('pledges-update', {
       receiptToken = await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id);
       if (!receiptToken) {
         throw new HttpError(409, 'Another request is recording that RIPE Atlas transaction right now. Nothing was recorded. Check again in a few minutes.', { recorded: false });
+      }
+      // An automatic match rests on no other pledge being able to account for the arrival, and the
+      // ledger that said so was read before RIPE answered. Read it again now, as late as it can be
+      // read outside the lock, and hand the choice to the owner if anything changed. A row the owner
+      // chose is theirs to choose, so it is not second-guessed.
+      if (checked.outcome === 'exact') {
+        let fresh: ReceiptLedger | null = null;
+        try {
+          fresh = await ownerReceiptLedger(project.ownerId, pledge.id);
+        } catch (err) {
+          logError('Could not re-read which RIPE Atlas transactions are already matched', err);
+        }
+        if (!fresh || !stillUncontested(checked.receipt, fresh)) {
+          await releaseReceipt(project.ownerId, transactionId, receiptToken).catch(() => undefined);
+          logEvent('receipt-check', { outcome: 'contested-on-recheck', projectId, pledgeId: pledge.id });
+          if (!fresh) throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.', { recorded: false });
+          throw contestedOnRecheck(checked.receipt, pledge.amount);
+        }
       }
     }
 

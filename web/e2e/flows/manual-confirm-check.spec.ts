@@ -277,6 +277,41 @@ test('two confirmations on one project cannot together pass its ceiling', async 
   expect(await row('pledges', project.id, ids[lost])).toMatchObject({ status: 'pledged', amountVerified: false });
 });
 
+test('an API transfer of the same amount started during the check stops the automatic match', async ({ person }) => {
+  const researcher = await person({ role: 'researcher' });
+  const manualDonor = await person({ role: 'donor' });
+  const apiDonor = await person({ role: 'donor' });
+  const project = await postProject(researcher, { creditsRequested: 1000 });
+  const manual = await manualDonor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 300, method: 'manual' } });
+  expect(manual.status()).toBe(201);
+  const manualId = (await manual.json()).pledge.id as string;
+
+  // RIPE's answer to the researcher's read is held until the test lets it go, and its one arrival is
+  // dated when it is served: after the API pledge below, so that pledge could account for it.
+  const key = await ownerKey({ transactions: { kind: 'held', reply: transactionsOk([{ ...adminRow(993001, 300), date: '@now' }]) } });
+  const confirming = researcher.request.patch(`/api/pledges/${project.id}/${manualId}`, { data: { status: 'confirmed', apiKey: key } });
+
+  // The first ledger read is done once the RIPE read has been sent.
+  await expect.poll(async () => (await ripe.transactionReads(key)).length, { timeout: 10_000 }).toBe(1);
+  const donorKey = fakeKey();
+  await ripe.scenario(donorKey, {});
+  const api = await apiDonor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 300, method: 'api', apiKey: donorKey } });
+  expect(api.status(), await api.text()).toBe(201);
+  expect((await api.json()).pledge.status).toBe('confirmed');
+  expect(await ripe.release(key)).toBe(1);
+
+  const res = await confirming;
+  expect(res.status(), await res.text()).toBe(409);
+  const error = (await res.json()).error;
+  expect(error.details).toMatchObject({ recorded: false, verification: { outcome: 'several', receipts: [{ id: '993001', amount: 300, contested: true }] } });
+  expect(error.message).toContain('another pledge of the same amount could account for that transfer');
+  expect(await row('pledges', project.id, manualId)).toMatchObject({ status: 'pledged', amountVerified: false, transactionId: '' });
+  expect(await row('claims', `receipt-${researcher.id}`, '993001')).toBeNull();
+  // Only the API transfer is counted.
+  const after = (await (await researcher.request.get(`/api/projects/${project.id}`)).json()).project;
+  expect(after.creditsConfirmed).toBe(300);
+});
+
 test('two confirmations racing for one arrival record it once', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher, { creditsRequested: 1000 });
