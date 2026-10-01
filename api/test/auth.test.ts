@@ -45,7 +45,8 @@ test('a principal from a provider the site does not offer is anonymous', () => {
 test('a principal with no name gets a placeholder from the provider\'s id, and odd ids are refused', () => {
   const p = getPrincipal(request({ identityProvider: 'orcid', userId: 'f00ba4cafe', userDetails: '', userRoles: ['authenticated'] }), {});
   assert.equal(p?.userDetails, 'user-f00ba4');
-  for (const userId of ['a/b', 'a#b', 'a?b', 'a\\b', 'a\nb', 42]) {
+  // A GitHub id of "orcid:x" must not land on the ORCID account x.
+  for (const userId of ['a/b', 'a#b', 'a?b', 'a\\b', 'a\nb', 'orcid:abc123', 42]) {
     assert.equal(getPrincipal(request({ ...signedIn, userId }), {}), null, String(userId));
   }
 });

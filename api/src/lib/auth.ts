@@ -45,8 +45,9 @@ export function getPrincipal(req: HttpRequest, env: Record<string, string | unde
     if (typeof decoded.userId !== 'string' || typeof decoded.identityProvider !== 'string' || !decoded.userId) return null;
     const provider = decoded.identityProvider.toLowerCase();
     if (!(PROVIDERS as readonly string[]).includes(provider)) return null;
-    // Table Storage refuses these characters in a key, and no provider's id contains them.
-    if (/[\\/#?\x00-\x1f\x7f]/.test(decoded.userId)) return null;
+    // Table Storage refuses these characters in a key, and ':' separates the provider prefix
+    // (accountId). Static Web Apps ids contain none of them.
+    if (/[\\/#?:\x00-\x1f\x7f]/.test(decoded.userId)) return null;
     const roles = Array.isArray(decoded.userRoles) ? decoded.userRoles : [];
     if (!roles.includes('authenticated')) return null;
     return {
