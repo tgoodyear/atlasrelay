@@ -302,10 +302,12 @@ export async function adoptLock(blobUrl, token, leaseId, opts = {}) {
         // Tells an orchestrator that started this run and does not wait for it (run-e2e.sh
         // --no-wait) that it may stop renewing: the job renews from here on.
         try {
+          // Keeps the time the orchestrator took the lock, which waiting runs print.
+          const before = await blob.holder().catch(() => null);
           const meta = await blob.setMetadata(leaseId, {
             runid: holder.runId ?? '',
             gitsha: holder.gitSha ?? '',
-            since: now().toISOString().replace(/\.\d+Z$/, 'Z'),
+            since: before?.since || now().toISOString().replace(/\.\d+Z$/, 'Z'),
             adopted: holder.runId ?? 'yes',
           });
           if (!meta.ok) log(`warning: could not mark the lock as taken over by the job (HTTP ${meta.status})`);

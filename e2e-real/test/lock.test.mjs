@@ -126,6 +126,7 @@ async function renewing(renewals, how = 'acquire', { answerRenew = /** @type {((
     const call = { method: init.method ?? 'GET', url: String(url), headers: /** @type {Record<string, string>} */ (init.headers) };
     calls.push(call);
     const a = action(call);
+    if (a === 'HEAD') return new Response(null, { status: 200, headers: { 'x-ms-lease-state': 'leased', 'x-ms-meta-since': '2026-10-01T12:00:00Z' } });
     if (a !== 'renew') return new Response(null, { status: a === 'acquire' || a === 'PUT' ? 201 : 200 });
     if (answerRenew) return answerRenew();
     // adoptLock's first renewal checks the lease; it is not one of the scripted ones.
@@ -197,12 +198,13 @@ test('an adopted lease is renewed under its own id, never taken anew, and never 
   const r = await renewing([], 'adopt');
   assert.equal(r.lost, false);
   assert.ok(r.renewals >= 3);
-  assert.ok(r.calls.every((c) => ['renew', 'metadata'].includes(action(c))), `calls: ${r.calls.map(action).join(', ')}`);
-  assert.ok(r.calls.every((c) => c.headers['x-ms-lease-id'] === LEASE));
+  assert.ok(r.calls.every((c) => ['renew', 'metadata', 'HEAD'].includes(action(c))), `calls: ${r.calls.map(action).join(', ')}`);
+  assert.ok(r.calls.filter((c) => action(c) !== 'HEAD').every((c) => c.headers['x-ms-lease-id'] === LEASE));
   // Once, right after the first renewal: the orchestrator may stop renewing from then on.
   const meta = r.calls.filter((c) => action(c) === 'metadata');
   assert.equal(meta.length, 1);
-  assert.equal(r.calls.indexOf(meta[0]), 1);
+  assert.equal(r.calls.indexOf(meta[0]), 2);
+  assert.equal(meta[0].headers['x-ms-meta-since'], '2026-10-01T12:00:00Z');
   assert.equal(meta[0].headers['x-ms-meta-adopted'], 'gh-7-1');
   assert.equal(meta[0].headers['x-ms-meta-runid'], 'gh-7-1');
 });
@@ -226,7 +228,7 @@ test('adopting retries a renewal that got no answer, then gives up', async () =>
   let n = 0;
   /** @type {typeof fetch} */
   const flaky = async (/** @type {any} */ url) => {
-    if (String(url).endsWith('?comp=metadata')) return new Response(null, { status: 200 });
+    if (!String(url).endsWith('?comp=lease')) return new Response(null, { status: 200 });
     return ++n === 1 ? Promise.reject(new TypeError('fetch failed')) : new Response(null, { status: 200 });
   };
   const lock = await adoptLock(BLOB, 'token', LEASE, { fetchImpl: flaky, renewMs: 60_000 });
