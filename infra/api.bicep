@@ -213,7 +213,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       }
       runtime: {
         name: 'node'
-        version: '22'
+        version: '24'
       }
     }
   }

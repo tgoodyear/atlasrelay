@@ -16,12 +16,12 @@
     "@azure/identity": "^4.13.3"
   },
   "devDependencies": {
-    "@types/node": "^22.20.3",
+    "@types/node": "^24.19.0",
     "esbuild": "^0.28.2",
     "tsx": "^4.20.0",
     "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.11.0"
   }
 }

@@ -40,7 +40,7 @@ const ctx = await context({
   entryPoints: ['src/index.ts'],
   bundle: true,
   platform: 'node',
-  target: 'node22',
+  target: 'node24',
   format: 'cjs',
   external: ['@azure/functions-core'],
   outfile: 'dist/bundle.js',
