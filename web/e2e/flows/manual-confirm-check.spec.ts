@@ -89,6 +89,8 @@ test('a different amount is shown, and recording it changes the totals', async (
 
   const dialog = await checkWithKey(researcher.page, project, donor, key);
   await expect(dialog.locator('.alert-warn')).toHaveText('RIPE Atlas shows 500 credits arrived since this pledge was made (pledged 700).');
+  // The step changed under the focused button, so focus moves to the first control of the new one.
+  await expect(dialog.getByRole('radio', { name: /500 credits/ })).toBeFocused();
   // Nothing is recorded until the researcher chooses.
   expect(await row('pledges', project.id, pledgeId)).toMatchObject({ status: 'sent' });
   await expect(dialog.getByRole('radio', { name: /500 credits/ })).toBeChecked();

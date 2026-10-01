@@ -147,6 +147,11 @@ export class ApiError extends Error {
     return (this.details as { transfer?: string } | undefined)?.transfer === 'unknown';
   }
 
+  /** Present when a check against the owner's RIPE Atlas log needs a decision or failed. */
+  get verification(): VerificationDetails | undefined {
+    return (this.details as { verification?: VerificationDetails } | undefined)?.verification;
+  }
+
   /**
    * True only when the server said outright that it could not record the pledge either. On the
    * outcome-unknown path that changes the advice completely: with a row, the researcher settles it;
@@ -156,11 +161,6 @@ export class ApiError extends Error {
    * ordinary one: a row exists. Getting this the wrong way round inverts that advice, so it is
    * worth being exact -- the previous wording here described the opposite of what the getter does.
    */
-  /** Present when a check against the owner's RIPE Atlas log needs a decision or failed. */
-  get verification(): VerificationDetails | undefined {
-    return (this.details as { verification?: VerificationDetails } | undefined)?.verification;
-  }
-
   get transferNotRecorded(): boolean {
     return (this.details as { transferRecorded?: boolean } | undefined)?.transferRecorded === false;
   }

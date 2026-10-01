@@ -746,6 +746,8 @@ app.http('pledges-update', {
     let amountVerified = false;
     let transactionId = pledge.transactionId;
     let checked: CheckedConfirmation | undefined;
+    // Names this request's own receipt reservation, so a refusal releases only that one.
+    let receiptToken = '';
     if (status === 'confirmed') {
       const liveTotals = totals(await listPledges(projectId));
       const room = maxCredits(project.creditsRequested) - liveTotals.confirmed;
@@ -770,8 +772,9 @@ app.http('pledges-update', {
         transactionId = checked.transactionId;
         // The ledger was read, not locked. Take the arrival atomically before the pledge is written,
         // so a second confirmation racing this one cannot record the same transfer.
-        if (!(await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id))) {
-          throw new HttpError(409, 'That RIPE Atlas transaction was just recorded against another pledge. Nothing was recorded. Check again.');
+        receiptToken = await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id);
+        if (!receiptToken) {
+          throw new HttpError(409, 'Another request is recording that RIPE Atlas transaction right now. Nothing was recorded. Check again in a few minutes.');
         }
       } else if (pledge.amount > room) {
         throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
@@ -783,7 +786,9 @@ app.http('pledges-update', {
     // adversary, and the outcome is a project recorded slightly above its own ceiling. No credits
     // move here; confirming only records a transfer that already happened, and refusing to record
     // one would be the worse failure. The overshoot is visible on the project and the owner can
-    // cancel a pledge back out of it.
+    // cancel a pledge back out of it. A checked confirmation records what arrived, which can be more
+    // than the pledge reserved, so the overshoot can be that much larger; the trade is the same, since
+    // it still needs the owner confirming two pledges at the same moment.
 
     // Conditional on the row not having changed since it was read at the top of this handler. The
     // owner and the donor can both be looking at the same `pledged` pledge; without this, each
@@ -798,7 +803,7 @@ app.http('pledges-update', {
         // Refused outright, so the arrival this request reserved is free again. Any other failure may
         // have written the row, so the reservation stays; if the write did not land, the reservation
         // frees itself once it is older than a request could run (receiptReservationReclaimable).
-        if (amountVerified) await releaseReceipt(project.ownerId, transactionId, pledge.id).catch(() => undefined);
+        if (receiptToken) await releaseReceipt(project.ownerId, transactionId, receiptToken).catch(() => undefined);
         throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.');
       }
       throw err;

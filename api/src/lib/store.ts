@@ -1,5 +1,6 @@
 import { TableClient, TableEntity, odata, RestError } from '@azure/data-tables';
 import { HttpError } from './http';
+import { newId } from './ids';
 import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
 import { logError, tableDependencyPolicy } from './telemetry';
@@ -799,34 +800,42 @@ export function receiptReservationReclaimable(heldCreatedAt: string, holder: Ple
   return asOf - since > CLAIM_ORPHAN_GRACE_MS;
 }
 
-/** Reserve an arrival in the owner's RIPE Atlas log for one pledge. False when another pledge holds it. */
-export async function reserveReceipt(ownerId: string, transactionId: string, projectId: string, pledgeId: string): Promise<boolean> {
+/**
+ * Reserve an arrival in the owner's RIPE Atlas log for one confirmation request. Returns a token
+ * naming this request's reservation, or '' when another request holds it.
+ *
+ * Per request, not per pledge. Two requests confirming the same pledge at once would otherwise both
+ * hold it, and the one whose pledge write then lost its 412 would release the winner's reservation,
+ * leaving the recorded arrival free for a third request working from an older ledger. A reservation
+ * held by another request, for whichever pledge, is respected until it is reclaimable.
+ */
+export async function reserveReceipt(ownerId: string, transactionId: string, projectId: string, pledgeId: string): Promise<string> {
   const t = await table(CLAIMS_TABLE);
-  const entity = { partitionKey: receiptPk(ownerId), rowKey: transactionId, projectId, pledgeId, createdAt: now() };
+  const token = newId();
+  const entity = { partitionKey: receiptPk(ownerId), rowKey: transactionId, projectId, pledgeId, token, createdAt: now() };
   try {
     await t.createEntity(entity);
-    return true;
+    return token;
   } catch (err) {
     if (!(err instanceof RestError && err.statusCode === 409)) throw err;
   }
   const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
   if (!held) return reserveReceipt(ownerId, transactionId, projectId, pledgeId);
-  if (String(held.pledgeId ?? '') === pledgeId && String(held.projectId ?? '') === projectId) return true;
   const holder = await getPledge(String(held.projectId ?? ''), String(held.pledgeId ?? ''));
-  if (!receiptReservationReclaimable(String(held.createdAt ?? ''), holder, transactionId)) return false;
+  if (!receiptReservationReclaimable(String(held.createdAt ?? ''), holder, transactionId)) return '';
   try {
     await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
-    return true;
+    return token;
   } catch (err) {
-    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return '';
     throw err;
   }
 }
 
-/** Give a receipt reservation back, only if this pledge still holds it. */
-export async function releaseReceipt(ownerId: string, transactionId: string, pledgeId: string): Promise<void> {
+/** Give a receipt reservation back, only if the request holding `token` still holds it. */
+export async function releaseReceipt(ownerId: string, transactionId: string, token: string): Promise<void> {
   const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
-  if (!held || String(held.pledgeId ?? '') !== pledgeId) return;
+  if (!held || String(held.token ?? '') !== token) return;
   try {
     await (await table(CLAIMS_TABLE)).deleteEntity(receiptPk(ownerId), transactionId, { etag: String(held.etag ?? '') });
   } catch (err) {

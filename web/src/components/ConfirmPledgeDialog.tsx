@@ -35,6 +35,13 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
   const pledged = pledge.pledgedAmount ?? pledge.amount;
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef);
+  // Each step replaces the controls, including whichever one had focus, so focus would fall to the
+  // page behind the overlay. Put it on the first control of the new step.
+  useEffect(() => {
+    if (step === 'form') return;
+    const first = dialogRef.current?.querySelector<HTMLElement>('.modal-body button:not([disabled]), .modal-body input:not([disabled])');
+    (first ?? dialogRef.current)?.focus();
+  }, [step]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !busy && close();
