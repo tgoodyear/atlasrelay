@@ -814,7 +814,13 @@ app.http('pledges-update', {
         if (!lockToken) {
           throw new HttpError(409, 'Another pledge on this project is being confirmed right now. Nothing was recorded. Try again in a moment.', { recorded: false });
         }
-        const room = maxCredits(project.creditsRequested) - totals(await listPledges(projectId)).confirmed;
+        // The project row is read again here too. The one read at the top of this handler is from
+        // before the history and RIPE reads, and the owner can lower the request in another tab in
+        // the meantime; the edit takes this same lock when it changes the request, so this read
+        // and the write below see one value of it.
+        const current = await getProject(projectId);
+        if (!current) throw new HttpError(404, 'Not found', { recorded: false });
+        const room = maxCredits(current.creditsRequested) - totals(await listPledges(projectId)).confirmed;
         const recording = amountVerified ? receivedAmount : pledge.amount;
         if (recording > room) {
           throw new HttpError(

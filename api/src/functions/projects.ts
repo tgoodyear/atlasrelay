@@ -2,7 +2,7 @@ import { app, HttpRequest } from '@azure/functions';
 import { getPrincipal, requirePrincipal } from '../lib/auth';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Project, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, totals } from '../lib/store';
+import { Project, acquireConfirmLock, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, releaseConfirmLock, totals } from '../lib/store';
 import { MAX_OPEN_PROJECTS_PER_USER, PROJECT_POST_INTERVAL_MS, SurplusClose, capSettlement, surplusOpenProjects } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
 import { isPublicProject, publicPledge, publicProject, publicUser } from '../lib/views';
@@ -347,11 +347,24 @@ app.http('projects-update', {
     // read before an operator set the flag would otherwise write the takedown away, along with any
     // credit totals a pledge recompute changed in between. The check above stops a deliberate
     // reopen; this stops an accidental one.
-    const updated = await patchProject(id, {
-      ...fields,
-      ...(status ? { status } : {}),
-      ...(resultsPostedAt !== project.resultsPostedAt ? { resultsPostedAt } : {}),
-    });
+    // A change to the request moves the project's ceiling, which a confirmation checks and writes
+    // against under the project's confirmation lock. Taking the same lock here means a confirmation
+    // never records against a ceiling that changed between its check and its write.
+    const ceilingChanges = fields.creditsRequested !== undefined && fields.creditsRequested !== project.creditsRequested;
+    const lockToken = ceilingChanges ? await acquireConfirmLock(id) : '';
+    if (ceilingChanges && !lockToken) {
+      throw new HttpError(409, 'A pledge on this project is being confirmed right now. Your changes were not saved. Try again in a moment.');
+    }
+    let updated: Project;
+    try {
+      updated = await patchProject(id, {
+        ...fields,
+        ...(status ? { status } : {}),
+        ...(resultsPostedAt !== project.resultsPostedAt ? { resultsPostedAt } : {}),
+      });
+    } finally {
+      if (lockToken) await releaseConfirmLock(id, lockToken).catch(() => undefined);
+    }
 
     // The flag can be set between the read above and this write, so re-check what actually landed
     // and put the project back if a takedown arrived while the edit was in flight.

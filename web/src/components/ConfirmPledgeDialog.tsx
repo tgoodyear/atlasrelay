@@ -36,9 +36,12 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef);
   // Each step replaces the controls, including whichever one had focus, so focus would fall to the
-  // page behind the overlay. Put it on the first control of the new step.
+  // page behind the overlay. Put it on the first control of the new step. The form is skipped only
+  // when focus is already inside the dialog, which is the case when it first opens; coming back to
+  // it after a refused key, the control that had focus is gone.
   useEffect(() => {
-    if (step === 'form') return;
+    const root = dialogRef.current;
+    if (step === 'form' && root?.contains(document.activeElement) && document.activeElement !== root) return;
     const first = dialogRef.current?.querySelector<HTMLElement>('.modal-body button:not([disabled]), .modal-body input:not([disabled])');
     (first ?? dialogRef.current)?.focus();
   }, [step]);
