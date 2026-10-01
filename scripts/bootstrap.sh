@@ -207,6 +207,9 @@ else
     # e2e-dev.yml tests dev only, and skips while this is unset (scripts/teardown.sh dev clears it).
     if [ "$ENV_NAME" = dev ]; then
       gh variable set DEV_ENABLED --repo "$REPO" --body true
+      # The sign-in providers e2e-dev.yml builds dev with. A repository variable, because the build
+      # job runs in no GitHub Environment. It names providers, nothing secret.
+      gh variable set DEV_SIGNIN_PROVIDERS --repo "$REPO" --body "$(aget SIGNIN_PROVIDERS)"
     fi
   fi
   echo

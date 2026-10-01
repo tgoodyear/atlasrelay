@@ -15,16 +15,12 @@ param storageSharedKeyAccess = bool(readEnvironmentVariable('ATLASRELAY_STORAGE_
 param linkApi = !bool(readEnvironmentVariable('ATLASRELAY_API_UNLINKED', 'false'))
 param operatorPrincipalId = readEnvironmentVariable('ATLASRELAY_OPERATOR_PRINCIPAL_ID', '')
 param additionalAppSettings = {}
-// The site's own sign-in registrations; empty keeps the built-in GitHub and Microsoft sign-in.
-// The secrets are read here from the git-ignored settings file and never written to git.
+// Client ids of the site's own sign-in registrations; empty keeps the built-in GitHub and Microsoft
+// sign-in. Not secret. The secrets are in the environment's sign-in vault (infra/signin.bicep).
 param signinGithubClientId = readEnvironmentVariable('ATLASRELAY_GITHUB_CLIENT_ID', '')
-param signinGithubClientSecret = readEnvironmentVariable('ATLASRELAY_GITHUB_CLIENT_SECRET', '')
 param signinMicrosoftClientId = readEnvironmentVariable('ATLASRELAY_MICROSOFT_CLIENT_ID', '')
-param signinMicrosoftClientSecret = readEnvironmentVariable('ATLASRELAY_MICROSOFT_CLIENT_SECRET', '')
 param signinGoogleClientId = readEnvironmentVariable('ATLASRELAY_GOOGLE_CLIENT_ID', '')
-param signinGoogleClientSecret = readEnvironmentVariable('ATLASRELAY_GOOGLE_CLIENT_SECRET', '')
 param signinOrcidClientId = readEnvironmentVariable('ATLASRELAY_ORCID_CLIENT_ID', '')
-param signinOrcidClientSecret = readEnvironmentVariable('ATLASRELAY_ORCID_CLIENT_SECRET', '')
 param alertEmail = readEnvironmentVariable('ATLASRELAY_ALERT_EMAIL', '')
 param budgetAmount = 120
 param budgetStartDate = readEnvironmentVariable('ATLASRELAY_BUDGET_START', '')

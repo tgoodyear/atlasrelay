@@ -2,7 +2,8 @@
 // stack atlasrelay-<env> by scripts/bootstrap.sh and scripts/provision.sh, with parameters from
 // infra/main.bicepparam (which reads the environment's settings, .azure/<env>/.env).
 //
-//   app.bicep         storage + tables, static web app (Standard) and its sign-in settings
+//   app.bicep         storage + tables, static web app (Standard)
+//   signin.bicep      sign-in vault for the client secrets, the site's app settings pointing into it
 //   api.bicep         Function App (Flex Consumption) with its managed identity and host storage,
 //                     linked to the static web app as its API
 //   platform.bicep    Log Analytics + App Insights (App* tables kept 90 days), the monthly budget
@@ -70,27 +71,14 @@ param linkApi bool = true
 accounts into the test vault (scripts/set-test-users.sh). Empty: nobody has data access.''')
 param operatorPrincipalId string = ''
 
-@description('''Client id of the site's own GitHub OAuth app, for sign-in through the site's own
-registrations (docs/RUNBOOK.md, "Google and ORCID sign-in"). Empty: built-in GitHub sign-in.''')
+@description('''Client ids of the site's own sign-in registrations (docs/RUNBOOK.md, "Sign-in
+registrations"). Empty: built-in GitHub and Microsoft sign-in. Their secrets are in the
+environment's sign-in vault (signin.bicep), never in parameters.''')
 param signinGithubClientId string = ''
-@secure()
-@description('Client secret of that GitHub OAuth app')
-param signinGithubClientSecret string = ''
-@description('Application (client) id of the site\'s own Microsoft Entra app registration. Empty: none.')
 param signinMicrosoftClientId string = ''
-@secure()
-@description('Client secret of that Entra app registration')
-param signinMicrosoftClientSecret string = ''
-@description('Client id of the site\'s Google OAuth client. Empty: no Google sign-in.')
 param signinGoogleClientId string = ''
-@secure()
-@description('Client secret of that Google OAuth client')
-param signinGoogleClientSecret string = ''
-@description('Client id of the site\'s ORCID public API client. Empty: no ORCID sign-in.')
 param signinOrcidClientId string = ''
-@secure()
-@description('Client secret of that ORCID client')
-param signinOrcidClientSecret string = ''
+
 
 @description('Extra app settings for the Function App')
 param additionalAppSettings object = {}
@@ -127,11 +115,15 @@ this says; main.bicepparam sets it for every other environment.''')
 param testHarness bool = toLower(environmentName) != 'prod'
 
 // The providers the site's own registrations cover, as scripts/lib/env.sh (signin_providers) works
-// them out: none, or GitHub and Microsoft plus Google and ORCID where their pairs are set. The API
-// accepts exactly these (GitHub and Microsoft when none).
-var signinGoogle = !empty(signinGoogleClientId) && !empty(signinGoogleClientSecret)
-var signinOrcid = !empty(signinOrcidClientId) && !empty(signinOrcidClientSecret)
-var signinProviders = join(concat(['github', 'aad'], signinGoogle ? ['google'] : [], signinOrcid ? ['orcid'] : []), ',')
+// them out: none, or GitHub and Microsoft plus Google and ORCID where their client ids are set. The
+// API accepts exactly these (GitHub and Microsoft when none).
+var signinClientIds = {
+  github: signinGithubClientId
+  aad: signinMicrosoftClientId
+  google: signinGoogleClientId
+  orcid: signinOrcidClientId
+}
+var signinProviders = join(concat(['github', 'aad'], empty(signinGoogleClientId) ? [] : ['google'], empty(signinOrcidClientId) ? [] : ['orcid']), ',')
 
 var env = toLower(environmentName)
 var isProd = env == 'prod'
@@ -218,14 +210,22 @@ module app 'app.bicep' = {
     storageSharedKeyAccess: storageSharedKeyAccess
     operatorPrincipalId: operatorPrincipalId
     tags: tags
-    githubClientId: signinGithubClientId
-    githubClientSecret: signinGithubClientSecret
-    microsoftClientId: signinMicrosoftClientId
-    microsoftClientSecret: signinMicrosoftClientSecret
-    googleClientId: signinGoogleClientId
-    googleClientSecret: signinGoogleClientSecret
-    orcidClientId: signinOrcidClientId
-    orcidClientSecret: signinOrcidClientSecret
+  }
+}
+
+// The sign-in vault and the site's app settings that point into it.
+module signin 'signin.bicep' = {
+  name: 'signin'
+  scope: rg
+  params: {
+    baseName: baseName
+    location: location
+    staticWebAppName: app.outputs.staticWebAppName
+    staticWebAppPrincipalId: app.outputs.staticWebAppPrincipalId
+    operatorPrincipalId: operatorPrincipalId
+    workspaceId: platform.outputs.workspaceId
+    clientIds: signinClientIds
+    tags: tags
   }
 }
 
@@ -338,6 +338,8 @@ output APPINSIGHTS_NAME string = platform.outputs.appInsightsName
 // instrumentation key; it is not a credential and is public once the site ships it.
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = platform.outputs.appInsightsConnectionString
 output SITE_HOSTNAME string = siteHostname
+// The vault scripts/register-signin.sh writes the sign-in client secrets to.
+output SIGNIN_KEY_VAULT_NAME string = signin.outputs.vaultName
 // Set these as the domain's name servers at the registrar (prod only).
 output NAME_SERVERS string = isProd && !empty(dnsZoneName) ? join(dns!.outputs.nameServers, ' ') : ''
 // The full-flow test harness; empty when it is not deployed. scripts/bootstrap.sh copies them to

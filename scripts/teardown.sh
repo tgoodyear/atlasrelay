@@ -42,7 +42,10 @@ groups=$(grep -Ei '^/subscriptions/[^/]+/resourceGroups/[^/]+$' <<< "$ids" | sed
 # The custom role is declared in the group but stored with the subscription, so it outlives it.
 roles=$(grep -i '/providers/Microsoft.Authorization/roleDefinitions/' <<< "$ids" || true)
 # A deleted vault stays soft-deleted for a week under its name, which the next bootstrap reuses.
-vaults=$(grep -io '/providers/Microsoft.KeyVault/vaults/[^/]*$' <<< "$ids" | sed 's|.*/||' || true)
+# The sign-in vault (kvs-..., infra/signin.bicep) has purge protection: nobody can purge it, and the
+# next deployment of the environment recovers it with its secrets (scripts/lib/env.sh).
+vaults=$(grep -io '/providers/Microsoft.KeyVault/vaults/[^/]*$' <<< "$ids" | sed 's|.*/||' | grep -v '^kvs-' || true)
+signin_vault=$(aget SIGNIN_KEY_VAULT_NAME)
 # Anything managed outside the environment's own group, such as a non-prod environment's CNAME in
 # the prod zone, has to be deleted on its own.
 others=""
@@ -66,6 +69,7 @@ sed 's/^/  resource group (everything in it) /' <<< "$groups"
 [ -z "$others" ] || sed 's/^/  /' <<< "$others"
 echo "and the GitHub Environment $ENV_NAME in $REPO."
 [ -z "$vaults" ] || echo "The Key Vault $(tr '\n' ' ' <<< "$vaults")is purged after it is deleted, with the test accounts in it."
+[ -z "$signin_vault" ] || echo "The sign-in vault $signin_vault stays recoverable, with its secrets, for 7 days; bootstrapping $ENV_NAME again in that time recovers it. The app registrations with GitHub, Microsoft, Google and ORCID are not deleted."
 [ "$ENV_NAME" != dev ] || echo "The repository variable DEV_ENABLED is removed, so the full-flow test workflow skips."
 if [ "$ENV_NAME" = prod ]; then
   zone=$(aget ATLASRELAY_DNS_ZONE)

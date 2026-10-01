@@ -76,8 +76,11 @@ jobs:
         run: npm ci -w api -w web
 
       # The same build as docs/RUNBOOK.md, "Dev environment": no App Insights connection string, so
-      # the test runs send no browser telemetry.
+      # the test runs send no browser telemetry. DEV_SIGNIN_PROVIDERS names dev's own sign-in
+      # registrations, set by scripts/bootstrap.sh dev (docs/RUNBOOK.md, "Sign-in registrations").
       - name: Build
+        env:
+          VITE_SIGNIN_PROVIDERS: ${{ vars.DEV_SIGNIN_PROVIDERS }}
         run: |
           npm run build
           . scripts/lib/e2e-job.sh

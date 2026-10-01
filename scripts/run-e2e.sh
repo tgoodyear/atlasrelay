@@ -65,7 +65,9 @@ E2E_IMAGE_TAG="local-${E2E_SHA:0:12}-$stamp"
 
 echo "building the site and the API"
 npm ci --no-audit --no-fund
-npm run build
+# With the environment's own sign-in registrations, when it has them (docs/RUNBOOK.md, "Sign-in
+# registrations"); the full-flow tests sign in with Microsoft through whichever the build names.
+VITE_SIGNIN_PROVIDERS=$(aget SIGNIN_PROVIDERS) npm run build
 e2e_stage_api
 E2E_SITE_DIR=web/dist
 E2E_API_ZIP=api.zip

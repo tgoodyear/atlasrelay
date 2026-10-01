@@ -110,24 +110,33 @@ anything. Infrastructure is
 deployed by a subscription Owner as a deployment stack whose deny settings block deleting its
 resources outside the stack.
 
-Sign-in uses Azure Static Web Apps' built-in GitHub and Microsoft providers, which need no secret
-of the site's own. Google and ORCID sign-in need the site's own app registrations, and once a site
-has any registration of its own, Static Web Apps turns its built-in providers off, so GitHub and
-Microsoft then need the site's own registrations too. Each registration has a client secret. The
-secrets are kept in the owner's git-ignored settings file and in the static web app's app settings.
-The CI identity cannot read app settings, and `staticwebapp.config.json`, which ships with the site,
-names the settings and holds no values. But that file decides which settings the site sends where,
-so whoever can deploy the site (the CI identity with the deployment token, or anyone who gets code
-onto `main`) could ship a config that sends a secret to a server of their choosing, or declare a
-provider that answers for any ORCID iD. Deploying the site is already full control of it; the
-secrets do not change who has that. The config asks for no scopes beyond the ones Static Web Apps uses
-to sign people in (for ORCID, only `openid`), and the API never receives a provider's token.
+Sign-in uses the site's own app registrations at GitHub (a GitHub App), Microsoft (an Entra app
+registration), Google and ORCID, separate for dev and prod. Static Web Apps turns its built-in
+providers off once a site has any registration of its own, so GitHub and Microsoft need the site's
+own registrations too. Each registration has a client secret, kept in the environment's sign-in Key
+Vault and nowhere else: not in the repository, the owner's settings file, the deployment parameters
+or history, or a log. `scripts/register-signin.sh` moves each secret from the provider into the
+vault on standard input, without printing it. The static web app reads the secrets with its own
+managed identity through Key Vault references in its app settings. The vault accepts Azure RBAC
+only: the site's identity can read secrets and the operator can write them; the CI identity has no
+role on it and cannot read app settings. It keeps public network access, because Static Web Apps
+reads it from outside any virtual network. Purge protection is on, and every read and write is in
+the vault's audit log in the environment's Log Analytics workspace.
+
+`staticwebapp.config.json`, which ships with the site, names the app settings and holds no values.
+But that file decides which settings the site sends where. Whoever can deploy the site (the CI
+identity with the deployment token, or anyone who gets code onto `main`) could therefore ship a
+config that sends a secret to a server of their choosing, or declare a provider that answers for
+any ORCID iD. Deploying the site already gives full control of it; the secrets do not change who
+has that. The config asks for no scopes beyond the ones Static Web Apps uses to sign people in (for
+ORCID, only `openid`), and the API never receives a provider's token.
+
 A leaked secret lets someone act as the site's registration with that provider, within the
 redirect URIs registered there; for GitHub that includes checking, resetting or revoking the tokens
 people granted the app. On its own it does not let anyone sign in to this site as another person,
 since sign-in codes go only to the registered redirect URIs. It reaches no Azure resource or data,
-because the Entra registration is given no application permissions or Azure role assignments. If a secret leaks, rotate it at once; the runbook ("Google
-and ORCID sign-in") has the steps.
+because the Entra registration is given no application permissions or Azure role assignments. If a
+secret leaks, rotate it at once; the runbook ("Sign-in registrations") has the steps.
 
 The API runs on an Azure Function App that only the static web app can call: linking the two puts
 an identity provider in front of the Function App that refuses requests the site did not send, and

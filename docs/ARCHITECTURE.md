@@ -329,7 +329,7 @@ Static Web Apps offers two kinds of sign-in, and a site uses one or the other
 [custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)):
 
 - **Built-in**: GitHub and Microsoft Entra ID through Azure's own app registrations, with nothing
-  to configure. The site uses this unless a build says otherwise.
+  to configure. A build that names no registrations uses this.
 - **Custom**: the site's own registrations, declared under `auth.identityProviders` in
   `staticwebapp.config.json`, with each client id and secret in an app setting. Google and ORCID
   are only available this way. Microsoft's page says: "Using any custom registrations disables all
@@ -343,16 +343,30 @@ shortcuts and the sign-in buttons for those providers, and refuses to build with
 `aad`. Facebook, Twitter, Apple and any of the four providers the build does not offer answer 404 at
 `/.auth/login/<provider>`, because the
 platform still answered some of them on its own (`/.auth/login/google` and `/.auth/login/facebook`
-went on to the provider in 2026-10). The client ids and secrets go from the owner's settings file
-into the site's app settings through Bicep (`infra/app.bicep`); the shipped config names the
-settings and holds no values. The Deploy workflow builds prod with the repository variable
-`SIGNIN_PROVIDERS`, which `scripts/bootstrap.sh` sets from the settings. The runbook has the steps
-([Google and ORCID sign-in](RUNBOOK.md#google-and-orcid-sign-in)).
+went on to the provider in 2026-10). The shipped config names app settings and holds no values.
+
+Each environment (dev, prod) has its own four registrations, made by `scripts/register-signin.sh`.
+The client ids are in the settings file and become plain app settings. The client secrets are in
+the environment's sign-in vault (`infra/signin.bicep`), and the app settings hold Key Vault
+references to them by name, without a version, which the site resolves with its system-assigned
+managed identity ([Key Vault secrets](https://learn.microsoft.com/azure/static-web-apps/key-vault-secrets)).
+So no secret passes through a Bicep parameter or the deployment history, and a rotated secret needs
+no deployment. The vault uses RBAC only (the site's identity reads, the operator writes), keeps
+public network access because Static Web Apps reads it from outside any virtual network, has purge
+protection, and sends its audit log to the environment's workspace. The Deploy workflow builds prod
+with the repository variable `SIGNIN_PROVIDERS`, and `e2e-dev.yml` builds dev with
+`DEV_SIGNIN_PROVIDERS`. The runbook has the steps
+([Sign-in registrations](RUNBOOK.md#sign-in-registrations)).
+
+Why a GitHub App rather than an OAuth app: GitHub's app manifest flow lets the script create it
+with one click on github.com and receive its client secret directly, and a GitHub App asks for no
+access beyond identifying the person. Static Web Apps' GitHub provider uses GitHub's standard
+OAuth endpoints, which GitHub Apps also answer.
 
 | Provider | Kind | What the site asks for | Account name (`userDetails`) |
 | --- | --- | --- | --- |
-| GitHub | built-in, or the site's own OAuth app | the platform's default | username |
-| Microsoft | built-in, or the site's own Entra app, issuer `login.microsoftonline.com/common/v2.0` | the platform's default | can be an email address |
+| GitHub | built-in, or the site's own GitHub App | the platform's default | username |
+| Microsoft | built-in, or the site's own Entra app (work, school and personal accounts; `openid`, `profile`, `email`), issuer `login.microsoftonline.com/common/v2.0` | the platform's default | can be an email address |
 | Google | the site's own OAuth client | the platform's default (`openid`, `profile`, `email` on the built-in redirect in 2026-10; not documented) | can be an email address |
 | ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the `name` claim, if `nameClaimType` sets it (not verified); a `user-` placeholder when empty |
 
@@ -430,7 +444,8 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Resource | Bicep | SKU |
 | --- | --- | --- |
 | Resource group `rg-atlasrelay-prod` (westus2) | `infra/main.bicep` | |
-| Static Web App `swa-atlasrelay-prod` (staging environments disabled); its only app settings are the sign-in registrations (`SIGNIN_*`), when the owner has set them | `infra/app.bicep` | Standard |
+| Static Web App `swa-atlasrelay-prod` (staging environments disabled); system-assigned managed identity; its only app settings are the sign-in registrations (`SIGNIN_*`: client ids, and Key Vault references for the secrets) | `infra/app.bicep` | Standard |
+| Sign-in vault `kvs-atlasrelay-prod-<4 characters>` (RBAC only, purge protection, audit log to the workspace): the sign-in client secrets; Key Vault Secrets User for the site, Secrets Officer for the operator | `infra/signin.bicep` | Standard vault |
 | Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims`; shared keys refused | `infra/app.bicep` | Standard LRS |
 | Function App `func-atlasrelay-prod-<6 characters>` (Node 24) on plan `plan-atlasrelay-prod-api`, linked to the site as its backend, with its app settings | `infra/api.bicep` | Flex Consumption, on demand only |
 | User-assigned managed identity `id-atlasrelay-prod-api`, the Function App's identity for storage | `infra/api.bicep` | |

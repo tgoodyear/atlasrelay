@@ -14,7 +14,7 @@
 // The build reads VITE_SIGNIN_PROVIDERS. Empty (the default) builds the built-in site. Otherwise it
 // lists the custom providers, and must name github and aad, so that turning on Google or ORCID
 // never takes GitHub or Microsoft sign-in away. scripts/provision.sh works the value out from the
-// environment's settings (SIGNIN_PROVIDERS) and docs/RUNBOOK.md, "Google and ORCID sign-in", says
+// environment's settings (SIGNIN_PROVIDERS) and docs/RUNBOOK.md, "Sign-in registrations", says
 // how it reaches a build.
 
 export type ProviderId = 'github' | 'aad' | 'google' | 'orcid';

@@ -134,30 +134,65 @@ sync_budget_start() {
     return 1
   fi
 }
+# The sign-in providers' setting names and vault secret names (infra/signin.bicep).
+SIGNIN_PROVIDER_KEYS="GITHUB:github MICROSOFT:aad GOOGLE:google ORCID:orcid"
+signin_secret_name() {
+  case $1 in
+    github) echo signin-github-client-secret ;;
+    aad) echo signin-microsoft-client-secret ;;
+    google) echo signin-google-client-secret ;;
+    orcid) echo signin-orcid-client-secret ;;
+    *) return 1 ;;
+  esac
+}
 # The sign-in providers the environment's own registrations cover, as the site's build takes them
 # (VITE_SIGNIN_PROVIDERS, web/src/lib/signin.ts): empty for the built-in GitHub and Microsoft
-# sign-in, else a list such as github,aad,google,orcid. Each registration is a client id and a
-# secret, set together. Any registration of the site's own turns Static Web Apps' built-in
-# providers off, so Google or ORCID needs GitHub and Microsoft registrations too; a set that would
-# lose them is refused here, before anything is deployed.
+# sign-in, else a list such as github,aad,google,orcid. A registration is a client id in the
+# settings (ATLASRELAY_<PROVIDER>_CLIENT_ID) and its secret in the environment's sign-in vault,
+# which scripts/register-signin.sh writes. Any registration of the site's own turns Static Web
+# Apps' built-in providers off, so Google or ORCID needs GitHub and Microsoft registrations too; a
+# set that would lose them is refused here, before anything is deployed. When the vault exists,
+# each client id needs its secret there (names are listed, never values).
 signin_providers() {
-  local p name id secret providers=""
-  for p in GITHUB:github MICROSOFT:aad GOOGLE:google ORCID:orcid; do
+  local p name id providers="" vault secrets=""
+  vault=$(aget SIGNIN_KEY_VAULT_NAME) || return 1
+  for p in $SIGNIN_PROVIDER_KEYS; do
     name=${p#*:}; p=${p%%:*}
     id=$(aget "ATLASRELAY_${p}_CLIENT_ID") || return 1
-    secret=$(aget "ATLASRELAY_${p}_CLIENT_SECRET") || return 1
-    if [ -n "$id" ] && [ -n "$secret" ]; then
-      providers="${providers:+$providers,}$name"
-    elif [ -n "$id$secret" ]; then
-      echo "error: set both ATLASRELAY_${p}_CLIENT_ID and ATLASRELAY_${p}_CLIENT_SECRET, or neither" >&2
-      return 1
-    fi
+    [ -n "$id" ] && providers="${providers:+$providers,}$name"
   done
   if [ -n "$providers" ] && [[ ",$providers," != *,github,aad,* ]]; then
-    echo "error: sign-in through the site's own registrations ($providers) turns the built-in GitHub and Microsoft sign-in off; set ATLASRELAY_GITHUB_CLIENT_ID/SECRET and ATLASRELAY_MICROSOFT_CLIENT_ID/SECRET too (docs/RUNBOOK.md, \"Google and ORCID sign-in\")" >&2
+    echo "error: sign-in through the site's own registrations ($providers) turns the built-in GitHub and Microsoft sign-in off; register GitHub and Microsoft too (scripts/register-signin.sh, docs/RUNBOOK.md \"Sign-in registrations\")" >&2
     return 1
   fi
+  if [ -n "$providers" ]; then
+    [ -n "$vault" ] || { echo "error: no sign-in vault yet; run scripts/register-signin.sh $ENV_NAME" >&2; return 1; }
+    secrets=$(az keyvault secret list --vault-name "$vault" "${AZ_SUB[@]}" --query '[].name' -o tsv) ||
+      { echo "error: can't list the secrets in $vault" >&2; return 1; }
+    for name in ${providers//,/ }; do
+      grep -qx "$(signin_secret_name "$name")" <<< "$secrets" ||
+        { echo "error: $name has a client id but no secret in $vault; run scripts/register-signin.sh $ENV_NAME $name" >&2; return 1; }
+    done
+  fi
   echo "$providers"
+}
+# A sign-in vault deleted with its environment stays recoverable, with its secrets, for its
+# retention period, and its name cannot be reused until then (purge protection, signin.bicep).
+# Recover it before a deployment that would create it again.
+recover_signin_vault() {
+  local vault
+  # By its name's prefix: the settings file of a torn-down environment is renamed, so it may not
+  # have the name any more. Only one sign-in vault per environment can exist, deleted or not.
+  vault=$(az keyvault list-deleted "${AZ_SUB[@]}" --resource-type vault \
+    --query "[?starts_with(name, 'kvs-atlasrelay-$ENV_NAME-')].name | [0]" -o tsv) || return 1
+  [ -n "$vault" ] || return 0
+  echo "recovering the deleted sign-in vault $vault"
+  # A vault comes back into the group it was deleted from, which a teardown removed too. The
+  # deployment that follows takes the group over and tags it.
+  if [ "$(az group exists -n "rg-atlasrelay-$ENV_NAME" "${AZ_SUB[@]}")" != true ]; then
+    az group create -n "rg-atlasrelay-$ENV_NAME" -l "$(stack_location)" "${AZ_SUB[@]}" -o none || return 1
+  fi
+  az keyvault recover --name "$vault" "${AZ_SUB[@]}" -o none
 }
 # The sign-in providers the deployed site has app settings for, from Azure (names only; the values
 # are dropped here). Empty when the site does not exist yet.
@@ -185,6 +220,7 @@ provision() {
     *) die "ACTION_ON_UNMANAGE must be deleteResources or detachAll" ;;
   esac
   sync_budget_start || die "could not work out the budget's start date"
+  recover_signin_vault || die "could not recover the deleted sign-in vault"
   local providers previous p
   providers=$(signin_providers) || die "the sign-in settings are incomplete"
   # Removing a registration's settings breaks sign-in with it, and with GitHub and Microsoft too
