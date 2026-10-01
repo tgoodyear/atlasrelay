@@ -183,14 +183,30 @@ jobs:
             --query 'tables[0].rows[]' -o tsv ||
             echo "::warning::could not read the job's platform events"
 
-      # The summary only (status, counts, commit, run id). The repository is public, so anyone signed
-      # in to GitHub can download an artifact; the full results (report, traces, console) stay in
+      # An allowlisted copy of the summary: outcome, counts, commit, run id, and each test's title and
+      # outcome. No errors, URLs or file names: Playwright errors can quote the page. The repository
+      # is public, so anyone signed in to GitHub can download an artifact; everything else stays in
       # the private results container, under runs/<run id>/, for the operator.
+      - name: Public summary
+        if: always() && steps.start.outputs.run_id != ''
+        env:
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+        run: |
+          mkdir -p public
+          summary="results/runs/$RUN_ID/summary.json"
+          if [ -f "$summary" ]; then
+            jq '{runId, status, gitSha, startedAt, finishedAt,
+                 stats: (.stats // {} | {expected, unexpected, flaky, skipped}),
+                 tests: [(.tests // [])[] | {title, outcome}]}' "$summary" > public/summary.json
+          else
+            jq -n --arg run "$RUN_ID" '{runId: $run, status: "no summary"}' > public/summary.json
+          fi
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.start.outputs.run_id != ''
         with:
           name: e2e-dev-${{ steps.start.outputs.run_id }}
-          path: results/runs/${{ steps.start.outputs.run_id }}/summary.json
+          path: public/summary.json
           if-no-files-found: warn
           retention-days: 14
 

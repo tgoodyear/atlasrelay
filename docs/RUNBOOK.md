@@ -465,7 +465,8 @@ gh variable set E2E_REGISTRY --env dev --repo tgoodyear/atlasrelay --body "$(scr
 
 The run's summary page lists each test and its outcome. The repository is public and anyone signed
 in to GitHub can download a run's artifacts, so the artifact `e2e-dev-gh-<run id>-<attempt>` holds
-`summary.json` only. Everything else stays in the private `results` container, under
+only a reduced `summary.json`: the outcome, the counts, the commit and each test's title and outcome,
+with no errors. Everything else stays in the private `results` container, under
 `runs/<run id>/`, for 30 days; the operator can read it (`az storage blob download-batch
 --account-name <results account> -s results --pattern 'runs/<run id>/*' -d . --auth-mode login`).
 The container holds:

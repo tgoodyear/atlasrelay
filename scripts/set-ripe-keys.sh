@@ -69,16 +69,22 @@ fi
 
 # The source vault refuses every network. Admit this machine's address only while reading from it,
 # and remove the rule again on the way out, whatever happens.
+# Fails when the rule is still there, so `set -e` stops the script with the EXIT trap still set,
+# which tries again.
 source_close() {
-  az keyvault network-rule remove --name "$FROM_VAULT" --subscription "$FROM_SUB" \
-    --ip-address "$IP/32" -o none 2> /dev/null ||
-    echo "WARNING: could not remove $IP/32 from $FROM_VAULT's network rules; remove it by hand" >&2
+  if az keyvault network-rule remove --name "$FROM_VAULT" --subscription "$FROM_SUB" \
+    --ip-address "$IP/32" -o none 2> /dev/null; then
+    return 0
+  fi
+  echo "WARNING: could not remove $IP/32 from $FROM_VAULT's network rules; remove it by hand" >&2
+  return 1
 }
+# The traps go first: the add can be interrupted, or fail after Azure has applied it.
+trap source_close EXIT
+trap 'exit 130' INT TERM
 echo "opening $FROM_VAULT to $IP while reading the keys"
 az keyvault network-rule add --name "$FROM_VAULT" --subscription "$FROM_SUB" --ip-address "$IP/32" -o none ||
   die "can't add a network rule to $FROM_VAULT"
-trap source_close EXIT
-trap 'exit 130' INT TERM
 # A new rule takes a moment to apply.
 for _ in $(seq 1 18); do
   az keyvault secret list --vault-name "$FROM_VAULT" --subscription "$FROM_SUB" --query "[0].name" -o none 2> /dev/null && break
