@@ -5,6 +5,8 @@ import {
   expect,
   fakeKey,
   postProject,
+  deleteRow,
+  putRow,
   recordResponses,
   ripe,
   row,
@@ -310,6 +312,29 @@ test('an API transfer of the same amount started during the check stops the auto
   // Only the API transfer is counted.
   const after = (await (await researcher.request.get(`/api/projects/${project.id}`)).json()).project;
   expect(after.creditsConfirmed).toBe(300);
+});
+
+test('a write is refused if its receipt reservation was taken over while it waited', async ({ person }) => {
+  const { researcher, project, pledgeId } = await manualPledge(person, 300);
+  const key = await ownerKey({ transactions: transactionsOk([adminRow(994001, 300, 5)]) });
+  // Another confirmation holds the project lock, so this one reserves the arrival and then waits.
+  const lock = { partitionKey: `confirm-${project.id}`, rowKey: 'lock' };
+  await putRow('claims', { ...lock, token: 'test-holder', createdAt: new Date().toISOString() });
+  const confirming = researcher.request.patch(`/api/pledges/${project.id}/${pledgeId}`, { data: { status: 'confirmed', apiKey: key } });
+  const reservation = { partitionKey: `receipt-${researcher.id}`, rowKey: '994001' };
+  await expect.poll(async () => (await row('claims', reservation.partitionKey, reservation.rowKey))?.pledgeId, { timeout: 10_000 }).toBe(pledgeId);
+  // While it waits, its reservation is taken over, as a confirmation elsewhere would once its grace ran out.
+  await putRow('claims', { ...reservation, projectId: 'elsewhere', pledgeId: 'another-pledge', token: 'another-request', createdAt: new Date().toISOString() });
+  await deleteRow('claims', lock.partitionKey, lock.rowKey);
+
+  const res = await confirming;
+  expect(res.status(), await res.text()).toBe(409);
+  const error = (await res.json()).error;
+  expect(error.details).toMatchObject({ recorded: false });
+  expect(error.message).toContain('Another request took over that RIPE Atlas transaction');
+  expect(await row('pledges', project.id, pledgeId)).toMatchObject({ status: 'sent', amountVerified: false, transactionId: '' });
+  // The other request's reservation is left as it is.
+  expect(await row('claims', reservation.partitionKey, reservation.rowKey)).toMatchObject({ token: 'another-request' });
 });
 
 test('two confirmations racing for one arrival record it once', async ({ person }) => {

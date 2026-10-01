@@ -162,6 +162,22 @@ export async function row(table: (typeof TABLES)[number], partitionKey: string, 
   }
 }
 
+/**
+ * Write or remove one row directly, as another request would. For the tests that stage a race the
+ * API cannot be made to produce on cue.
+ */
+export async function putRow(table: (typeof TABLES)[number], entity: { partitionKey: string; rowKey: string } & Record<string, unknown>): Promise<void> {
+  const client = TableClient.fromConnectionString(TABLES_CONNECTION_STRING, table, { allowInsecureConnection: true });
+  await client.upsertEntity(entity, 'Replace');
+}
+
+export async function deleteRow(table: (typeof TABLES)[number], partitionKey: string, rowKey: string): Promise<void> {
+  const client = TableClient.fromConnectionString(TABLES_CONNECTION_STRING, table, { allowInsecureConnection: true });
+  await client.deleteEntity(partitionKey, rowKey).catch((err) => {
+    if ((err as { statusCode?: number }).statusCode !== 404) throw err;
+  });
+}
+
 /** The output of one stack process so far. */
 export function stackLog(name: keyof typeof LOGS): string {
   try {

@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, acquireConfirmLock, ownerReceiptLedger, pledgeInFlight, releaseConfirmLock, recomputeProjectTotals, releasePledgeClaim, releaseReceipt, reserveReceipt, savePledge, totals, type ReceiptLedger } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, acquireConfirmLock, ownerReceiptLedger, pledgeInFlight, releaseConfirmLock, recomputeProjectTotals, releasePledgeClaim, releaseReceipt, renewReceipt, reserveReceipt, savePledge, totals, type ReceiptLedger } from '../lib/store';
 import { checkReceipt, contestedOnRecheck, stillUncontested, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
@@ -774,16 +774,11 @@ app.http('pledges-update', {
       receivedAmount = checked.amount;
       amountVerified = true;
       transactionId = checked.transactionId;
-      // The ledger was read, not locked. Take the arrival atomically before the pledge is written,
-      // so a second confirmation racing this one cannot record the same transfer.
-      receiptToken = await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id);
-      if (!receiptToken) {
-        throw new HttpError(409, 'Another request is recording that RIPE Atlas transaction right now. Nothing was recorded. Check again in a few minutes.', { recorded: false });
-      }
       // An automatic match rests on no other pledge being able to account for the arrival, and the
-      // ledger that said so was read before RIPE answered. Read it again now, as late as it can be
-      // read outside the lock, and hand the choice to the owner if anything changed. A row the owner
-      // chose is theirs to choose, so it is not second-guessed.
+      // ledger that said so was read before RIPE answered. Read it again now, and hand the choice to
+      // the owner if anything changed. A row the owner chose is theirs to choose, so it is not
+      // second-guessed. Before the reservation below, not after: this read has no deadline, and a
+      // reservation held through it could outlast its grace and be taken over.
       if (checked.outcome === 'exact') {
         let fresh: ReceiptLedger | null = null;
         try {
@@ -791,12 +786,18 @@ app.http('pledges-update', {
         } catch (err) {
           logError('Could not re-read which RIPE Atlas transactions are already matched', err);
         }
-        if (!fresh || !stillUncontested(checked.receipt, fresh)) {
-          await releaseReceipt(project.ownerId, transactionId, receiptToken).catch(() => undefined);
+        if (!fresh) throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.', { recorded: false });
+        if (!stillUncontested(checked.receipt, fresh)) {
           logEvent('receipt-check', { outcome: 'contested-on-recheck', projectId, pledgeId: pledge.id });
-          if (!fresh) throw new HttpError(503, 'We could not check this pledge against your other pledges just now. Nothing was recorded. Please try again in a moment.', { recorded: false });
           throw contestedOnRecheck(checked.receipt, pledge.amount);
         }
+      }
+      // The ledger was read, not locked. Take the arrival atomically before the pledge is written,
+      // so a second confirmation racing this one cannot record the same transfer. From here to the
+      // write is only the short locked path, and the write is fenced on this reservation below.
+      receiptToken = await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id);
+      if (!receiptToken) {
+        throw new HttpError(409, 'Another request is recording that RIPE Atlas transaction right now. Nothing was recorded. Check again in a few minutes.', { recorded: false });
       }
     }
 
@@ -826,6 +827,14 @@ app.http('pledges-update', {
               : { recorded: false },
           );
         }
+      }
+
+      // Fence the write on the receipt reservation. Neither the pledge's version nor the project lock
+      // says this request still holds the arrival: a reservation older than its grace can be taken
+      // over by a confirmation on any of the owner's projects. Renewing it conditionally both proves
+      // it is still ours and restarts its grace, so the write that follows lands well inside it.
+      if (receiptToken && !(await renewReceipt(project.ownerId, transactionId, receiptToken))) {
+        throw new HttpError(409, 'Another request took over that RIPE Atlas transaction while this one was running. Nothing was recorded. Check again.', { recorded: false });
       }
 
       // Conditional on the row not having changed since it was read at the top of this handler. The

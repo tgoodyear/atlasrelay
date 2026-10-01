@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { AtlasRefused, AtlasUnreachable, readAdminTransactions, type TransactionPage } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 import { checkReceipt, contestedOnRecheck, incomingReceipts, stillUncontested, matchReceipt, MAX_RECEIPTS_SHOWN, pageComplete, type CheckInput, type Receipt, type VerificationDetails } from '../src/lib/receipts';
-import { creditedAmount, RECEIPT_CLOCK_SKEW_MS, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, confirmLockStale, toPledge, totals, type Pledge } from '../src/lib/store';
+import { creditedAmount, RECEIPT_CLOCK_SKEW_MS, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, reservationHeldBy, confirmLockStale, toPledge, totals, type Pledge } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import { invocationLog, type LogSink } from '../src/lib/telemetry';
 
@@ -392,6 +392,17 @@ test('an automatic match is weighed again against a ledger read after RIPE answe
   assert.equal(err.details.verification.outcome, 'several');
   assert.deepEqual(err.details.verification.receipts?.map((x) => [x.id, x.contested]), [['5', true]]);
   assert.match(err.message, /another pledge of the same amount could account for that transfer/);
+});
+
+test('a write is fenced only by the reservation this request took', () => {
+  assert.equal(reservationHeldBy({ token: 'abc' }, 'abc'), true);
+  // Taken over by another request: a different token.
+  assert.equal(reservationHeldBy({ token: 'xyz' }, 'abc'), false);
+  // Gone, or a row from before tokens existed.
+  assert.equal(reservationHeldBy(null, 'abc'), false);
+  assert.equal(reservationHeldBy({}, 'abc'), false);
+  // A request that took no reservation holds none.
+  assert.equal(reservationHeldBy({ token: '' }, ''), false);
 });
 
 test('a receipt reservation is final once its pledge records the transaction, and frees itself otherwise', () => {

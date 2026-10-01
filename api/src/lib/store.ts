@@ -912,10 +912,35 @@ export async function releaseConfirmLock(projectId: string, token: string): Prom
   }
 }
 
+/** Whether a stored receipt reservation is the one the request holding `token` took. */
+export function reservationHeldBy(row: Record<string, unknown> | null, token: string): boolean {
+  return Boolean(row && token && String(row.token ?? '') === token);
+}
+
+/**
+ * Prove a receipt reservation is still this request's and restart its grace, in one conditional
+ * write. False when the row is gone, names another request, or changed under us (412).
+ */
+export async function renewReceipt(ownerId: string, transactionId: string, token: string): Promise<boolean> {
+  const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
+  if (!held || !reservationHeldBy(held, token)) return false;
+  try {
+    await (await table(CLAIMS_TABLE)).updateEntity(
+      { partitionKey: receiptPk(ownerId), rowKey: transactionId, createdAt: now() } as TableEntity,
+      'Merge',
+      { etag: String(held.etag ?? '') },
+    );
+    return true;
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    throw err;
+  }
+}
+
 /** Give a receipt reservation back, only if the request holding `token` still holds it. */
 export async function releaseReceipt(ownerId: string, transactionId: string, token: string): Promise<void> {
   const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
-  if (!held || String(held.token ?? '') !== token) return;
+  if (!held || !reservationHeldBy(held, token)) return;
   try {
     await (await table(CLAIMS_TABLE)).deleteEntity(receiptPk(ownerId), transactionId, { etag: String(held.etag ?? '') });
   } catch (err) {

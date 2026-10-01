@@ -171,3 +171,21 @@ test('an automatic match is checked against a fresh ledger after the RIPE read a
   assert.ok(ripe > 0 && recheck > 0 && save > 0, 'the update handler no longer re-checks an automatic match');
   assert.ok(ripe < recheck && recheck < save, 'the fresh ledger is weighed after RIPE answers and before the pledge is written');
 });
+
+test('the history recheck runs before the receipt is reserved, and the write is fenced on the reservation', () => {
+  // The recheck reads the owner's whole history with no deadline. Holding the reservation through it
+  // could outlast the reservation's grace, so it runs first; and the write, under the project lock,
+  // goes ahead only if a conditional renewal shows the reservation is still this request's.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const recheck = update.indexOf('stillUncontested(');
+  const reserve = update.indexOf('await reserveReceipt(');
+  const lock = update.indexOf('await acquireConfirmLock(');
+  const fence = update.indexOf('await renewReceipt(');
+  const save = update.indexOf('await savePledge(');
+  assert.ok(recheck > 0 && reserve > 0 && lock > 0 && fence > 0 && save > 0, 'the update handler no longer rechecks, reserves, locks, fences and writes');
+  assert.ok(recheck < reserve, 'the history recheck runs before the receipt is reserved');
+  assert.ok(reserve < lock && lock < fence && fence < save, 'the reservation is renewed under the lock, just before the write');
+  const afterReserve = update.slice(reserve, save);
+  assert.equal(afterReserve.includes('ownerReceiptLedger('), false, 'no history read while the reservation is held');
+});
