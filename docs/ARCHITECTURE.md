@@ -109,7 +109,9 @@ the partition after each change, so the project row never drifts.
 3. Create project: title, one-paragraph summary, description, credits needed, tags,
    optional links and deadline. Publish.
 4. Watch pledges arrive; confirm manual pledges once credits show up at
-   https://atlas.ripe.net/credits/ (transactions list). Close the project when done.
+   https://atlas.ripe.net/credits/ (transactions list). Optionally paste a key of their own
+   with only "Get information about your credits" when confirming; see
+   [Checking a manual pledge](#checking-a-manual-pledge). Close the project when done.
 
 ### Donor
 1. Open a project, click **Send credits**, pick an amount. It defaults to what is left toward the goal, and is bounded by `maxSinglePledge`: what is left to the goal, or one goal's worth once the goal is met. A project accepts up to 100× its request in total, but no single pledge may reserve that whole ceiling.
@@ -141,6 +143,49 @@ the partition after each change, so the project row never drifts.
      a link to https://atlas.ripe.net/credits/transfer/. The pledge is `pledged`; the
      donor marks it `sent`; the requester marks it `confirmed`.
 3. Donor's pledges are listed on their dashboard.
+
+### Checking a manual pledge
+
+A manual pledge records what the donor said they would send. The donor transfers on
+atlas.ripe.net, where the site cannot see it, and may send a different amount. When the owner confirms,
+they may paste a key of their own with only "Get information about your credits". The API reads
+`GET /credits/transactions/?sort=-date&type=admin&page_size=100` once with it, keeps nothing of the
+key, and looks for the arrival.
+
+RIPE's rows carry `id`, `type`, a signed `amount`, `date` in epoch seconds, `reason`,
+`description` and balances. No documented field names the other account. In practice the
+`description` reads "from" and an email address, but the format is undocumented and the site does
+not know a donor's RIPE NCC Access email, so a row is not tied to a donor. A row is a candidate when it is `admin`, its amount is positive (credits in), it is no
+older than the pledge (to the second, since RIPE stamps whole seconds), and its id is not already
+recorded against another pledge on any of the owner's projects.
+
+A candidate is *contested* when another of the owner's pledges of the same amount, with no RIPE
+transaction id recorded, could account for it: a pledge still waiting (its donor may have sent), an
+API transfer (the server never looks its row up), or a manual pledge confirmed without a check. A
+waiting pledge could account for any arrival after it was created; a confirmed API transfer, any
+arrival from its creation to a minute after the server saw RIPE accept it (a row is dated when the
+transfer happened); any other confirmed pledge, any arrival from its creation to ten minutes after
+it was last updated. Then:
+
+| Candidates | What happens |
+| --- | --- |
+| Exactly one of the pledged amount, not contested | Confirmed, verified, with RIPE's transaction id. Other amounts beside it are ignored. |
+| One, of another amount | 409. The owner sees "RIPE Atlas shows N credits arrived since this pledge was made (pledged M)" and chooses to record N, confirm M unchecked, or wait. |
+| Several, a contested one, or the page may be incomplete | 409 with the list, contested rows marked and none preselected. The owner picks one, or confirms M unchecked. Nothing is guessed. |
+| None | 409. The row may not be indexed yet (RIPE lists a transfer some time after it happens). Check again, or confirm M unchecked. |
+| Key refused (401/403) | 400 naming the permission. Nothing recorded. |
+| RIPE does not answer | 409. Nothing recorded. Check again, or confirm M unchecked. Confirming is final, so the site does not confirm for the owner when the read times out. |
+
+A row the owner picks is read again in the request that records it, and has to pass the same
+tests, so the browser never supplies an amount. Recording never takes the project past its 100×
+ceiling: if what arrived would, the owner is told and offered M unchecked when M fits, or cancel.
+A project already at its ceiling is refused before the key is sent. What arrived is not held to the
+per-pledge maximum, which limits what a donor may reserve, not what can be recorded as received.
+
+The pledge keeps `amount` (what was pledged) and gains `receivedAmount` (what arrived, 0 when
+unchecked), `amountVerified`, and RIPE's id in `transactionId`. Totals count `receivedAmount`
+when it is set and `amount` otherwise, and the public pledge shows the counted amount, the pledged
+one when they differ, and a "Verified with RIPE Atlas" marker when `amountVerified` is set. Rows written before these fields read as unchecked.
 
 ### Ordering, and what happens when a transfer fails
 
@@ -254,7 +299,7 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 | `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. |
 | `GET /api/projects/{id}/pledges` | owner or donor | Owner: all pledges. Donor: own. |
 | `POST /api/projects/{id}/pledges` | user, not owner | `{amount, method, message, anonymous?, apiKey?}`. `anonymous` must be a real boolean when present; it withholds the donor's name from public views. Returns pledge and, for `manual`, the recipient email. |
-| `PATCH /api/pledges/{projectId}/{id}` | donor or owner | Donor: `sent`/`cancelled`. Owner: `confirmed`/`cancelled` (for stale pledges). |
+| `PATCH /api/pledges/{projectId}/{id}` | donor or owner | Donor: `sent`/`cancelled`. Owner: `confirmed`/`cancelled` (for stale pledges). On a manual pledge the owner may add `apiKey` (their own key) and, after a first answer, `transactionId`; see [Checking a manual pledge](#checking-a-manual-pledge). Answers 409 with `details.verification` when the owner has to decide. |
 | `GET /api/my` | user | My projects + my pledges. |
 | `GET /api/stats` | public | Totals for the home page. |
 | `POST /api/atlas/balance` | user | `{apiKey}` → `{current_balance,...}` from RIPE. Never stored. |

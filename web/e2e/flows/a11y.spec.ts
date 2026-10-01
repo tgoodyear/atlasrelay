@@ -41,6 +41,12 @@ test('signed-in pages and the pledge dialog have no axe violations', async ({ pe
     await checkPage(page, `${path} as owner`);
   }
 
+  // The owner's confirm dialog, where a key can be pasted to check the amount.
+  await page.goto(`/projects/${project.id}`);
+  await page.locator('.pledge').filter({ hasText: second.name }).getByRole('button', { name: 'Confirm received' }).click();
+  await expect(page.getByRole('dialog', { name: 'Confirm this pledge' })).toBeVisible();
+  await checkPage(page, 'confirm dialog');
+
   const other = await person({ role: 'other' });
   await other.page.goto(`/projects/${project.id}`);
   await other.page.getByRole('button', { name: 'Send credits' }).click();

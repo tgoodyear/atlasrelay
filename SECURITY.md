@@ -1,8 +1,8 @@
 # Security
 
 Atlas Relay handles two kinds of sensitive data: the RIPE NCC Access email addresses
-researchers add to their profiles, and the RIPE Atlas API keys donors paste when they
-transfer credits through the site.
+researchers add to their profiles, and the RIPE Atlas API keys people paste: donors when they
+transfer credits through the site, and researchers when they check a manual pledge.
 
 ## Reporting a vulnerability
 
@@ -53,6 +53,18 @@ Error handling never echoes request bodies, so a key cannot reach a log.
 Donors should create a key with only the two permissions the site uses, "Transfer credits to
 another user" and "Get information about your credits", give it a short validity window, and
 delete it afterwards.
+
+A researcher confirming a manual pledge may paste a key of their own so the site records the
+amount that actually arrived. The key is sent with the confirmation and is used for one request
+to RIPE, `GET /api/v2/credits/transactions/?sort=-date&type=admin&page_size=100`, which lists the
+researcher's recent transfers. The page keeps the key while the confirm dialog is open and sends
+it again, for the same single request, when the researcher picks a transfer or checks again. It
+drops the key when the dialog closes. Nothing else is done with it, and it is
+handled like a donor's key: not stored, not logged, not echoed in errors. It needs only "Get
+information about your credits". The site keeps the amount it found and RIPE's id for that
+transaction. RIPE's reason and description text for each listed transfer is shown to the researcher and not kept.
+The transaction id is shown to the researcher and the donor of that pledge. Public pledge data
+leaves the id out; it shows whether the amount was verified and whether the pledge has a reference.
 
 **RIPE NCC Access emails are private.** No anonymous endpoint returns them. A signed-in donor
 sees a researcher's address when they start a manual pledge, because they need it to send the

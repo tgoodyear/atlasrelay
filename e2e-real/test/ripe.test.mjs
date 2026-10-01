@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { RipeError, pollUntil, ripeClient, shortSide } from '../lib/ripe.mjs';
+import { RipeError, maskEmails, pollUntil, ripeClient, shortSide } from '../lib/ripe.mjs';
 
 // A fake key, and a fake RIPE Atlas answering from a table: nothing here reaches the network.
 const KEY = '11111111-2222-4333-8444-555555555555';
@@ -100,6 +100,30 @@ test('transfersSince keeps the rows from that second on, from a list or a page o
   assert.match(listed.calls[0].url, /type=admin/);
   const paged = fakeRipe({ 'GET /api/v2/credits/transactions/': { status: 200, body: { results: rows } } });
   assert.equal((await paged.client.transfersSince(since)).length, 2);
+});
+
+test('adminPage reads the query the site uses, keeps the fields it looks at, and masks addresses', async () => {
+  const rows = [
+    { id: 640025586, type: 'admin', amount: 100, date: 1789680550, reason: 'Transfer', description: 'From donor@example.org', balance_after: 5 },
+  ];
+  const { client, calls } = fakeRipe({ 'GET /api/v2/credits/transactions/': { status: 200, body: { count: 1, next: null, previous: null, results: rows } } });
+  const page = await client.adminPage();
+  assert.equal(new URL(calls[0].url).search, '?sort=-date&type=admin&page_size=100');
+  assert.deepEqual(page, {
+    status: 200,
+    count: 1,
+    hasMore: false,
+    rows: [{ id: '640025586', type: 'admin', amount: 100, date: 1789680550_000, note: 'Transfer / From [email]' }],
+  });
+  const more = fakeRipe({ 'GET /api/v2/credits/transactions/': { status: 200, body: { count: 300, next: 'https://ripe.test/next', results: [] } } });
+  assert.equal((await more.client.adminPage()).hasMore, true);
+  const refused = fakeRipe({ 'GET /api/v2/credits/transactions/': forbidden });
+  await assert.rejects(refused.client.adminPage(), (err) => /** @type {RipeError} */ (err).status === 403);
+});
+
+test('maskEmails hides addresses and nothing else', () => {
+  assert.equal(maskEmails('Transfer from A.B+c@sub.example.org to x@y.io, ok'), 'Transfer from [email] to [email], ok');
+  assert.equal(maskEmails('Credit transfer'), 'Credit transfer');
 });
 
 test('shortSide picks the smaller balance, the recipient on a tie', () => {

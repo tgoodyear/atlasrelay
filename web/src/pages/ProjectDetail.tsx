@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import ConfirmPledgeDialog from '../components/ConfirmPledgeDialog';
 import PledgeDialog from '../components/PledgeDialog';
 import { PledgeStatusPill, ResultsPill, StatusPill, TagPills } from '../components/Pills';
 import Progress from '../components/Progress';
@@ -22,6 +23,8 @@ export default function ProjectDetail() {
   const [notFound, setNotFound] = useState(false);
   const [showPledge, setShowPledge] = useState(false);
   const [busy, setBusy] = useState('');
+  // The manual pledge the owner is confirming, which opens a dialog where they may check it with RIPE Atlas.
+  const [confirming, setConfirming] = useState<Pledge | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -184,8 +187,16 @@ export default function ProjectDetail() {
                                 else, which reads as the checkbox having failed. */}
                             {p.anonymous && p.donorId && <span className="pill pill-quiet"> not shown publicly</span>}
                             {' '}· {fmt(p.amount)} credits
+                            {p.pledgedAmount !== undefined && p.pledgedAmount !== p.amount && <span className="muted"> (pledged {fmt(p.pledgedAmount)})</span>}
                           </span>
-                          <PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} transferUncertain={p.transferUncertain} />
+                          <span>
+                            {p.amountVerified && (
+                              <span className="pill pill-teal" title="The amount was read from the researcher's RIPE Atlas transaction log when the pledge was confirmed." style={{ marginRight: '0.4rem' }}>
+                                Verified with RIPE Atlas
+                              </span>
+                            )}
+                            <PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} transferUncertain={p.transferUncertain} />
+                          </span>
                         </div>
                         {p.message && <p className="message">{p.message}</p>}
                         <div className="when">{fmtDate(p.createdAt)}{p.method === 'api' ? ' · via API' : ''}</div>
@@ -195,7 +206,7 @@ export default function ProjectDetail() {
                               <button className="btn btn-sm" disabled={busy === p.id} onClick={() => updatePledge(p, 'sent')}>I've sent the credits</button>
                             )}
                             {isOwner && (
-                              <button className="btn btn-sm" disabled={busy === p.id} onClick={() => updatePledge(p, 'confirmed')}>Confirm received</button>
+                              <button className="btn btn-sm" disabled={busy === p.id} onClick={() => (p.method === 'manual' ? setConfirming(p) : updatePledge(p, 'confirmed'))}>Confirm received</button>
                             )}
                             {/* The owner may always cancel. Whether the donor may is a server rule that
                                 turns on fields the page cannot see, so it is asked rather than guessed:
@@ -277,6 +288,14 @@ export default function ProjectDetail() {
           </div>
         </aside>
       </div>
+
+      {confirming && (
+        <ConfirmPledgeDialog
+          project={project}
+          pledge={confirming}
+          onClose={() => { setConfirming(null); void load(); }}
+        />
+      )}
 
       {showPledge && (
         <PledgeDialog

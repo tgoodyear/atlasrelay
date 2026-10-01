@@ -1,5 +1,6 @@
 import { TableClient, TableEntity, odata, RestError } from '@azure/data-tables';
 import { HttpError } from './http';
+import { newId } from './ids';
 import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
 import { logError, tableDependencyPolicy } from './telemetry';
@@ -135,6 +136,18 @@ export interface Pledge {
    * was even issued, and an owner could then free the slot while the credits were moving.
    */
   inFlightSince: string;
+  /**
+   * What actually arrived, when the project owner confirmed a manual pledge with a RIPE Atlas key
+   * and the API read the matching row from their transaction log. 0 means nobody read it, which
+   * is every API pledge, every pledge confirmed without a key, and every row written before this
+   * field existed. `amount` keeps what the donor pledged either way. See creditedAmount.
+   */
+  receivedAmount: number;
+  /**
+   * The API read receivedAmount and transactionId from the owner's RIPE Atlas transaction log
+   * itself, in the request that confirmed the pledge. Never set from anything the browser sent.
+   */
+  amountVerified: boolean;
   message: string;
   createdAt: string;
   updatedAt: string;
@@ -546,7 +559,23 @@ export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
 
 // ---------- pledges ----------
 
-function toPledge(e: Entity): Pledge {
+/** A stored credit figure, or 0 when the column is missing or holds anything but a positive whole number. */
+function storedCredits(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
+
+/**
+ * The credits a pledge counts for once confirmed: what RIPE Atlas showed arriving when the owner
+ * checked, otherwise what was pledged. Every total goes through this, so a manual pledge whose donor
+ * sent a different amount is counted at what actually reached the project.
+ */
+export function creditedAmount(p: Pick<Pledge, 'amount' | 'receivedAmount'>): number {
+  return p.receivedAmount > 0 ? p.receivedAmount : p.amount;
+}
+
+/** Exported for tests. */
+export function toPledge(e: Entity): Pledge {
   return {
     id: e.rowKey,
     projectId: e.partitionKey,
@@ -563,6 +592,9 @@ function toPledge(e: Entity): Pledge {
     transferUncertain: e.transferUncertain === true,
     inFlight: e.inFlight === true,
     inFlightSince: String(e.inFlightSince ?? ''),
+    // Rows written before these fields existed read as unchecked, which is what they were.
+    receivedAmount: storedCredits(e.receivedAmount),
+    amountVerified: e.amountVerified === true,
     message: String(e.message ?? ''),
     etag: typeof e.etag === 'string' ? e.etag : undefined,
     createdAt: String(e.createdAt ?? ''),
@@ -669,6 +701,252 @@ export async function listPledgesByDonor(donorId: string): Promise<Pledge[]> {
     out.push(toPledge(e));
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/**
+ * How long after a confirmed manual pledge was last written its transfer could still be dated. A
+ * row's date is when RIPE made the transfer, not when it was listed (seen live on dev: dated the
+ * second the request was sent), so this is not about RIPE's indexing delay. It allows for an owner
+ * who confirmed a little before the credits actually arrived, which nothing here can see.
+ */
+export const RECEIPT_INDEXING_SLACK_MS = 10 * 60 * 1000;
+
+/**
+ * Allowance for the clocks of this server and RIPE disagreeing, applied to an API transfer's
+ * transferredAt: the moment this server saw RIPE accept it, so its row is dated no later than that.
+ */
+export const RECEIPT_CLOCK_SKEW_MS = 60 * 1000;
+
+/** What a receipt check needs to know about the owner's other pledges. */
+export interface ReceiptLedger {
+  /** RIPE transaction ids already recorded against another pledge. */
+  used: Set<string>;
+  /** Other pledges that could own an arrival without having recorded which one. */
+  rivals: { amount: number; from: number; until: number | null }[];
+}
+
+/**
+ * Separate from the storage reads so the rules can be tested.
+ *
+ * `used` stops one recorded arrival being matched twice. `rivals` covers what `used` cannot see:
+ * a pledge that owns an arrival without having recorded its id. That is every API transfer (the
+ * server never looks its row up), every manual pledge confirmed without a check, and every pledge
+ * still waiting, whose donor may already have sent. A rival can own an arrival of its own amount
+ * recorded after it was created. A confirmed API transfer's row is dated no later than
+ * transferredAt, when this server saw RIPE accept it, give or take the clocks. Any other confirmed
+ * pledge's row is dated no later than shortly after it was last written, since its transfer had
+ * happened by the time it was confirmed. updatedAt only moves forward (a later name scrub moves it
+ * too), so that bound errs towards calling more rows contested, which only means the owner is asked
+ * rather than a row being matched for them. transferredAt is used where it exists because a scrub
+ * after a test run or a profile deletion would otherwise hold an API transfer's window open, and
+ * every later arrival of that amount would be put to the owner (seen on dev).
+ */
+export function receiptLedger(pledges: Pledge[], exceptPledgeId: string): ReceiptLedger {
+  const used = new Set<string>();
+  const rivals: ReceiptLedger['rivals'] = [];
+  for (const p of pledges) {
+    if (p.id === exceptPledgeId || p.status === 'cancelled') continue;
+    if (p.transactionId) used.add(p.transactionId);
+    // A reference on a manual pledge was read from the owner's own log by a check, so it names the
+    // owner's row and `used` covers it. One on an API pledge (none are written today, but the field
+    // exists) would come from the donor's log, and the two rows of one transfer carry different ids
+    // (seen live, docs/RIPE-ATLAS-NOTES.md), so an API pledge stays a rival either way.
+    if (p.transactionId && p.method !== 'api') continue;
+    const from = Date.parse(p.createdAt);
+    if (!Number.isFinite(from)) continue;
+    if (p.status === 'confirmed') {
+      const accepted = p.method === 'api' ? Date.parse(p.transferredAt) : Number.NaN;
+      const last = Date.parse(p.updatedAt);
+      const until = Number.isFinite(accepted)
+        ? accepted + RECEIPT_CLOCK_SKEW_MS
+        : Number.isFinite(last)
+          ? last + RECEIPT_INDEXING_SLACK_MS
+          : null;
+      rivals.push({ amount: creditedAmount(p), from, until });
+    } else {
+      rivals.push({ amount: p.amount, from, until: null });
+    }
+  }
+  return { used, rivals };
+}
+
+/**
+ * The receipt ledger across every project this owner has posted. One RIPE account receives the
+ * credits for all of them, so an arrival has to be weighed against all of their pledges.
+ *
+ * Read before a check and not locked. Two confirmations racing each other can both find a row
+ * unused, which is why the one that records it must also take reserveReceipt first.
+ */
+export async function ownerReceiptLedger(ownerId: string, exceptPledgeId: string): Promise<ReceiptLedger> {
+  const projects = await listProjectsByOwner(ownerId);
+  const all: Pledge[] = [];
+  // Every project the owner ever posted, closed ones included, so in parallel batches: one partition
+  // query each, the same bound the owner listing uses.
+  for (let i = 0; i < projects.length; i += OWNER_READ_CONCURRENCY) {
+    const batch = await Promise.all(projects.slice(i, i + OWNER_READ_CONCURRENCY).map((p) => listPledges(p.id)));
+    for (const pledges of batch) all.push(...pledges);
+  }
+  return receiptLedger(all, exceptPledgeId);
+}
+
+/**
+ * The partition holding one owner's receipt reservations, in the claims table. Pledge slots there
+ * are partitioned by project id, which never starts with this prefix.
+ */
+function receiptPk(ownerId: string): string {
+  return `receipt-${ownerId}`;
+}
+
+/**
+ * Whether a held receipt reservation may be taken over by another pledge.
+ *
+ * The ledger above is read before the write, so on its own two confirmations of different pledges
+ * could both see a transaction as unused and both record it: each pledge write is guarded by its
+ * own version, and nothing spans the two. The reservation is one row per (owner, transaction),
+ * created atomically before the pledge is saved, so only one of them gets it.
+ *
+ * It is released when the pledge write is refused, but a write whose outcome is unknown leaves it
+ * behind, so it cannot be final on its own say-so. The pledge it names decides: confirmed with this
+ * transaction means taken for good; anything else means the write never landed, and once the
+ * reservation is older than any request could still be running it is free.
+ */
+export function receiptReservationReclaimable(heldCreatedAt: string, holder: Pledge | null, transactionId: string, asOf: number = Date.now()): boolean {
+  if (holder && holder.status === 'confirmed' && holder.transactionId === transactionId) return false;
+  const since = Date.parse(heldCreatedAt);
+  if (!Number.isFinite(since)) return true;
+  return asOf - since > CLAIM_ORPHAN_GRACE_MS;
+}
+
+/**
+ * Reserve an arrival in the owner's RIPE Atlas log for one confirmation request. Returns a token
+ * naming this request's reservation, or '' when another request holds it.
+ *
+ * Per request, not per pledge. Two requests confirming the same pledge at once would otherwise both
+ * hold it, and the one whose pledge write then lost its 412 would release the winner's reservation,
+ * leaving the recorded arrival free for a third request working from an older ledger. A reservation
+ * held by another request, for whichever pledge, is respected until it is reclaimable.
+ */
+export async function reserveReceipt(ownerId: string, transactionId: string, projectId: string, pledgeId: string): Promise<string> {
+  const t = await table(CLAIMS_TABLE);
+  const token = newId();
+  const entity = { partitionKey: receiptPk(ownerId), rowKey: transactionId, projectId, pledgeId, token, createdAt: now() };
+  try {
+    await t.createEntity(entity);
+    return token;
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+  }
+  const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
+  if (!held) return reserveReceipt(ownerId, transactionId, projectId, pledgeId);
+  const holder = await getPledge(String(held.projectId ?? ''), String(held.pledgeId ?? ''));
+  if (!receiptReservationReclaimable(String(held.createdAt ?? ''), holder, transactionId)) return '';
+  try {
+    await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+    return token;
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return '';
+    throw err;
+  }
+}
+
+/**
+ * Whether a project's confirmation lock may be taken over. A holder is a request that is still
+ * running or one that died; requests are bounded far below the orphan grace (a RIPE read gives up
+ * after 5 seconds), so a lock older than that is a dead request's.
+ */
+export function confirmLockStale(heldCreatedAt: string, asOf: number = Date.now()): boolean {
+  const since = Date.parse(heldCreatedAt);
+  if (!Number.isFinite(since)) return true;
+  return asOf - since > CLAIM_ORPHAN_GRACE_MS;
+}
+
+/**
+ * One confirmation at a time per project, from reading the totals to writing the pledge.
+ *
+ * The ceiling check reads the project's confirmed total and then writes one pledge, and each pledge
+ * write is guarded only by its own version, so two confirmations of different pledges could both
+ * pass it and together take the project past its ceiling. A checked confirmation records what
+ * arrived, which can be more than the pledge reserved, so that overshoot is not bounded by the
+ * reservations. A row in the claims table, created atomically, serialises them.
+ *
+ * Waits briefly for a holder to finish, since the usual rival is the same owner's second click.
+ * Returns a token for releaseConfirmLock, or '' when the lock stayed held.
+ */
+export async function acquireConfirmLock(projectId: string, waitMs = 8_000): Promise<string> {
+  const t = await table(CLAIMS_TABLE);
+  const pk = `confirm-${projectId}`;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const token = newId();
+    const entity = { partitionKey: pk, rowKey: 'lock', token, createdAt: now() };
+    try {
+      await t.createEntity(entity);
+      return token;
+    } catch (err) {
+      if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+    }
+    const held = await getEntity(CLAIMS_TABLE, pk, 'lock');
+    if (held && confirmLockStale(String(held.createdAt ?? ''))) {
+      try {
+        await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+        return token;
+      } catch (err) {
+        if (!(err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404))) throw err;
+      }
+    }
+    if (held && Date.now() >= deadline) return '';
+    if (held) await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+/** Release the project's confirmation lock, only if the request holding `token` still holds it. */
+export async function releaseConfirmLock(projectId: string, token: string): Promise<void> {
+  const pk = `confirm-${projectId}`;
+  const held = await getEntity(CLAIMS_TABLE, pk, 'lock');
+  if (!held || String(held.token ?? '') !== token) return;
+  try {
+    await (await table(CLAIMS_TABLE)).deleteEntity(pk, 'lock', { etag: String(held.etag ?? '') });
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) return;
+    throw err;
+  }
+}
+
+/** Whether a stored receipt reservation is the one the request holding `token` took. */
+export function reservationHeldBy(row: Record<string, unknown> | null, token: string): boolean {
+  return Boolean(row && token && String(row.token ?? '') === token);
+}
+
+/**
+ * Prove a receipt reservation is still this request's and restart its grace, in one conditional
+ * write. False when the row is gone, names another request, or changed under us (412).
+ */
+export async function renewReceipt(ownerId: string, transactionId: string, token: string): Promise<boolean> {
+  const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
+  if (!held || !reservationHeldBy(held, token)) return false;
+  try {
+    await (await table(CLAIMS_TABLE)).updateEntity(
+      { partitionKey: receiptPk(ownerId), rowKey: transactionId, createdAt: now() } as TableEntity,
+      'Merge',
+      { etag: String(held.etag ?? '') },
+    );
+    return true;
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    throw err;
+  }
+}
+
+/** Give a receipt reservation back, only if the request holding `token` still holds it. */
+export async function releaseReceipt(ownerId: string, transactionId: string, token: string): Promise<void> {
+  const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
+  if (!held || !reservationHeldBy(held, token)) return;
+  try {
+    await (await table(CLAIMS_TABLE)).deleteEntity(receiptPk(ownerId), transactionId, { etag: String(held.etag ?? '') });
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) return;
+    throw err;
+  }
 }
 
 export async function getPledge(projectId: string, id: string): Promise<Pledge | null> {
@@ -936,7 +1214,7 @@ export function totals(pledges: Pledge[], asOf: number = Date.now()): { confirme
   let pending = 0;
   for (const p of pledges) {
     if (p.status === 'confirmed') {
-      confirmed += p.amount;
+      confirmed += creditedAmount(p);
     } else if (p.status === 'pledged' || p.status === 'sent') {
       // An unresolved row keeps its reservation at any age. It is also what keeps the owner being told
       // something is waiting: the dashboard's prompt and the refresh rotation that keeps it accurate are

@@ -261,11 +261,18 @@ The same file runs against the local stack in every full-flow run.
 runs the flow there. It uses the site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`), not
 dev.atlasrelay.org: a newly bound custom domain can answer the platform's 404 on some requests for
 hours, and a test run should not wait on that. It runs with the page steps the local full-flow
-tests use (`web/e2e/ui.ts`). It has two spec files:
+tests use (`web/e2e/ui.ts`). It has three spec files:
 
 - `full-flow.spec.ts`: the researcher saves a profile and posts a project, the donor pledges to
   transfer by hand and marks the credits sent, the researcher confirms them and posts results, and
   a signed-out visitor sees the funded project without the researcher's email. No credits move.
+- `manual-verify.spec.ts`: a manual pledge checked with RIPE Atlas. The donor pledges by hand, the
+  test sends the credits with the donor key straight to RIPE Atlas, and the researcher confirms with
+  the recipient key in the confirm dialog. One test sends the pledged amount and expects the pledge
+  verified; the other sends less and expects the site to offer the amount that arrived, which the
+  researcher records. Each test sends its credits back, as `ripe-transfer.spec.ts` does, and prints
+  how the live RIPE Atlas API listed the transfer: the row's type, sign and text, how long it took
+  to appear, and whether both sides share a transaction id.
 - `ripe-transfer.spec.ts`: real RIPE Atlas transfers between two RIPE Atlas test accounts, through
   the site's "Transfer now with an API key" form. See [Real RIPE Atlas transfers](#real-ripe-atlas-transfers).
 

@@ -48,6 +48,11 @@ export interface Pledge {
   anonymous: boolean;
   apiTransfer: boolean;
   hasReference: boolean;
+  /** What the donor pledged. `amount` is what the pledge counts for, which differs once the owner
+   *  has checked a manual pledge against their RIPE Atlas log and a different amount had arrived. */
+  pledgedAmount?: number;
+  /** The server read the amount from the owner's RIPE Atlas transaction log when it was confirmed. */
+  amountVerified?: boolean;
   transferUncertain?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -91,6 +96,33 @@ export interface Stats {
   projectsWithResults: number;
 }
 
+/** An incoming transfer in the owner's RIPE Atlas log that could be a pledge's. Mirrors api/src/lib/receipts.ts. */
+export interface Receipt {
+  id: string;
+  amount: number;
+  at: string;
+  note: string;
+  /** Another of the owner's pledges of the same amount could account for this transfer. */
+  contested: boolean;
+}
+
+/** What the server says when checking a pledge against RIPE Atlas needs the owner, or failed. */
+export interface VerificationDetails {
+  outcome: 'none' | 'different' | 'several' | 'choice-unavailable' | 'over-ceiling' | 'unreachable' | 'key-refused' | 'refused';
+  pledged?: number;
+  receipts?: Receipt[];
+  more?: boolean;
+  room?: number;
+}
+
+/** What a confirmation made with a key found. */
+export interface VerificationResult {
+  outcome: 'exact' | 'chosen';
+  pledged: number;
+  received: number;
+  transactionId: string;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string, public details?: unknown) {
     super(message);
@@ -113,6 +145,16 @@ export class ApiError extends Error {
    */
   get transferOutcomeUnknown(): boolean {
     return (this.details as { transfer?: string } | undefined)?.transfer === 'unknown';
+  }
+
+  /** True when the server said outright that it wrote nothing, on a 5xx where the status cannot say so. */
+  get notRecorded(): boolean {
+    return (this.details as { recorded?: boolean } | undefined)?.recorded === false;
+  }
+
+  /** Present when a check against the owner's RIPE Atlas log needs a decision or failed. */
+  get verification(): VerificationDetails | undefined {
+    return (this.details as { verification?: VerificationDetails } | undefined)?.verification;
   }
 
   /**
@@ -168,6 +210,13 @@ export const api = {
     request<{ pledge: Pledge; project: Project; recipientEmail?: string; transferUrl: string; warning?: string }>(`/api/projects/${projectId}/pledges`, { method: 'POST', body: JSON.stringify(body) }),
   updatePledge: (projectId: string, id: string, status: Pledge['status']) =>
     request<{ pledge: Pledge; project: Project }>(`/api/pledges/${projectId}/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  /** Owner only, manual pledges only. With a key the server reads the owner's RIPE Atlas log once to
+   *  find what arrived; `transactionId` is a row the owner picked from an earlier answer. */
+  confirmPledge: (projectId: string, id: string, check: { apiKey?: string; transactionId?: string } = {}) =>
+    request<{ pledge: Pledge; project: Project; verification?: VerificationResult }>(`/api/pledges/${projectId}/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'confirmed', ...check }),
+    }),
   balance: (apiKey: string) => request<{ balance: number }>('/api/atlas/balance', { method: 'POST', body: JSON.stringify({ apiKey }) }),
 };
 

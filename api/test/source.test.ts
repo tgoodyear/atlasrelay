@@ -120,3 +120,72 @@ test('the pledge handler reads the owner after its marker is stored and before t
   assert.ok(marker < owner, 'the owner is read after the marker is stored');
   assert.ok(owner < post, 'the owner is read before the transfer');
 });
+
+test('an owner key is only used after every rule that could refuse the confirmation has passed', () => {
+  // The RIPE read is the one step in the update handler that sends something outside this site, and it
+  // sends the owner's key. Every check that can refuse the request without it -- who may act, which
+  // transitions are allowed, the in-flight window, the expiry rule -- has to come first, so a request
+  // that was always going to be refused never carries the key to RIPE at all.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const read = update.indexOf('await checkReceipt(');
+  assert.ok(read > 0, 'the update handler no longer checks receipts');
+  for (const guard of ["throw new HttpError(403, 'Not allowed')", 'if (!ok) throw', 'if (pledgeInFlight(pledge))', "pledge.method !== 'manual'", 'assertKeyFormat(body.apiKey)']) {
+    const at = update.indexOf(guard);
+    assert.ok(at > 0, `the update handler no longer contains ${guard}`);
+    assert.ok(at < read, `${guard} runs before the RIPE read`);
+  }
+});
+
+test('a confirmation holds the project lock only around the totals read, the ceiling check and the write', () => {
+  // Two confirmations on one project could otherwise both read a total under the ceiling and both
+  // write. The slow reads (the owner's whole pledge history and RIPE) stay outside the lock, so a
+  // long history cannot outlast the lock's grace and let a second request take it mid-confirmation.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const ledger = update.indexOf('await ownerReceiptLedger(');
+  const ripe = update.indexOf('await checkReceipt(');
+  const lock = update.indexOf('await acquireConfirmLock(');
+  const totalsRead = update.indexOf('totals(await listPledges(projectId))', lock);
+  const save = update.indexOf('await savePledge(', lock);
+  const release = update.indexOf('releaseConfirmLock(', save);
+  assert.ok(ledger > 0 && ripe > 0 && lock > 0, 'the update handler no longer reads the ledger, checks RIPE and locks');
+  assert.ok(ledger < lock, 'the owner history is read before the lock is taken');
+  assert.ok(ripe < lock, 'RIPE is read before the lock is taken');
+  assert.ok(totalsRead > lock, 'the confirmed total is read again under the lock');
+  assert.ok(save > totalsRead, 'the pledge is written after that read, under the lock');
+  assert.ok(release > save, 'the lock is released after the pledge is written');
+  // Nothing slow between taking the lock and writing.
+  const locked = update.slice(lock, save);
+  for (const slow of ['ownerReceiptLedger(', 'checkReceipt(', 'reserveReceipt(', 'listProjectsByOwner(']) {
+    assert.equal(locked.includes(slow), false, `${slow} runs under the lock`);
+  }
+});
+
+test('an automatic match is checked against a fresh ledger after the RIPE read and before the write', () => {
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const ripe = update.indexOf('await checkReceipt(');
+  const recheck = update.indexOf('stillUncontested(');
+  const save = update.indexOf('await savePledge(');
+  assert.ok(ripe > 0 && recheck > 0 && save > 0, 'the update handler no longer re-checks an automatic match');
+  assert.ok(ripe < recheck && recheck < save, 'the fresh ledger is weighed after RIPE answers and before the pledge is written');
+});
+
+test('the history recheck runs before the receipt is reserved, and the write is fenced on the reservation', () => {
+  // The recheck reads the owner's whole history with no deadline. Holding the reservation through it
+  // could outlast the reservation's grace, so it runs first; and the write, under the project lock,
+  // goes ahead only if a conditional renewal shows the reservation is still this request's.
+  const src = readFileSync(join(repoRoot, 'api', 'src', 'functions', 'pledges.ts'), 'utf8');
+  const update = src.slice(src.indexOf("app.http('pledges-update'"));
+  const recheck = update.indexOf('stillUncontested(');
+  const reserve = update.indexOf('await reserveReceipt(');
+  const lock = update.indexOf('await acquireConfirmLock(');
+  const fence = update.indexOf('await renewReceipt(');
+  const save = update.indexOf('await savePledge(');
+  assert.ok(recheck > 0 && reserve > 0 && lock > 0 && fence > 0 && save > 0, 'the update handler no longer rechecks, reserves, locks, fences and writes');
+  assert.ok(recheck < reserve, 'the history recheck runs before the receipt is reserved');
+  assert.ok(reserve < lock && lock < fence && fence < save, 'the reservation is renewed under the lock, just before the write');
+  const afterReserve = update.slice(reserve, save);
+  assert.equal(afterReserve.includes('ownerReceiptLedger('), false, 'no history read while the reservation is held');
+});

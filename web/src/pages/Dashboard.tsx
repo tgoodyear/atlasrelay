@@ -98,8 +98,13 @@ export default function Dashboard() {
                 {pledges.map((p) => (
                   <tr key={p.id}>
                     <td><Link to={`/projects/${p.projectId}`}>{p.projectTitle || p.projectId}</Link></td>
-                    <td className="mono">{fmt(p.amount)}</td>
-                    <td>{p.method === 'api' ? 'API' : 'Manual'}{p.transactionId ? ` · RIPE txn ${p.transactionId}` : ''}</td>
+                    <td className="mono">
+                      {fmt(p.amount)}
+                      {p.pledgedAmount !== undefined && p.pledgedAmount !== p.amount && <span className="small muted"> (pledged {fmt(p.pledgedAmount)})</span>}
+                    </td>
+                    {/* The reference on a checked manual pledge comes from the researcher's log, not the
+                        donor's, so it would not match anything the donor can look up. */}
+                    <td>{p.method === 'api' ? 'API' : 'Manual'}{p.method === 'api' && p.transactionId ? ` · RIPE txn ${p.transactionId}` : ''}{p.amountVerified ? ' · verified with RIPE Atlas' : ''}</td>
                     <td><PledgeStatusPill status={p.status} apiTransfer={p.apiTransfer} transferUncertain={p.transferUncertain} /></td>
                     <td>{fmtDate(p.createdAt)}</td>
                     <td>

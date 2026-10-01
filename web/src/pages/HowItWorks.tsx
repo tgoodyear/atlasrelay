@@ -17,7 +17,7 @@ export default function HowItWorks() {
           <ol className="steps">
             <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. Donors send credits to that email. It never appears on a public page; a signed-in donor sees it when they start a manual pledge to your project, and you see that donor's name.</li>
             <li>Post a project: what you are measuring, why it matters, how many credits you need, and by when. Rough guide from the <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">RIPE Atlas docs</a>: a ping result costs 3 credits, DNS 10 to 20, traceroute 30, one-off measurements double.</li>
-            <li>When a donor sends credits manually, they appear in your <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">Atlas credits page</a>. Confirm the pledge on your dashboard. API transfers are normally confirmed automatically; if recording one fails, it waits on your dashboard for you to confirm.</li>
+            <li>When a donor sends credits manually, they appear in your <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">Atlas credits page</a>. Confirm the pledge on the project page. To record the amount that actually arrived, paste a key of your own with only <strong>Get information about your credits</strong>. We read your recent transfers to find this one, and you choose when more than one could fit. The key is not stored. When the amount comes from your log, the pledge shows as verified with RIPE Atlas. API transfers are normally confirmed automatically; if recording one fails, it waits on your dashboard for you to confirm.</li>
             <li>Close the project when you are done and, ideally, link your results so donors see what they enabled.</li>
           </ol>
         </div></div>
@@ -66,8 +66,9 @@ export default function HowItWorks() {
             <Link to="/privacy">privacy page</Link> has the details.
           </p>
           <p className="muted">
-            RIPE Atlas API keys are never stored. A key you paste is used for a single transfer
-            request and discarded; it is not written to storage or to logs.
+            RIPE Atlas API keys are never stored. A key you paste is used for the request you make
+            with it, a transfer or a check of your transfers, and discarded; it is not written to
+            storage or to logs.
           </p>
           <p className="muted">
             You can delete your profile, including your RIPE email, at any time from your{' '}
@@ -85,7 +86,8 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>Is my RIPE Atlas API key stored?</summary>
-            <p>No. A key you paste is used for at most two requests to RIPE, a balance check and then the transfer, and is never written to storage or logs. If RIPE reports a balance below the amount, nothing is sent. Give the key only the two permissions described above, and delete it afterwards.</p>
+            <p>No. A donor's key is used for at most two requests to RIPE, a balance check and then the transfer, and is never written to storage or logs. If RIPE reports a balance below the amount, nothing is sent. Give the key only the two permissions described above, and delete it afterwards.</p>
+            <p>A researcher's key, pasted when confirming a manual pledge, is used for one request each time they check, listing their recent transfers, and is handled the same way. It needs only <strong>Get information about your credits</strong>.</p>
           </details>
           <details>
             <summary>Can I send credits without my name being shown?</summary>
