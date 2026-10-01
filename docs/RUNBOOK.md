@@ -304,18 +304,12 @@ Once per dev environment, as the Owner:
    Microsoft 365 Developer Program sandbox instead (https://developer.microsoft.com/microsoft-365/dev-program):
    it is a tenant of its own, `<name>.onmicrosoft.com`, with an admin account.
    - Sign in to https://entra.microsoft.com as the sandbox's admin.
-   - **Groups**, **New group**: a security group named `MFA Exempt`.
    - **Users**, **New user**: a researcher and a donor, for example
      `researcher@<tenant>.onmicrosoft.com` and `donor@<tenant>.onmicrosoft.com`, each with a long
-     random password. Add both to `MFA Exempt`.
-   - Replace security defaults with Conditional Access, so that every other account in the tenant
-     still needs MFA and the two test users do not. **Overview**, **Properties**, **Manage security
-     defaults**: off. Then **Protection**, **Conditional Access**, **Create new policy**, twice:
-     - "Require MFA (except MFA Exempt)": users, all users, excluding the group `MFA Exempt`;
-       target resources, all resources; grant, require multifactor authentication; on.
-     - "Block legacy authentication": users, all users; target resources, all resources;
-       conditions, client apps, Exchange ActiveSync clients and other clients; grant, block
-       access; on.
+     random password.
+   - Set the tenant's sign-in policy so the two test accounts can complete sign-in, while every
+     other account keeps MFA. If they are asked for MFA, give each a TOTP seed instead
+     ([Accounts with MFA](#accounts-with-mfa)).
    - Sign in once with each test user at `https://<SWA_HOSTNAME>/login/microsoft` in a private
      window. Microsoft may ask for a new password (set one, and use that below) and whether the
      site may read the profile (accept).
@@ -487,14 +481,15 @@ holds:
 
 The same files stay in the `results` container, under `runs/<run id>/`, for 30 days.
 
-Microsoft sign-in errors name the page they stopped on: "register for MFA" means the account is
-not in `MFA Exempt`, or security defaults are back on in the test tenant; "change its password"
+Microsoft sign-in errors name the page they stopped on: "register for MFA" means the test tenant's
+sign-in policy asks this account for MFA, so check the policy or give the account a TOTP seed;
+"change its password"
 means the password expired or was reset, so sign in by hand, set a new one and run
 `scripts/set-test-users.sh dev` again.
 
 #### Accounts with MFA
 
-If the test accounts have to use MFA after all, take them out of `MFA Exempt` and give each an
+If the test accounts have to use MFA, give each an
 authenticator app with a TOTP seed (**Security info**, **Add sign-in method**, **Authenticator
 app**, **I want to use a different authenticator app**, **Can't scan image?** shows the secret
 key), then store the seed with the account:

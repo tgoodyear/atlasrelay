@@ -1,6 +1,5 @@
 // RFC 6238 time-based one-time passwords (HMAC-SHA1, 30 seconds, 6 digits), the kind an
-// authenticator app shows. Used only when a test account has a TOTP seed in the vault; the test
-// tenant runs with security defaults off, so normally no code is asked for.
+// authenticator app shows. Used only when a test account has a TOTP seed in the vault.
 import { createHmac } from 'node:crypto';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';

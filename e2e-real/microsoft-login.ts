@@ -139,7 +139,7 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
         await page.locator('[data-value="PhoneAppOTP"]').first().click();
         break;
       case 'mfa-registration':
-        throw new Error('Microsoft asks this account to register for MFA. Add it to the MFA Exempt group in the test tenant, check security defaults are off, or give the account a TOTP seed (docs/RUNBOOK.md).');
+        throw new Error('Microsoft asks this account to register for MFA. Check the test tenant\'s sign-in policy for this account, or give it a TOTP seed (docs/RUNBOOK.md).');
       case 'password-change':
         throw new Error('Microsoft asks this account to change its password. Sign in once by hand, set a new one, and run scripts/set-test-users.sh again.');
       case 'pick-account': {
