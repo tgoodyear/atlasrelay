@@ -738,8 +738,8 @@ export function receiptLedger(pledges: Pledge[], exceptPledgeId: string): Receip
     if (p.transactionId) used.add(p.transactionId);
     // A reference on a manual pledge was read from the owner's own log by a check, so it names the
     // owner's row and `used` covers it. One on an API pledge (none are written today, but the field
-    // exists) would come from the donor's log, whose row for the same transfer need not carry the
-    // same id, so an API pledge stays a rival either way.
+    // exists) would come from the donor's log, and the two rows of one transfer carry different ids
+    // (seen live, docs/RIPE-ATLAS-NOTES.md), so an API pledge stays a rival either way.
     if (p.transactionId && p.method !== 'api') continue;
     const from = Date.parse(p.createdAt);
     if (!Number.isFinite(from)) continue;

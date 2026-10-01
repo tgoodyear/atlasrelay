@@ -12,8 +12,10 @@ import { OVERFUND_MULTIPLIER } from './pledging';
  *
  * What a row carries, per RIPE's API reference and the rows seen live: `id`, `type`, `amount`
  * (signed: an incoming transfer is positive), `date` (epoch seconds), `reason`, `description`,
- * `balance_before`, `balance_after`. Nothing documented names the other account, so a row cannot
- * be tied to a particular donor. Matching therefore rests on direction, time and amount, and
+ * `balance_before`, `balance_after`. Nothing documented names the other account. Live rows carry
+ * reason "Transfer" and a description of "from" and an email address, but that format is undocumented and
+ * the site does not know a donor's RIPE NCC Access email, so a row is not tied to a donor. Matching
+ * therefore rests on direction, time and amount, and
  * whenever those do not single out one row the owner decides rather than this code guessing.
  */
 

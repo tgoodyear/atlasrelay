@@ -68,10 +68,19 @@ receipt-matching is best-effort.
 Seen live (2026-09-18): the list is `{count, next, previous, results}`, newest first with
 `sort=-date`; `date` is an integer epoch in seconds; a transfer out is a negative `amount` and credits
 in are positive. In the sender's list, a transfer's row appeared 40 to 70 seconds after the
-transfer, not at once; how long it takes to appear in the recipient's list is *unverified*. The
-site checks manual pledges against the owner's list using `sort`, `type` and `page_size` only;
-the date filters are documented but have not been tried live. No documented field names the
-sending account, and what `reason` and `description` hold for a transfer is *unverified*.
+transfer, not at once. The site checks manual pledges against the owner's list using `sort`,
+`type` and `page_size` only; the date filters are documented but have not been tried live.
+
+Seen live (2026-10-01, the dev full-flow run, two transfers of 100 and 90 credits):
+`?sort=-date&type=admin&page_size=100` answers 200. Both sides list the transfer as `admin`, with
+`reason` "Transfer" and a `description` of "from" and an email address on the recipient's row,
+"to" and an email address on the sender's (the run masks addresses, so which address is not
+recorded; presumably the other account's RIPE NCC Access email). The two rows of one transfer
+have different transaction ids. The recipient's row was listed within 1 to 6
+seconds of the transfer, carrying the second the transfer was made. One run is not a guarantee, so
+the site still tells the owner a new transfer can take a minute or two to appear. No documented
+field names the other account. The `description` appears to, but its format is undocumented, so
+the site does not rely on it.
 
 ## Authentication and identity
 

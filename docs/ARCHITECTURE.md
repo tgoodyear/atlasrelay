@@ -153,8 +153,9 @@ they may paste a key of their own with only "Get information about your credits"
 key, and looks for the arrival.
 
 RIPE's rows carry `id`, `type`, a signed `amount`, `date` in epoch seconds, `reason`,
-`description` and balances. No documented field names the other account, so a row cannot be tied
-to a donor. A row is a candidate when it is `admin`, its amount is positive (credits in), it is no
+`description` and balances. No documented field names the other account. In practice the
+`description` reads "from" and an email address, but the format is undocumented and the site does
+not know a donor's RIPE NCC Access email, so a row is not tied to a donor. A row is a candidate when it is `admin`, its amount is positive (credits in), it is no
 older than the pledge (to the second, since RIPE stamps whole seconds), and its id is not already
 recorded against another pledge on any of the owner's projects.
 
