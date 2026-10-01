@@ -734,10 +734,12 @@ export function receiptLedger(pledges: Pledge[], exceptPledgeId: string): Receip
   const rivals: ReceiptLedger['rivals'] = [];
   for (const p of pledges) {
     if (p.id === exceptPledgeId || p.status === 'cancelled') continue;
-    if (p.transactionId) {
-      used.add(p.transactionId);
-      continue;
-    }
+    if (p.transactionId) used.add(p.transactionId);
+    // A reference on a manual pledge was read from the owner's own log by a check, so it names the
+    // owner's row and `used` covers it. One on an API pledge (none are written today, but the field
+    // exists) would come from the donor's log, whose row for the same transfer need not carry the
+    // same id, so an API pledge stays a rival either way.
+    if (p.transactionId && p.method !== 'api') continue;
     const from = Date.parse(p.createdAt);
     if (!Number.isFinite(from)) continue;
     if (p.status === 'confirmed') {
@@ -754,14 +756,83 @@ export function receiptLedger(pledges: Pledge[], exceptPledgeId: string): Receip
  * The receipt ledger across every project this owner has posted. One RIPE account receives the
  * credits for all of them, so an arrival has to be weighed against all of their pledges.
  *
- * Read before a check and not locked: two confirmations racing each other could both pick the same
- * row. Only the owner can confirm, so that needs one person acting twice at once, the same trade the
- * ceiling check makes.
+ * Read before a check and not locked. Two confirmations racing each other can both find a row
+ * unused, which is why the one that records it must also take reserveReceipt first.
  */
 export async function ownerReceiptLedger(ownerId: string, exceptPledgeId: string): Promise<ReceiptLedger> {
+  const projects = await listProjectsByOwner(ownerId);
   const all: Pledge[] = [];
-  for (const project of await listProjectsByOwner(ownerId)) all.push(...(await listPledges(project.id)));
+  // Every project the owner ever posted, closed ones included, so in parallel batches: one partition
+  // query each, the same bound the owner listing uses.
+  for (let i = 0; i < projects.length; i += OWNER_READ_CONCURRENCY) {
+    const batch = await Promise.all(projects.slice(i, i + OWNER_READ_CONCURRENCY).map((p) => listPledges(p.id)));
+    for (const pledges of batch) all.push(...pledges);
+  }
   return receiptLedger(all, exceptPledgeId);
+}
+
+/**
+ * The partition holding one owner's receipt reservations, in the claims table. Pledge slots there
+ * are partitioned by project id, which never starts with this prefix.
+ */
+function receiptPk(ownerId: string): string {
+  return `receipt-${ownerId}`;
+}
+
+/**
+ * Whether a held receipt reservation may be taken over by another pledge.
+ *
+ * The ledger above is read before the write, so on its own two confirmations of different pledges
+ * could both see a transaction as unused and both record it: each pledge write is guarded by its
+ * own version, and nothing spans the two. The reservation is one row per (owner, transaction),
+ * created atomically before the pledge is saved, so only one of them gets it.
+ *
+ * It is released when the pledge write is refused, but a write whose outcome is unknown leaves it
+ * behind, so it cannot be final on its own say-so. The pledge it names decides: confirmed with this
+ * transaction means taken for good; anything else means the write never landed, and once the
+ * reservation is older than any request could still be running it is free.
+ */
+export function receiptReservationReclaimable(heldCreatedAt: string, holder: Pledge | null, transactionId: string, asOf: number = Date.now()): boolean {
+  if (holder && holder.status === 'confirmed' && holder.transactionId === transactionId) return false;
+  const since = Date.parse(heldCreatedAt);
+  if (!Number.isFinite(since)) return true;
+  return asOf - since > CLAIM_ORPHAN_GRACE_MS;
+}
+
+/** Reserve an arrival in the owner's RIPE Atlas log for one pledge. False when another pledge holds it. */
+export async function reserveReceipt(ownerId: string, transactionId: string, projectId: string, pledgeId: string): Promise<boolean> {
+  const t = await table(CLAIMS_TABLE);
+  const entity = { partitionKey: receiptPk(ownerId), rowKey: transactionId, projectId, pledgeId, createdAt: now() };
+  try {
+    await t.createEntity(entity);
+    return true;
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 409)) throw err;
+  }
+  const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
+  if (!held) return reserveReceipt(ownerId, transactionId, projectId, pledgeId);
+  if (String(held.pledgeId ?? '') === pledgeId && String(held.projectId ?? '') === projectId) return true;
+  const holder = await getPledge(String(held.projectId ?? ''), String(held.pledgeId ?? ''));
+  if (!receiptReservationReclaimable(String(held.createdAt ?? ''), holder, transactionId)) return false;
+  try {
+    await t.updateEntity(entity, 'Replace', { etag: String(held.etag ?? '') });
+    return true;
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 412 || err.statusCode === 404)) return false;
+    throw err;
+  }
+}
+
+/** Give a receipt reservation back, only if this pledge still holds it. */
+export async function releaseReceipt(ownerId: string, transactionId: string, pledgeId: string): Promise<void> {
+  const held = await getEntity(CLAIMS_TABLE, receiptPk(ownerId), transactionId);
+  if (!held || String(held.pledgeId ?? '') !== pledgeId) return;
+  try {
+    await (await table(CLAIMS_TABLE)).deleteEntity(receiptPk(ownerId), transactionId, { etag: String(held.etag ?? '') });
+  } catch (err) {
+    if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) return;
+    throw err;
+  }
 }
 
 export async function getPledge(projectId: string, id: string): Promise<Pledge | null> {

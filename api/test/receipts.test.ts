@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { AtlasRefused, AtlasUnreachable, readAdminTransactions, type TransactionPage } from '../src/lib/atlas';
 import { HttpError } from '../src/lib/http';
 import { checkReceipt, incomingReceipts, matchReceipt, MAX_RECEIPTS_SHOWN, pageComplete, type CheckInput, type Receipt, type VerificationDetails } from '../src/lib/receipts';
-import { creditedAmount, RECEIPT_INDEXING_SLACK_MS, receiptLedger, toPledge, totals, type Pledge } from '../src/lib/store';
+import { creditedAmount, RECEIPT_INDEXING_SLACK_MS, receiptLedger, receiptReservationReclaimable, toPledge, totals, type Pledge } from '../src/lib/store';
 import { privatePledge, publicPledge } from '../src/lib/views';
 import { invocationLog, type LogSink } from '../src/lib/telemetry';
 
@@ -332,10 +332,30 @@ test('the ledger: recorded ids are used, unrecorded pledges are rivals, cancelle
     p({ id: 'e', status: 'confirmed', amount: 400, receivedAmount: 0, createdAt: 'garbage' }),
   ], 'self');
   assert.deepEqual([...ledger.used], ['55']);
+  // An API pledge stays a rival even with a reference, which would name a row in the donor's log.
+  const api = receiptLedger([p({ id: 'f', status: 'confirmed', method: 'api', amount: 300, transactionId: '77', updatedAt: at(5) })], 'self');
+  assert.deepEqual([...api.used], ['77']);
+  assert.equal(api.rivals.length, 1);
   assert.deepEqual(ledger.rivals, [
     { amount: 300, from: CREATED, until: CREATED + 5000 + RECEIPT_INDEXING_SLACK_MS },
     { amount: 200, from: CREATED + 10_000, until: null },
   ]);
+});
+
+test('a receipt reservation is final once its pledge records the transaction, and frees itself otherwise', () => {
+  const asOf = Date.parse('2026-10-01T12:00:00.000Z');
+  const recent = new Date(asOf - 10_000).toISOString();
+  const old = new Date(asOf - 10 * 60_000).toISOString();
+  const holder = { ...base, status: 'confirmed' as const, transactionId: '9', receivedAmount: 700, amountVerified: true };
+  assert.equal(receiptReservationReclaimable(old, holder, '9', asOf), false, 'recorded, so taken for good');
+  // A request still running: its pledge has not been written yet.
+  assert.equal(receiptReservationReclaimable(recent, { ...base, status: 'sent' }, '9', asOf), false);
+  // A write that never landed leaves the reservation behind; once no request could still be running, it is free.
+  assert.equal(receiptReservationReclaimable(old, { ...base, status: 'sent' }, '9', asOf), true);
+  assert.equal(receiptReservationReclaimable(old, null, '9', asOf), true);
+  assert.equal(receiptReservationReclaimable('garbage', null, '9', asOf), true);
+  // Confirmed against a different transaction does not hold this one.
+  assert.equal(receiptReservationReclaimable(old, { ...holder, transactionId: '8' }, '9', asOf), true);
 });
 
 // ---------- the request to RIPE ----------

@@ -182,6 +182,47 @@ test('one arrival is never matched to two pledges', async ({ person }) => {
   expect(await row('pledges', project.id, ids[1])).toMatchObject({ status: 'pledged' });
 });
 
+test('the confirm dialog takes keyboard focus, keeps it, and gives it back', async ({ person }) => {
+  const { researcher, donor, project } = await manualPledge(person);
+  const { page } = researcher;
+  await page.goto(`/projects/${project.id}`);
+  const opener = page.locator('.pledge').filter({ hasText: donor.name }).getByRole('button', { name: 'Confirm received' });
+  await opener.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'Confirm this pledge' });
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press('Tab');
+    expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  }
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press('Shift+Tab');
+    expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  }
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});
+
+test('two confirmations racing for one arrival record it once', async ({ person }) => {
+  const researcher = await person({ role: 'researcher' });
+  const project = await postProject(researcher, { creditsRequested: 1000 });
+  const ids: string[] = [];
+  for (const amount of [300, 400]) {
+    const donor = await person({ role: 'donor' });
+    const res = await donor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount, method: 'manual' } });
+    expect(res.status()).toBe(201);
+    ids.push((await res.json()).pledge.id);
+  }
+  const key = await ownerKey({ transactions: transactionsOk([adminRow(990001, 350, 5)]) });
+  const results = await Promise.all(ids.map((id) => researcher.request.patch(`/api/pledges/${project.id}/${id}`, { data: { status: 'confirmed', apiKey: key, transactionId: '990001' } })));
+  expect(results.map((r) => r.status()).sort()).toEqual([200, 409]);
+  const rows = await Promise.all(ids.map((id) => row('pledges', project.id, id)));
+  expect(rows.filter((r) => r?.transactionId === '990001')).toHaveLength(1);
+  const totals = (await (await researcher.request.get(`/api/projects/${project.id}`)).json()).project;
+  expect(totals.creditsConfirmed).toBe(350);
+});
+
 test('an API transfer that arrived after a manual pledge is not matched to it', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const manualDonor = await person({ role: 'donor' });

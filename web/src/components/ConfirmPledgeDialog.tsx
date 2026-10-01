@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, fmt, type Pledge, type Project, type Receipt, type VerificationDetails, type VerificationResult } from '../lib/api';
+import { useDialogFocus } from '../lib/useDialogFocus';
 
 interface Props {
   project: Project;
@@ -32,6 +33,8 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
   const [picked, setPicked] = useState('');
   const [result, setResult] = useState<VerificationResult | null>(null);
   const pledged = pledge.pledgedAmount ?? pledge.amount;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !busy && close();
@@ -91,7 +94,7 @@ export default function ConfirmPledgeDialog({ project, pledge, onClose }: Props)
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && close()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" ref={dialogRef} tabIndex={-1}>
         <div className="modal-head">
           <h2 id="confirm-title">{step === 'done' ? 'Pledge confirmed' : 'Confirm this pledge'}</h2>
           <button className="close" aria-label="Close" onClick={close} disabled={busy}>×</button>

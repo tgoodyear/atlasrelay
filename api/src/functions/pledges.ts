@@ -4,7 +4,7 @@ import { requirePrincipal } from '../lib/auth';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
-import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, ownerReceiptLedger, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, savePledge, totals, type ReceiptLedger } from '../lib/store';
+import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, donorMayCancelApiPledge, ensureUser, getPledge, getProject, getUser, listPledges, now, patchProject, pledgeExpired, ownerReceiptLedger, pledgeInFlight, recomputeProjectTotals, releasePledgeClaim, releaseReceipt, reserveReceipt, savePledge, totals, type ReceiptLedger } from '../lib/store';
 import { checkReceipt, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
@@ -768,6 +768,11 @@ app.http('pledges-update', {
         receivedAmount = checked.amount;
         amountVerified = true;
         transactionId = checked.transactionId;
+        // The ledger was read, not locked. Take the arrival atomically before the pledge is written,
+        // so a second confirmation racing this one cannot record the same transfer.
+        if (!(await reserveReceipt(project.ownerId, transactionId, projectId, pledge.id))) {
+          throw new HttpError(409, 'That RIPE Atlas transaction was just recorded against another pledge. Nothing was recorded. Check again.');
+        }
       } else if (pledge.amount > room) {
         throw new HttpError(409, `Confirming this pledge would exceed the project's ceiling of ${OVERFUND_MULTIPLIER}× its request; cancel it instead`);
       }
@@ -790,6 +795,10 @@ app.http('pledges-update', {
       updated = await savePledge({ ...pledge, status, receivedAmount, amountVerified, transactionId }, pledge.etag);
     } catch (err) {
       if (err instanceof RestError && err.statusCode === 412) {
+        // Refused outright, so the arrival this request reserved is free again. Any other failure may
+        // have written the row, so the reservation stays; if the write did not land, the reservation
+        // frees itself once it is older than a request could run (receiptReservationReclaimable).
+        if (amountVerified) await releaseReceipt(project.ownerId, transactionId, pledge.id).catch(() => undefined);
         throw new HttpError(409, 'This pledge changed while you were looking at it. Reload and try again.');
       }
       throw err;
