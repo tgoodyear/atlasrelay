@@ -421,16 +421,16 @@ identity alone has AcrPull. The CI identity can queue a build, start the job and
 and has no role on the vault. GitHub holds no copy of the passwords or the keys, and the job
 redacts them, and the two RIPE account emails, from its logs and results.
 
-dev is one site, one API and one set of tables, so each run deploys the build it tests and keeps
-every other run off dev until its tests end. The orchestrator (the workflow, or
+dev is one site, one API and one set of tables. Each run deploys the build it tests there, and
+keeps every other run off dev until its tests end. The orchestrator (the workflow, or
 `scripts/run-e2e.sh` on the owner's machine) takes a 60-second lease on one blob, `full-flow` in
 the results account's `locks` container, before it publishes the API and uploads the site, and
 renews it every 20 seconds. It starts the job with the lease's id; the job renews the same lease
 while its tests run, and the orchestrator releases it at the end. A run that finds it held waits
 up to 45 minutes. A lease that nobody renews lapses within a minute, so a run that dies frees dev
-on its own, and with one lock there is no order in which two runs could wait for each other. The
+on its own, and with only one lock, no two runs can each wait for the other. The
 deploy uses the roles the CI identity has in every environment (`infra/rbac.bicep`), on dev's
-resources only; the code that deploys refuses prod and checks each resource's `environment` tag.
+resources only; `scripts/lib/e2e-job.sh` refuses prod and checks each resource's `environment` tag.
 The CI identity, the operator and the test identity have Storage Blob Data Contributor on the
 `locks` container, which holds nothing else.
 
@@ -530,9 +530,11 @@ docs/     this spec, RIPE research notes, runbook
   image pinned by digest and the lock's lease, polls the execution, releases the lock, downloads
   the results from blob storage and uploads only the summary as an artifact (the repository is
   public), reads the job's logs from Log Analytics when the execution failed, and fails unless
-  every test passed. It installs the root dependencies with `--ignore-scripts` for the Static Web
-  Apps CLI, and signs az in again with a fresh OIDC token during the run, since az cannot renew
-  the first sign-in. Without the repository variable `DEV_ENABLED=true` it only prints a
+  every test passed. It uploads the site by running the Static Web Apps upload client
+  (`mcr.microsoft.com/appsvc/staticappsclient:stable`, the image the Deploy workflow's action
+  runs) as an ACR Tasks run in dev's registry, with the deployment token as a secret value of the
+  run, and installs no packages. It signs az in again with a fresh OIDC token during the run,
+  since az cannot renew the first sign-in. Without the repository variable `DEV_ENABLED=true` it only prints a
   notice.
 - `e2e-image.yml` (PRs that change `e2e-real/` or `web/e2e/ui.ts`): builds the test image and
   lists the tests inside it. Pushes nothing, holds no identity.

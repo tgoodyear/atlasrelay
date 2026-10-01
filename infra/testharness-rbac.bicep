@@ -3,9 +3,10 @@
 // registry, starts the test job with it, waits for the execution, reads the job's logs and
 // downloads the results. That is all this grants:
 //
-// - a custom role on the registry: read it, upload a build context, queue a build (ACR Tasks) and
-//   read the build's status, output image and log. No push or pull of its own, no registry
-//   settings, no tokens;
+// - a custom role on the registry: read it, upload a build context, queue a build or a run (ACR
+//   Tasks), read its status, output image and log, and cancel it. No push or pull of its own, no
+//   registry settings, no tokens. Besides the test image, the workflow uses it to run the Static
+//   Web Apps upload client, and cancels that run when it stops early;
 // - a custom role on the resource group: read the job, start it, read and stop its executions,
 //   and query the two Container Apps log tables in the workspace (table-level read, so none of the
 //   site's telemetry);
@@ -14,7 +15,8 @@
 //   that keeps one run at a time on the environment. The container holds that one blob.
 //
 // The workflow also deploys the commit's site and API to the environment before it tests them;
-// the roles in rbac.bicep, which every environment's CI identity has, already allow that.
+// the roles in rbac.bicep, which every environment's CI identity has, cover the API and the
+// site's deployment token, and the builder role covers the run that uploads the site.
 //
 // No role on the Key Vault, control plane or data: CI cannot read, list or change the test
 // accounts or RIPE Atlas keys, open the vault's network, or grant itself access. It cannot change
@@ -48,7 +50,7 @@ resource builderRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(subscription().id, resourceGroup().id, 'atlasrelay-e2e-image-builder')
   properties: {
     roleName: 'Atlas Relay e2e image builder (${environmentName})'
-    description: 'Build the Atlas Relay full-flow test image in the registry with ACR Tasks and read the build.'
+    description: 'Build the Atlas Relay full-flow test image and run the site upload in the registry with ACR Tasks, and read or cancel those runs.'
     type: 'CustomRole'
     assignableScopes: [resourceGroup().id]
     permissions: [
@@ -59,6 +61,7 @@ resource builderRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
           'Microsoft.ContainerRegistry/registries/scheduleRun/action'
           'Microsoft.ContainerRegistry/registries/runs/read'
           'Microsoft.ContainerRegistry/registries/runs/listLogSasUrl/action'
+          'Microsoft.ContainerRegistry/registries/runs/cancel/action'
         ]
         notActions: []
         dataActions: []

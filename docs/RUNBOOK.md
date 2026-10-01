@@ -223,7 +223,7 @@ TOKEN=$(az staticwebapp secrets list -n swa-atlasrelay-dev -g rg-atlasrelay-dev 
 npx swa deploy web/dist --deployment-token "$TOKEN" --env production
 ```
 
-The full-flow tests deploy the same way before they run (`scripts/run-e2e.sh dev`, or the
+The full-flow tests also put their build on dev before they run (`scripts/run-e2e.sh dev`, or the
 workflow `e2e-dev.yml`), holding the lock described in
 [One run at a time](#one-run-at-a-time). A deploy by hand does not take that lock. While a test
 run holds it, a build you put on dev replaces the one under test, so check that no run is going
@@ -282,8 +282,9 @@ Each run tests the build it deploys. `.github/workflows/e2e-dev.yml`:
    registry has no admin user and no anonymous pull, and only the test identity is granted AcrPull;
 4. takes the lock, waiting up to 45 minutes for a run that holds it
    ([One run at a time](#one-run-at-a-time));
-5. publishes the API to dev's Function App and uploads the site, as in
-   [Dev environment](#dev-environment), and waits until the site serves the new build;
+5. publishes the API to dev's Function App, uploads the site with dev's deployment token (the
+   Static Web Apps upload client runs as an ACR Tasks run in dev's registry, so it works the same
+   from a Mac without Rosetta), and waits until the site serves the new build;
 6. starts the Container Apps job `caj-atlasrelay-dev-e2e` with the image, pinned by digest, and
    the lock's lease;
 7. waits for the execution (the job gives a run 45 minutes, and never retries), then releases the
@@ -312,26 +313,28 @@ other's profiles and misread each other's credit transfers. So a run, whether th
 
 - The orchestrator (the workflow's `run` job, or `scripts/run-e2e.sh` on your machine) takes the
   lease before it deploys. `e2e-real/lock-holder.mjs` renews it every 20 seconds in the
-  background, and writes the run's id, commit and start time on the blob, which a waiting run
+  background, and writes the run's id, commit and the time it took the lock on the blob, which a waiting run
   prints. Nothing about the person who started it is written.
 - The test job is started with the lease's id (`E2E_LOCK_LEASE_ID`) and renews that same lease
   while its tests run. It never takes a new one then, and it does not release it.
 - The orchestrator releases the lease once the execution has ended. If it stops early (an error,
-  Ctrl+C, a cancelled workflow run), it releases the lease too, unless the job is still running:
+  Ctrl+C, a cancelled workflow run), it first waits for an API deployment in progress to end and
+  cancels a site upload in progress, then releases the lease, unless the job is still running:
   then it only stops renewing, and the job keeps the lease until it ends.
 - A run that finds the lock held waits for it, checking every 30 seconds, for up to 45 minutes,
   then fails before it deploys anything. Start it again later.
 - A holder that cannot renew (the blob service refuses the renewal, or two in a row fail) has lost
   the lock. The orchestrator deploys and starts nothing more; the job stops its tests the way
   Ctrl+C does, so the credit return still runs. The run fails.
-- A job started from the portal, without a lease, takes the lock itself.
+- A job started from the portal, without a lease, takes the lock itself, waiting two minutes at
+  most: the job's own 45-minute limit leaves no room for a longer wait.
 
 This cannot deadlock, and the lock never needs breaking by hand. There is one lock, so no two runs
 can each hold something the other is waiting for. A lease lasts 60 seconds unless someone renews
 it, and only a live process renews it: the lock holder, which stops when its orchestrator exits
 and after two hours at most, and the job, which Container Apps stops after 45 minutes. When every
 holder of a run dies, the lock is free again within a minute. Every wait has a limit: 45 minutes
-for the lock, 10 for the API deployment, 5 for the site to serve the new build, 15 for the image
+for the lock, 10 for the API deployment, 20 for the site upload, 5 for the site to serve the new
 build and 55 for the execution.
 
 #### Setting it up
@@ -465,7 +468,8 @@ To set it up:
 
 The workflow runs after every push to `main` that changes `e2e-real/`, `web/e2e/ui.ts`,
 `scripts/lib/e2e-job.sh` or the workflow, and by hand. It deploys the commit's site and API to dev
-and tests them, so a change to `web/` or `api/` needs nothing more than a run started by hand. A
+and tests them, so once a change to `web/` or `api/` is on `main`, start a run by hand. A branch
+goes through `scripts/run-e2e.sh` (below). A
 change to `infra/` needs `scripts/provision.sh dev` first.
 
 ```bash
@@ -500,8 +504,8 @@ scripts/run-e2e.sh dev
 committed or not, but downloads nothing. It builds the site and the API (`npm ci`,
 `npm run build`) and the image (in the registry, tagged `local-<commit>-<time>`), takes the lock,
 deploys, starts the job, waits for the execution to end and releases the lock. The results go to
-`runs/local-<time>/` in the `results` container. With `--no-wait` it returns once the job has been
-running for two minutes, and leaves the lock to the job. It refuses `prod`, and checks that the
+`runs/local-<time>/` in the `results` container. With `--no-wait` it returns once the job has marked
+the lock as renewed by itself, and leaves the lock to the job. It refuses `prod`, and checks that the
 site and the Function App it deploys to carry the tag `environment=<env>`.
 
 A dev environment bootstrapped before the registry was added needs `scripts/provision.sh dev`

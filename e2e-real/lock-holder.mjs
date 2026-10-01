@@ -3,15 +3,16 @@
 // it deploys anything to dev:
 //
 //   node e2e-real/lock-holder.mjs --blob-url URL --lease-file PATH --run-id ID --git-sha SHA \
-//     --parent-pid PID
+//     --parent-pid PID [--subscription ID]
 //
 // It waits for the lock (up to 45 minutes, asking every 30 seconds and saying who holds it), then
 // writes the lease id to PATH (mode 600) for the orchestrator to hand to the test job, and renews
 // the lease every 20 seconds until told to stop:
 //
-//   SIGTERM   release the lease and exit 0 (the run is over)
-//   SIGUSR2   stop renewing and exit 0 without releasing (the test job still runs and renews the
-//             lease itself; it lapses within 60 seconds of the job ending)
+//   SIGUSR1   release the lease and exit 0 (the run is over)
+//   SIGUSR2, SIGTERM   stop renewing and exit 0 without releasing (the test job still runs and
+//             renews the lease itself; it lapses within 60 seconds of the job ending). A stray
+//             SIGTERM (a logout, a shutdown, killall) never frees the lock under a running job.
 //   SIGINT, SIGHUP  ignored: Ctrl+C is for the orchestrator, whose trap sends one of the above
 //
 // It stops on its own, too, and the orchestrator reads why from the exit code:
@@ -21,8 +22,9 @@
 //   4  it held the lock for --max-hold-minutes (default 120) and released it
 //   5  the orchestrator (--parent-pid) is gone; it stops renewing without releasing
 //
-// It needs a token for the storage account: from the Azure CLI on the owner's machine, or from
-// GitHub's OIDC token in a workflow job (lib/token.mjs). It never prints the lease id.
+// It needs a token for the storage account: from the Azure CLI on the owner's machine (in the
+// tenant of --subscription), or from GitHub's OIDC token in a workflow job (lib/token.mjs). It
+// never prints the lease id.
 import { renameSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { WAIT_MS, acquireLock } from './lib/lock.mjs';
@@ -35,6 +37,7 @@ const { values } = parseArgs({
     'run-id': { type: 'string', default: '' },
     'git-sha': { type: 'string', default: '' },
     'parent-pid': { type: 'string', default: '' },
+    subscription: { type: 'string', default: '' },
     'wait-minutes': { type: 'string', default: String(WAIT_MS / 60_000) },
     'max-hold-minutes': { type: 'string', default: '120' },
   },
@@ -53,7 +56,7 @@ const maxHoldMs = Number(values['max-hold-minutes']) * 60_000;
 const log = (line) => process.stderr.write(`[lock] ${line}\n`);
 
 const resource = 'https://storage.azure.com/';
-const token = cachedToken(githubFederatedToken(resource) ?? azCliToken(resource));
+const token = cachedToken(githubFederatedToken(resource) ?? azCliToken(resource, { subscription: values.subscription || undefined }));
 
 // Ctrl+C reaches every process in the terminal's group; the orchestrator decides what it means.
 process.on('SIGINT', () => {});
@@ -74,9 +77,28 @@ async function stop(code, release) {
   process.exit(code);
 }
 
-process.on('SIGTERM', () => void stop(0, true));
-// Waiting for the lock, SIGUSR2 has nothing to leave behind; it ends the wait the same way.
+process.on('SIGUSR1', () => void stop(0, true));
+// Waiting for the lock, these have nothing to leave behind; they end the wait the same way.
 process.on('SIGUSR2', () => void stop(0, false));
+process.on('SIGTERM', () => void stop(0, false));
+
+let heldSince = 0;
+// From the start: an orchestrator that dies while this waits must not leave it to take the lock.
+setInterval(() => {
+  if (parentPid) {
+    try {
+      process.kill(parentPid, 0);
+    } catch {
+      log('the run that asked for the lock is gone; no longer renewing it (it lapses within 60 s unless the test job renews it)');
+      void stop(5, false);
+      return;
+    }
+  }
+  if (heldSince && Date.now() - heldSince > maxHoldMs) {
+    log(`error: held the lock for ${values['max-hold-minutes']} minutes, longer than any run; releasing it`);
+    void stop(4, true);
+  }
+}, 5000).unref();
 
 try {
   lock = await acquireLock(blobUrl, token, {
@@ -94,19 +116,6 @@ writeFileSync(tmp, lock.leaseId, { mode: 0o600 });
 renameSync(tmp, leaseFile);
 log('holding the lock; no other run can deploy to dev or start the tests until this one ends');
 
-const heldSince = Date.now();
-setInterval(() => {
-  if (parentPid) {
-    try {
-      process.kill(parentPid, 0);
-    } catch {
-      log('the run that took the lock is gone; no longer renewing it (it lapses within 60 s unless the test job renews it)');
-      void stop(5, false);
-      return;
-    }
-  }
-  if (Date.now() - heldSince > maxHoldMs) {
-    log(`error: held the lock for ${values['max-hold-minutes']} minutes, longer than any run; releasing it`);
-    void stop(4, true);
-  }
-}, 5000);
+heldSince = Date.now();
+// Keeps the process alive while the lease is renewed (the renewal timer does not).
+setInterval(() => {}, 60_000);

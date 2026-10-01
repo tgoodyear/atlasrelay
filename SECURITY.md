@@ -112,9 +112,10 @@ operator, who writes them (Key Vault Secrets Officer) and can reach the vault on
 GitHub workflow that runs the tests deploys the commit's site and API to dev, builds the job's
 image in the environment's private container registry, starts the job and downloads its results;
 its identity has no role on the vault, and GitHub holds no test credentials. To deploy, it uses
-the same roles the prod identity has, granted to dev's own identity on dev's resource group and
-Function App only. That identity, the operator and the job's identity may also write the one blob
-in the `locks` container that keeps a second run off dev while one is deploying or testing. The run publishes only its summary (outcome, counts, commit) as
+the roles `infra/rbac.bicep` gives every environment's CI identity, on dev's resource group and
+Function App only. That identity, the operator and the job's identity also have Storage Blob Data
+Contributor on the `locks` container, which holds only the blob whose lease keeps a second run off
+dev while one is deploying or testing. The run publishes only its summary (outcome, counts, commit) as
 an artifact, because anyone signed in to GitHub can download the artifacts of a public repository;
 the report, traces and console stay in the private results container. The keys are copied in from
 a separate vault that refuses every network; `scripts/set-ripe-keys.sh` admits the operator's

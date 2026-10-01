@@ -21,8 +21,15 @@ export const LOCK_CONTAINER = 'locks';
 export const LOCK_BLOB = 'full-flow';
 export const LEASE_SECONDS = 60;
 const RENEW_MS = 20_000;
-/** Failed renewals in a row after which the lease counts as lost. After two, at most 20 s of it remain (10 s if the last one hung). */
+/** Failed renewals in a row after which the lease counts as lost. */
 const MISSES = 2;
+/**
+ * A renewal (its token included) that has not finished in this long counts as failed. With two
+ * misses in a row, or 40 s since the last renewal that worked, the holder counts the lease as
+ * lost: within 50 s of that renewal, before the 60 s it bought run out. It never believes it holds
+ * a lease that has expired.
+ */
+const REQUEST_MS = 10_000;
 /** How long a run waits for another to finish. A whole run (deploy, build, 45 minutes of tests) fits. */
 export const WAIT_MS = 45 * 60_000;
 const POLL_MS = 30_000;
@@ -33,7 +40,7 @@ const NOTE_MS = 5 * 60_000;
  * @typedef {{ leaseId: string, release: () => Promise<void>, lost: () => boolean }} Lock
  * @typedef {string | (() => Promise<string>)} TokenSource a token for https://storage.azure.com/, or a function that returns a current one
  * @typedef {{ runId?: string, gitSha?: string }} Holder what the holder writes on the blob for others to read while they wait
- * @typedef {{ renewMs?: number, fetchImpl?: typeof fetch, log?: (line: string) => void, onLost?: () => void }} HoldOptions
+ * @typedef {{ renewMs?: number, requestMs?: number, lostAfterMs?: number, fetchImpl?: typeof fetch, log?: (line: string) => void, onLost?: () => void }} HoldOptions
  */
 
 /** @param {string} containerUrl e.g. https://account.blob.core.windows.net/locks @returns {string} the lock blob's URL */
@@ -118,9 +125,10 @@ function minutes(ms) {
   return `${n} minute${n === 1 ? '' : 's'}`;
 }
 
-/** @param {{ runId: string, gitSha: string, since: string } | null} h */
+/** @param {{ leased: boolean, runId: string, gitSha: string, since: string } | null} h */
 function describe(h) {
-  if (!h || !h.runId) return 'another run';
+  // The labels outlive a release, so they name the holder only while the blob is leased.
+  if (!h || !h.leased || !h.runId) return 'another run';
   const about = [h.gitSha && `commit ${h.gitSha.slice(0, 12)}`, h.since && `since ${h.since}`].filter(Boolean).join(', ');
   return `run ${h.runId}${about ? ` (${about})` : ''}`;
 }
@@ -134,9 +142,13 @@ function describe(h) {
  */
 function hold(blob, leaseId, opts) {
   const { renewMs = RENEW_MS, log = () => {}, onLost = () => {}, releaseAtEnd } = opts;
+  const lostAfterMs = opts.lostAfterMs ?? 2 * renewMs;
+  const requestMs = opts.requestMs ?? Math.min(REQUEST_MS, renewMs / 2);
   let lost = false;
   let ended = false;
   let misses = 0;
+  let inFlight = false;
+  let lastOk = Date.now();
   /** @param {string} why */
   const lose = (why) => {
     if (lost || ended) return;
@@ -147,12 +159,24 @@ function hold(blob, leaseId, opts) {
   };
   const timer = setInterval(async () => {
     if (lost || ended) return;
+    // However the last renewal is doing, a lease not renewed for this long may be gone.
+    if (Date.now() - lastOk >= lostAfterMs) return lose(`not renewed for ${Math.round((Date.now() - lastOk) / 1000)} s`);
+    if (inFlight) return;
+    inFlight = true;
     let why;
     try {
-      const res = await blob.lease('renew', leaseId);
+      /** @type {ReturnType<typeof setTimeout> | undefined} */
+      let t;
+      const res = await Promise.race([
+        blob.lease('renew', leaseId),
+        new Promise((_, reject) => {
+          t = setTimeout(() => reject(new Error(`no answer in ${requestMs / 1000} s`)), requestMs);
+        }),
+      ]).finally(() => clearTimeout(t));
       if (ended) return;
       if (res.status === 200) {
         misses = 0;
+        lastOk = Date.now();
         return;
       }
       why = `HTTP ${res.status} ${res.headers.get('x-ms-error-code') ?? ''}`.trim();
@@ -160,8 +184,10 @@ function hold(blob, leaseId, opts) {
       if (res.status === 409 || res.status === 412) return lose(`renewing it answered ${why}`);
     } catch (err) {
       why = /** @type {Error} */ (err).message;
+    } finally {
+      inFlight = false;
     }
-    if (ended) return;
+    if (ended || lost) return;
     // Anything else (no answer, a server error, no token) may pass, and the lease may still be ours.
     if (++misses >= MISSES) lose(`${misses} renewals in a row failed, the last with ${why}`);
     else log(`warning: could not renew the lock ${blob.name} (${why}); trying again`);
@@ -204,20 +230,32 @@ export async function acquireLock(blobUrl, token, opts = {}) {
   let lastSeen = '';
   let lastNote = start;
   for (;;) {
-    const res = await blob.lease('acquire', leaseId);
-    if (res.status === 201) break;
-    if (res.status !== 409) {
-      throw new Error(`Taking the lock ${blob.name}: HTTP ${res.status} ${res.headers.get('x-ms-error-code') ?? ''}`.trim());
+    /** @type {string} */
+    let seen;
+    try {
+      const res = await blob.lease('acquire', leaseId);
+      if (res.status === 201) break;
+      // 409: someone holds it. A server error or throttling may pass; anything else will not.
+      if (res.status !== 409 && res.status !== 429 && res.status < 500) {
+        throw new Error(`Taking the lock ${blob.name}: HTTP ${res.status} ${res.headers.get('x-ms-error-code') ?? ''}`.trim());
+      }
+      seen = res.status === 409 ? describe(await blob.holder().catch(() => null)) : '';
+      if (!seen) log(`warning: taking the lock ${blob.name} answered HTTP ${res.status}; trying again`);
+    } catch (err) {
+      if (/** @type {Error} */ (err).message.startsWith('Taking the lock')) throw err;
+      // No answer, or no token: try again at the next poll.
+      log(`warning: taking the lock ${blob.name}: ${/** @type {Error} */ (err).message}; trying again`);
+      seen = '';
     }
-    const seen = describe(await blob.holder().catch(() => null));
     if (Date.now() + pollMs > deadline) {
-      throw new Error(`${seen[0].toUpperCase()}${seen.slice(1)} still holds the lock ${blob.name} after ${minutes(waitMs)} of waiting. Start this run again once it has finished.`);
+      const who = seen || lastSeen || 'another run';
+      throw new Error(`${who[0].toUpperCase()}${who.slice(1)} still holds the lock ${blob.name} after ${minutes(waitMs)} of waiting. Start this run again once it has finished.`);
     }
-    if (seen !== lastSeen) {
+    if (seen && seen !== lastSeen) {
       log(`${seen} holds the lock ${blob.name}; waiting for it, for up to ${minutes(deadline - Date.now())} more, checking every ${Math.round(pollMs / 1000)} s`);
       lastSeen = seen;
       lastNote = Date.now();
-    } else if (Date.now() - lastNote >= noteMs) {
+    } else if (seen && Date.now() - lastNote >= noteMs) {
       log(`still waiting for ${seen} (${minutes(Date.now() - start)} so far)`);
       lastNote = Date.now();
     }
@@ -244,11 +282,11 @@ export async function acquireLock(blobUrl, token, opts = {}) {
  * @param {string} blobUrl
  * @param {TokenSource} token
  * @param {string} leaseId
- * @param {HoldOptions} [opts]
+ * @param {HoldOptions & { holder?: Holder, now?: () => Date }} [opts]
  * @returns {Promise<Lock>}
  */
 export async function adoptLock(blobUrl, token, leaseId, opts = {}) {
-  const { fetchImpl = fetch } = opts;
+  const { fetchImpl = fetch, log = () => {}, holder = {}, now = () => new Date() } = opts;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(leaseId)) {
     throw new Error('E2E_LOCK_LEASE_ID is not a lease id');
   }
@@ -259,7 +297,23 @@ export async function adoptLock(blobUrl, token, leaseId, opts = {}) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const res = await blob.lease('renew', leaseId);
-      if (res.status === 200) return hold(blob, leaseId, { ...opts, releaseAtEnd: false });
+      if (res.status === 200) {
+        const lock = hold(blob, leaseId, { ...opts, releaseAtEnd: false });
+        // Tells an orchestrator that started this run and does not wait for it (run-e2e.sh
+        // --no-wait) that it may stop renewing: the job renews from here on.
+        try {
+          const meta = await blob.setMetadata(leaseId, {
+            runid: holder.runId ?? '',
+            gitsha: holder.gitSha ?? '',
+            since: now().toISOString().replace(/\.\d+Z$/, 'Z'),
+            adopted: holder.runId ?? 'yes',
+          });
+          if (!meta.ok) log(`warning: could not mark the lock as taken over by the job (HTTP ${meta.status})`);
+        } catch (err) {
+          log(`warning: could not mark the lock as taken over by the job (${/** @type {Error} */ (err).message})`);
+        }
+        return lock;
+      }
       why = `HTTP ${res.status} ${res.headers.get('x-ms-error-code') ?? ''}`.trim();
       if (res.status !== 429 && res.status < 500) break;
     } catch (err) {

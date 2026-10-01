@@ -10,8 +10,10 @@
 //   the CI identity's federated credential allows.
 import { execFile } from 'node:child_process';
 
-/** Ask for a new token when the current one has less than this left. */
+/** Ask for a new token, in the background, when the current one has less than this left. */
 const MARGIN_MS = 10 * 60_000;
+/** Below this, wait for the new one instead. */
+const MIN_MS = 2 * 60_000;
 
 /**
  * @typedef {{ token: string, expiresAt: number }} Token
@@ -19,23 +21,40 @@ const MARGIN_MS = 10 * 60_000;
  */
 
 /**
+ * Hands out the current token, and fetches the next one in the background while the current one
+ * still has minutes left, so a renewal of the lock never waits on a slow sign-in. One fetch at a
+ * time.
  * @param {TokenFetcher} fetcher
- * @param {{ now?: () => number, marginMs?: number }} [opts]
- * @returns {() => Promise<string>} a function that returns a token valid for at least marginMs
+ * @param {{ now?: () => number, marginMs?: number, minMs?: number }} [opts]
+ * @returns {() => Promise<string>} a function that returns a token valid for at least minMs
  */
 export function cachedToken(fetcher, opts = {}) {
-  const { now = Date.now, marginMs = MARGIN_MS } = opts;
+  const { now = Date.now, marginMs = MARGIN_MS, minMs = MIN_MS } = opts;
   /** @type {Token | null} */
   let current = null;
+  /** @type {Promise<Token> | null} */
+  let pending = null;
+  const refresh = () =>
+    (pending ??= fetcher()
+      .then((t) => (current = t))
+      .finally(() => {
+        pending = null;
+      }));
   return async () => {
-    if (!current || current.expiresAt - now() < marginMs) current = await fetcher();
-    return current.token;
+    const left = current ? current.expiresAt - now() : -1;
+    if (current && left >= marginMs) return current.token;
+    if (current && left >= minMs) {
+      // A failure here shows up at the next call, when the token is closer to expiring.
+      refresh().catch(() => {});
+      return current.token;
+    }
+    return (await refresh()).token;
   };
 }
 
 /**
  * @param {string} resource e.g. https://storage.azure.com/
- * @param {{ run?: (args: string[]) => Promise<string> }} [opts]
+ * @param {{ subscription?: string, run?: (args: string[]) => Promise<string> }} [opts] subscription: sign in to its tenant, whichever az has selected
  * @returns {TokenFetcher}
  */
 export function azCliToken(resource, opts = {}) {
@@ -46,7 +65,7 @@ export function azCliToken(resource, opts = {}) {
         execFile('az', args, { timeout: 60_000 }, (err, stdout) => (err ? reject(new Error(`az account get-access-token failed: ${err.message.split('\n')[0]}`)) : resolve(stdout))),
       ));
   return async () => {
-    const body = JSON.parse(await run(['account', 'get-access-token', '--resource', resource, '-o', 'json']));
+    const body = JSON.parse(await run(['account', 'get-access-token', '--resource', resource, ...(opts.subscription ? ['--subscription', opts.subscription] : []), '-o', 'json']));
     // expires_on (seconds) in recent versions, expiresOn (local time) in older ones.
     const expiresAt = body.expires_on ? Number(body.expires_on) * 1000 : Date.parse(body.expiresOn);
     if (!body.accessToken || !Number.isFinite(expiresAt)) throw new Error('az account get-access-token returned no token');
