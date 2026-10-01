@@ -23,10 +23,12 @@ export default defineConfig({
   reporter: [['list'], ['json', { outputFile: `${outputDir}/report.json` }]],
   use: {
     baseURL,
-    // Traces and screenshots are kept for a failing test only. Traces hold every request's Cookie
-    // header; run.mjs replaces the session cookies in them before they leave the container.
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
+    // A trace is kept for a failing test only. It holds every request's Cookie header, and the
+    // pages hold the RIPE account emails as text; run.mjs replaces both in it before it leaves the
+    // container. No screenshots, in the trace or beside it: text drawn into an image cannot be
+    // found and replaced. The trace's DOM snapshots show each page instead.
+    trace: { mode: 'retain-on-failure', screenshots: false, snapshots: true, sources: true },
+    screenshot: 'off',
     video: 'off',
     actionTimeout: 20_000,
     navigationTimeout: 45_000,

@@ -5,11 +5,13 @@
 //    E2E_RESEARCHER_PASSWORD, E2E_DONOR_USERNAME and E2E_DONOR_PASSWORD instead (and E2E_*_TOTP
 //    when an account has a TOTP seed), plus E2E_RIPE_DONOR_KEY, E2E_RIPE_DONOR_ACCOUNT,
 //    E2E_RIPE_RECIPIENT_KEY and E2E_RIPE_RECIPIENT_ACCOUNT for the real-transfer tests.
-// 2. Run the Playwright suite. Its output is printed with every secret replaced.
-// 3. Redact the results directory: the passwords, TOTP seeds, RIPE keys and account emails, and
+// 2. Take the lock every run of the job shares (lib/lock.mjs), when RESULTS_CONTAINER_URL is set,
+//    so two runs never sign the same accounts in or move credits at the same time.
+// 3. Run the Playwright suite. Its output is printed with every secret replaced.
+// 4. Redact the results directory: the passwords, TOTP seeds, RIPE keys and account emails, and
 //    the site's session cookies, which traces record in request headers.
-// 4. Write summary.json and upload the directory to RESULTS_CONTAINER_URL/runs/<run id>/, when set.
-// 5. Exit 0 only if the suite passed.
+// 5. Write summary.json and upload the directory to RESULTS_CONTAINER_URL/runs/<run id>/, when set.
+// 6. Exit 0 only if the suite passed.
 //
 // No secret is ever printed, written to the results or passed on the command line.
 import { spawn } from 'node:child_process';
@@ -19,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSecret, managedIdentityToken, putBlob } from './lib/azure.mjs';
+import { acquireLock } from './lib/lock.mjs';
 import { lineRedactor, redactText, redactTree, secretValues, variants } from './lib/redact.mjs';
 import { summarize } from './lib/summary.mjs';
 
@@ -190,6 +193,8 @@ async function upload() {
 
 let exitCode = 1;
 let setupError = '';
+/** @type {import('./lib/lock.mjs').Lock | null} */
+let lock = null;
 mkdirSync(outDir, { recursive: true });
 try {
   log(`run ${runId} against ${process.env.BASE_URL ?? '(BASE_URL unset)'}`);
@@ -197,10 +202,22 @@ try {
   accountSecrets = secretValues(env);
   if (!env.E2E_RIPE_DONOR_KEY) log('the job names no RIPE Atlas keys, so the real-transfer tests will skip');
   needles = variants(accountSecrets);
+  const container = process.env.RESULTS_CONTAINER_URL;
+  if (container) {
+    const token = await managedIdentityToken('https://storage.azure.com/', process.env.AZURE_CLIENT_ID);
+    lock = await acquireLock(container, token, { log });
+    log('holding the lock: no other run can start the tests until this one ends');
+  } else {
+    log('RESULTS_CONTAINER_URL is unset, so this run takes no lock; make sure no other run is going');
+  }
   exitCode = await runPlaywright(env);
 } catch (err) {
   setupError = /** @type {Error} */ (err).message;
   log(`error: ${setupError}`);
+}
+if (lock) {
+  await lock.release();
+  log('released the lock');
 }
 
 // Everything below runs whatever happened above, so a failed run still reports.

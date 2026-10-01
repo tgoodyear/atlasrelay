@@ -284,6 +284,12 @@ archives included, before uploading. The secrets are the passwords, the TOTP see
 Atlas keys, the two RIPE account emails and the site's session cookies. GitHub never holds any of
 them, and the CI identity has no role on the vault.
 
+Only one run goes at a time, whether the workflow or `scripts/run-e2e.sh` started it. While the
+suite runs, `run.mjs` holds a lease on the blob `locks/full-flow` in the `results` container. A
+second run waits up to two minutes for it, then fails before it signs in or moves any credits. The
+lease is renewed every 20 seconds and lapses within a minute of a run dying, so it never needs
+breaking by hand.
+
 #### Setting it up
 
 Once per dev environment, as the Owner:
@@ -466,8 +472,10 @@ holds:
 - `report.json`: the Playwright report;
 - `console.txt`: the suite's output, including the `[ripe]` lines with the amounts sent and
   returned and how each balance changed;
-- `test-results/`: for a failed test, screenshots, `error-context.md` (the page as the test saw
-  it) and `trace.zip` (open it with `npx playwright show-trace trace.zip`);
+- `test-results/`: for a failed test, `error-context.md` (the page as the test saw it) and
+  `trace.zip` (open it with `npx playwright show-trace trace.zip`). There are no screenshots,
+  in the trace or beside it: a secret drawn into an image cannot be redacted, so the trace shows
+  each page as a DOM snapshot instead;
 - `job-logs.tsv`, when the execution did not succeed: the job's console and system logs from Log
   Analytics, which covers a container that never started. The logs take a few minutes to arrive;
   re-run the job if the file is empty.

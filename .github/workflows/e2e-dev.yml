@@ -29,6 +29,8 @@ on:
   workflow_dispatch:
 
 # One run at a time: two runs would sign the same accounts in and delete each other's profiles.
+# This queues the workflow's own runs; inside the job, e2e-real/lib/lock.mjs also keeps a run out
+# while one started by scripts/run-e2e.sh is going.
 concurrency:
   group: e2e-dev
   cancel-in-progress: false
