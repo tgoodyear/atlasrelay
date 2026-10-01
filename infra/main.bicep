@@ -2,7 +2,7 @@
 // stack atlasrelay-<env> by scripts/bootstrap.sh and scripts/provision.sh, with parameters from
 // infra/main.bicepparam (which reads the environment's settings, .azure/<env>/.env).
 //
-//   app.bicep         storage + tables, static web app (Standard)
+//   app.bicep         storage + tables, static web app (Standard) and its sign-in settings
 //   api.bicep         Function App (Flex Consumption) with its managed identity and host storage,
 //                     linked to the static web app as its API
 //   platform.bicep    Log Analytics + App Insights (App* tables kept 90 days), the monthly budget
@@ -69,6 +69,28 @@ param linkApi bool = true
 @description('''Object id of the Owner who works on the tables by hand and, outside prod, writes the test
 accounts into the test vault (scripts/set-test-users.sh). Empty: nobody has data access.''')
 param operatorPrincipalId string = ''
+
+@description('''Client id of the site's own GitHub OAuth app, for sign-in through the site's own
+registrations (docs/RUNBOOK.md, "Google and ORCID sign-in"). Empty: built-in GitHub sign-in.''')
+param signinGithubClientId string = ''
+@secure()
+@description('Client secret of that GitHub OAuth app')
+param signinGithubClientSecret string = ''
+@description('Application (client) id of the site\'s own Microsoft Entra app registration. Empty: none.')
+param signinMicrosoftClientId string = ''
+@secure()
+@description('Client secret of that Entra app registration')
+param signinMicrosoftClientSecret string = ''
+@description('Client id of the site\'s Google OAuth client. Empty: no Google sign-in.')
+param signinGoogleClientId string = ''
+@secure()
+@description('Client secret of that Google OAuth client')
+param signinGoogleClientSecret string = ''
+@description('Client id of the site\'s ORCID public API client. Empty: no ORCID sign-in.')
+param signinOrcidClientId string = ''
+@secure()
+@description('Client secret of that ORCID client')
+param signinOrcidClientSecret string = ''
 
 @description('Extra app settings for the Function App')
 param additionalAppSettings object = {}
@@ -189,6 +211,14 @@ module app 'app.bicep' = {
     storageSharedKeyAccess: storageSharedKeyAccess
     operatorPrincipalId: operatorPrincipalId
     tags: tags
+    githubClientId: signinGithubClientId
+    githubClientSecret: signinGithubClientSecret
+    microsoftClientId: signinMicrosoftClientId
+    microsoftClientSecret: signinMicrosoftClientSecret
+    googleClientId: signinGoogleClientId
+    googleClientSecret: signinGoogleClientSecret
+    orcidClientId: signinOrcidClientId
+    orcidClientSecret: signinOrcidClientSecret
   }
 }
 

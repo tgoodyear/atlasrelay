@@ -153,6 +153,10 @@ test('sign-in links and atlas.ripe.net links are counted, other links are not', 
   const page = 'https://atlasrelay.org/projects/mf3k2x9a0abc1234';
   assert.deepEqual(linkAction('/.auth/login/github?post_login_redirect_uri=%2Fdashboard', page), { name: 'sign-in-clicked', properties: { provider: 'github' } });
   assert.deepEqual(linkAction('https://atlasrelay.org/.auth/login/aad', page), { name: 'sign-in-clicked', properties: { provider: 'aad' } });
+  assert.deepEqual(linkAction('/.auth/login/orcid?post_login_redirect_uri=%2Fprojects%2Fabc', page), { name: 'sign-in-clicked', properties: { provider: 'orcid' } });
+  assert.deepEqual(linkAction('/.auth/login/google', page), { name: 'sign-in-clicked', properties: { provider: 'google' } });
+  // The sign-in page is a page, not a sign-in.
+  assert.equal(linkAction('/signin?next=%2Fprojects%2Fabc', page), null);
   assert.deepEqual(linkAction('https://atlas.ripe.net/credits/transfer/?to=someone@example.org', page), {
     name: 'outbound-click',
     properties: { host: 'atlas.ripe.net', path: '/credits/transfer' },

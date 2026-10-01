@@ -2,7 +2,7 @@ import type { Locator, Page } from '@playwright/test';
 import type { Credentials } from './accounts';
 import { totp } from './lib/totp.mjs';
 
-// Signs one account in through the site's "Continue with Microsoft" link and the real Microsoft
+// Signs one account in through the site's Microsoft sign-in link (/.auth/login/aad) and the real Microsoft
 // sign-in pages. The pages come in a different order depending on the account and the tenant, so
 // this looks at what is on screen and answers it, until the browser is back on the site:
 //

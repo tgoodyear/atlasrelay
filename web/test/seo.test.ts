@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalUrl, DEFAULT_DESCRIPTION, documentTitle, HOME_TITLE, META, renderShell, ROOT_END, ROOT_START, SHELLS, SITE_ORIGIN, type Shell } from '../src/lib/pages.ts';
 import * as server from '../../api/src/lib/projectHtml.ts';
+import { loginUrl, offeredProviders, parseSignIn, providerLabel, providerList, safeReturnPath, signInConfig } from '../src/lib/signin.ts';
 import { extractLocs, findKey } from '../../scripts/indexnow.mjs';
 
 const web = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -240,7 +241,7 @@ test('each route gets the shell with the matching head', () => {
   assert.equal(resolve('/how-it-works').serves, '/shell/how-it-works.html');
   assert.equal(resolve('/privacy').serves, '/shell/privacy.html');
   for (const p of ['/projects/mf1abcd0000xyz12', '/projects/mf1abcd0000xyz12/edit']) assert.equal(resolve(p).serves, PROJECT_PAGE, p);
-  for (const p of ['/dashboard', '/profile', '/projects/new']) assert.equal(resolve(p).serves, '/shell/app.html');
+  for (const p of ['/dashboard', '/profile', '/projects/new', '/signin']) assert.equal(resolve(p).serves, '/shell/app.html');
 });
 
 test('SWA would accept the routes: no two rules normalize to the same route', () => {
@@ -363,14 +364,72 @@ test('the IndexNow script reads every <loc> from a sitemap and unescapes it', ()
 
 // ---------- sign-in providers ----------
 
-test('only GitHub and Microsoft sign-in are reachable; the other built-in providers answer 404', () => {
-  // Static Web Apps offers more providers than the site uses. The privacy page and SECURITY.md
-  // name GitHub and Microsoft only, so the others are closed off by route.
-  for (const provider of ['google', 'facebook', 'twitter', 'apple']) {
-    const route = config.routes.find((r) => r.route === `/.auth/login/${provider}`);
-    assert.equal(route?.statusCode, 404, `/.auth/login/${provider} should answer 404`);
+const loginBlocked = (c: SwaConfig, provider: string): boolean =>
+  c.routes.some((r) => r.route === `/.auth/login/${provider}` && r.statusCode === 404);
+const ALL_PROVIDERS = ['github', 'aad', 'google', 'orcid', 'facebook', 'twitter', 'apple'];
+
+test('the committed config is the built-in sign-in site: GitHub and Microsoft only', () => {
+  // Static Web Apps offers more providers than the site uses, and still sent /.auth/login/google and
+  // /.auth/login/facebook on to the provider in 2026-10. Every one the site does not offer answers 404.
+  assert.deepEqual(ALL_PROVIDERS.filter((p) => !loginBlocked(config, p)), ['github', 'aad']);
+  assert.equal((config as { auth?: unknown }).auth, undefined, 'the build writes the auth section; web/public has none');
+  // The build writes this same file for a build without VITE_SIGNIN_PROVIDERS.
+  assert.deepEqual(signInConfig(config, parseSignIn(undefined)), config);
+  assert.deepEqual(signInConfig(config, parseSignIn('')), config);
+});
+
+test('a custom sign-in build opens the providers it names, and keeps GitHub and Microsoft', () => {
+  const all = signInConfig(config, parseSignIn('github,aad,google,orcid')) as SwaConfig & { auth: { identityProviders: Record<string, any> } };
+  assert.deepEqual(ALL_PROVIDERS.filter((p) => !loginBlocked(all, p)), ['github', 'aad', 'google', 'orcid']);
+  const idp = all.auth.identityProviders;
+  assert.deepEqual(Object.keys(idp).sort(), ['azureActiveDirectory', 'customOpenIdConnectProviders', 'github', 'google']);
+  assert.deepEqual(idp.github.registration, { clientIdSettingName: 'SIGNIN_GITHUB_CLIENT_ID', clientSecretSettingName: 'SIGNIN_GITHUB_CLIENT_SECRET' });
+  assert.deepEqual(idp.google.registration, { clientIdSettingName: 'SIGNIN_GOOGLE_CLIENT_ID', clientSecretSettingName: 'SIGNIN_GOOGLE_CLIENT_SECRET' });
+  assert.equal(idp.azureActiveDirectory.registration.openIdIssuer, 'https://login.microsoftonline.com/common/v2.0');
+  const orcid = idp.customOpenIdConnectProviders.orcid;
+  assert.equal(orcid.registration.openIdConnectConfiguration.wellKnownOpenIdConfiguration, 'https://orcid.org/.well-known/openid-configuration');
+  assert.equal(orcid.registration.clientCredential.clientSecretSettingName, 'SIGNIN_ORCID_CLIENT_SECRET');
+  assert.deepEqual(orcid.login.scopes, ['openid']);
+  // The iD is the "sub" claim; the account name must not be it, since it seeds the public display name.
+  assert.equal(orcid.login.nameClaimType, 'name');
+  // Only setting names, never values, are in the file that ships with the site.
+  assert.doesNotMatch(JSON.stringify(all.auth), /"(clientSecret|clientId)"\s*:/);
+  for (const [route, target] of [['/login/google', 'google'], ['/login/orcid', 'orcid'], ['/login', 'github'], ['/login/microsoft', 'aad']]) {
+    assert.equal(all.routes.find((r) => r.route === route)?.redirect, `/.auth/login/${target}?post_login_redirect_uri=/dashboard`, route);
   }
-  for (const provider of ['github', 'aad']) {
-    assert.ok(!config.routes.some((r) => r.route === `/.auth/login/${provider}` && r.statusCode === 404), `${provider} must stay open`);
+  // Everything else is the committed file's, in its order.
+  const rest = (c: SwaConfig) => c.routes.filter((r) => !/^\/(\.auth\/)?login\b/.test(r.route));
+  assert.deepEqual(rest(all), rest(config));
+});
+
+test('a custom build that names one optional provider leaves the other closed', () => {
+  const orcidOnly = signInConfig(config, parseSignIn('aad,orcid,github'));
+  assert.deepEqual(ALL_PROVIDERS.filter((p) => !loginBlocked(orcidOnly, p)), ['github', 'aad', 'orcid']);
+  assert.ok(!orcidOnly.routes.some((r) => r.route === '/login/google'));
+  assert.equal(((orcidOnly as unknown as { auth: { identityProviders: Record<string, unknown> } }).auth.identityProviders).google, undefined);
+});
+
+test('the build refuses a sign-in setting that would drop GitHub or Microsoft, or names an unknown provider', () => {
+  // Any custom provider turns the built-in ones off, so Google or ORCID alone would sign out every
+  // GitHub and Microsoft account.
+  assert.throws(() => parseSignIn('google'), /must include github and aad/);
+  assert.throws(() => parseSignIn('github,orcid'), /must include aad/);
+  assert.throws(() => parseSignIn('github,aad,facebook'), /unknown provider facebook/);
+  assert.deepEqual(parseSignIn(' GitHub , aad,ORCID ').providers, ['github', 'aad', 'orcid']);
+  assert.throws(() => signInConfig({ ...config, auth: {} }, parseSignIn('')), /written by the build/);
+});
+
+test('sign-in buttons match the build, and return paths stay on the site', () => {
+  assert.deepEqual(offeredProviders(undefined).map((p) => p.label), ['GitHub', 'Microsoft']);
+  assert.deepEqual(offeredProviders('github,aad,google,orcid').map((p) => p.label), ['GitHub', 'Microsoft', 'Google', 'ORCID']);
+  assert.equal(providerLabel('orcid'), 'ORCID');
+  assert.equal(providerList(offeredProviders('')), 'GitHub or Microsoft');
+  assert.equal(providerList(offeredProviders('github,aad,google,orcid')), 'GitHub, Microsoft, Google or ORCID');
+  assert.equal(providerLabel('aad'), 'Microsoft');
+  assert.equal(providerLabel('facebook'), 'another provider');
+  assert.equal(safeReturnPath('/projects/abc'), '/projects/abc');
+  for (const bad of ['https://evil.example/', '//evil.example/', '/\\evil.example', 'javascript:alert(1)', '', null, '/a\nb']) {
+    assert.equal(safeReturnPath(bad), '/dashboard', String(bad));
   }
+  assert.equal(loginUrl('orcid', '/projects/abc'), '/.auth/login/orcid?post_login_redirect_uri=%2Fprojects%2Fabc');
 });

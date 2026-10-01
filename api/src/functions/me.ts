@@ -3,7 +3,7 @@ import { requirePrincipal } from '../lib/auth';
 import { handle, json, readJson } from '../lib/http';
 import { Project, anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listPledges, listProjectsByOwner, patchProject, pledgeRacedDeletion, projectMayHaveRacedDeletion, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
-import { privateUser } from '../lib/views';
+import { initialDisplayName, privateUser } from '../lib/views';
 import { logError } from '../lib/telemetry';
 
 app.http('me-get', {
@@ -27,7 +27,7 @@ app.http('me-put', {
     const body = await readJson(req);
     const patch: Record<string, string> = {};
     const displayName = str(body, 'displayName', { max: 80 });
-    if (displayName !== undefined) patch.displayName = displayName || p.userDetails;
+    if (displayName !== undefined) patch.displayName = displayName || initialDisplayName(p.userDetails, p.userId);
     const atlasEmail = email(body, 'atlasEmail');
     if (atlasEmail !== undefined) patch.atlasEmail = atlasEmail;
     const affiliation = str(body, 'affiliation', { max: 120 });

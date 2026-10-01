@@ -71,9 +71,10 @@ scripts/settings.sh prod ATLASRELAY_DNS_TTL 300   # change one
 scripts/provision.sh prod                         # deploy the stack with the new settings
 ```
 
-The settings file holds two values the repository does not: the apex validation token and the
-subscription the environment lives in. Keep it; `scripts/teardown.sh` renames it rather than
-deleting it.
+The settings file holds values the repository does not: the apex validation token, the
+subscription the environment lives in, and, once [Google and ORCID sign-in](#google-and-orcid-sign-in)
+is set up, the sign-in client secrets. Keep it, and keep it private; `scripts/teardown.sh` renames
+it rather than deleting it.
 
 ## First deployment
 
@@ -212,7 +213,7 @@ dev, build it, publish the API to dev's Function App, then upload the site with 
 token:
 
 ```bash
-npm ci && npm run build
+npm ci && VITE_SIGNIN_PROVIDERS="$(scripts/settings.sh dev SIGNIN_PROVIDERS)" npm run build
 rm -rf api-deploy api.zip && mkdir -p api-deploy/dist
 cp api/dist/bundle.js api-deploy/dist/ && cp api/host.json api/package.json api-deploy/
 (cd api-deploy && zip -qr ../api.zip .)
@@ -232,6 +233,162 @@ E2E_RESULTS_ACCOUNT)" -c locks -n full-flow --query properties.lease.state -o ts
 `leased` while one is.
 
 `scripts/teardown.sh dev` removes it again, the CNAME and the test harness included.
+
+## Google and ORCID sign-in
+
+The site signs people in with Static Web Apps' built-in GitHub and Microsoft providers, which need
+no app registration and no secret. Google and ORCID are not built in: they need the site's own app
+registrations. Microsoft's documentation also says that "using any custom registrations disables
+all preconfigured providers"
+([custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)).
+So turning on Google or ORCID means registering four apps, GitHub and Microsoft included, and
+switching all four at once. [Sign-in providers](ARCHITECTURE.md#sign-in-providers) explains the
+design.
+
+Until all of this is done the site stays on the built-in providers, and Google and ORCID answer 404.
+
+Every redirect URI below has the form `https://<host>/.auth/login/<provider>/callback`. The
+providers are `github`, `aad`, `google` and `orcid`. For prod the host is `atlasrelay.org`. Make the
+apex the default domain first ([Canonical host](#canonical-host)), so that `www` and the
+`azurestaticapps.net` name redirect to it and never start a sign-in themselves. For dev the host is
+the site's own hostname, `scripts/settings.sh dev SWA_HOSTNAME`, which the full-flow tests use. Use
+separate registrations for dev and prod, so a dev secret never works on prod.
+
+### Before switching prod: check that existing accounts survive
+
+The API keys each account by the `userId` Static Web Apps issues. Microsoft does not say whether a
+person's `userId` stays the same when the site moves from the built-in GitHub and Microsoft
+providers to its own registrations. If it changes, everyone who signed in before gets a new, empty
+profile, and their projects and pledges stay with the old one. Check this on dev before prod:
+
+1. On dev, still on the built-in providers, sign in with a GitHub account and open
+   `https://<dev host>/.auth/me`. Note `userId`. Do the same with a Microsoft account.
+2. Switch dev to its own registrations (the steps below), sign in with the same two accounts, and
+   compare the `userId` values.
+3. If either changed, stop: do not switch prod. Existing accounts would need moving to their new
+   ids first, which the site has no tool for yet.
+
+### 1. Register the apps
+
+**GitHub.** In GitHub, Settings, Developer settings, OAuth Apps, choose **New OAuth App**.
+Application name `Atlas Relay`, homepage `https://atlasrelay.org`, authorization callback URL
+`https://<host>/.auth/login/github/callback`. Leave device flow off. After registering, choose
+**Generate a new client secret**. An OAuth app has one callback URL, so dev needs its own app.
+
+**Microsoft.** In the Microsoft Entra admin center, App registrations, choose **New
+registration**. Name `Atlas Relay`. Supported account types: **Accounts in any organizational
+directory and personal Microsoft accounts**, which is what the built-in provider accepts. Redirect
+URI: platform **Web**, `https://<host>/.auth/login/aad/callback`. Then, under Certificates &
+secrets, add a client secret and note when it expires (24 months at most). The site's config uses
+the issuer `https://login.microsoftonline.com/common/v2.0`. Microsoft does not document whether
+Static Web Apps accepts personal accounts through it, so sign in on dev with a personal account and
+a work account before prod.
+
+**Google.** In the Google Cloud console, create a project for the site, then open **Google Auth
+Platform**:
+
+1. **Branding**: app name `Atlas Relay`, a support email, home page `https://atlasrelay.org`,
+   privacy policy `https://atlasrelay.org/privacy`, authorized domain `atlasrelay.org`.
+2. **Audience**: user type **External**, then **Publish app**. The site asks only for `openid`,
+   `email` and `profile`, which are not sensitive scopes, so no app verification is needed. Google
+   shows the app's name on the consent screen only after a lighter brand verification.
+3. **Clients**: **Create client**, type **Web application**, authorized redirect URI
+   `https://<host>/.auth/login/google/callback`. Google compares redirect URIs exactly, so copy it
+   with no trailing slash. Note the client id and secret.
+
+**ORCID.** Sign in to [orcid.org](https://orcid.org) with the owner's ORCID account (the email on
+it must be verified), open **Developer tools** and register for the public API. Name `Atlas Relay`,
+website `https://atlasrelay.org`, a short description, and the redirect URI
+`https://<host>/.auth/login/orcid/callback`. Add dev's URI as a second redirect URI, or register a
+second client from another account. ORCID shows a client id (`APP-...`) and a secret. Public API
+credentials belong to the ORCID record that registered them and cannot be moved to another one. The
+public API is free for non-commercial use, which covers this site: it sells nothing.
+
+ORCID is the least certain of the four. Its discovery document lists only the `openid` scope and
+only `client_secret_post` for the token endpoint. If Static Web Apps sends more scopes than the
+config asks for, ORCID may refuse the sign-in. Try ORCID on dev before switching prod. If it fails
+there, leave ORCID out of the settings (the others work without it).
+
+### 2. Store the settings and provision
+
+Each registration is two settings in `.azure/<env>/.env`, set together:
+
+| Setting | Value |
+| --- | --- |
+| `ATLASRELAY_GITHUB_CLIENT_ID`, `ATLASRELAY_GITHUB_CLIENT_SECRET` | the GitHub OAuth app |
+| `ATLASRELAY_MICROSOFT_CLIENT_ID`, `ATLASRELAY_MICROSOFT_CLIENT_SECRET` | the Entra app's application (client) id and secret |
+| `ATLASRELAY_GOOGLE_CLIENT_ID`, `ATLASRELAY_GOOGLE_CLIENT_SECRET` | the Google client |
+| `ATLASRELAY_ORCID_CLIENT_ID`, `ATLASRELAY_ORCID_CLIENT_SECRET` | the ORCID client |
+
+Type the secrets at a prompt rather than on the command line, so they stay out of the shell
+history:
+
+```bash
+read -rs SECRET && scripts/settings.sh dev ATLASRELAY_GOOGLE_CLIENT_SECRET "$SECRET"; unset SECRET
+scripts/settings.sh dev ATLASRELAY_GOOGLE_CLIENT_ID '<client id>'
+# ... the same for GitHub, Microsoft and ORCID
+scripts/provision.sh dev
+```
+
+`scripts/provision.sh` refuses a half-set pair, and refuses Google or ORCID without GitHub and
+Microsoft. It writes the client ids and secrets to the site's app settings (`SIGNIN_*`, in
+`infra/app.bicep`), and saves the providers they cover as `SIGNIN_PROVIDERS`, for example
+`github,aad,google,orcid`. App settings alone change nothing the visitor sees. The site keeps
+using the built-in providers until a build names the new ones.
+
+### 3. Build the site with them
+
+Dev: build with the providers and deploy as in [Dev environment](#dev-environment):
+
+```bash
+VITE_SIGNIN_PROVIDERS="$(scripts/settings.sh dev SIGNIN_PROVIDERS)" npm run build
+```
+
+Then, on dev, sign in with all four, run the [account check](#before-switching-prod-check-that-existing-accounts-survive),
+and run the full-flow tests on dev, which sign in with Microsoft through the new registration. The
+test accounts live in another tenant, so the multitenant registration has to accept them.
+
+Prod: run `scripts/provision.sh prod`, then set the repository variable the Deploy workflow builds
+with, and deploy:
+
+```bash
+gh variable set SIGNIN_PROVIDERS --repo tgoodyear/atlasrelay --body "$(scripts/settings.sh prod SIGNIN_PROVIDERS)"
+gh workflow run deploy.yml --repo tgoodyear/atlasrelay --ref main
+```
+
+`scripts/bootstrap.sh prod` sets the same variable from the settings whenever it runs.
+Settings first, build second: a build that names a provider whose settings are missing breaks sign-in
+with it.
+
+### Rotating a secret
+
+GitHub, Microsoft and Google each allow two secrets at once, so a rotation has no gap:
+
+1. Create a new secret with the provider.
+2. Store it: `read -rs SECRET && scripts/settings.sh prod ATLASRELAY_<PROVIDER>_CLIENT_SECRET "$SECRET"; unset SECRET`.
+3. `scripts/provision.sh prod`. No new build is needed: the setting names do not change.
+4. Sign in with that provider, then delete the old secret with the provider.
+
+ORCID's developer tools reset the secret in place, so sign-in with ORCID fails from the reset
+until step 3 finishes. Do the two back to back. Rotate the Microsoft secret before it expires;
+Entra shows the date under Certificates & secrets.
+
+If a secret leaks, rotate it at once and delete the old one with the provider. A client secret
+lets someone act as the site's registration with that provider. It does not let anyone sign in to
+this site as somebody else, and it reaches no Azure resource or data.
+
+### Turning them off
+
+The build has to change first, then the settings. Taking settings away while the live site still
+names them breaks sign-in with those providers, GitHub and Microsoft included.
+
+1. Prod: delete the repository variable `SIGNIN_PROVIDERS` (or set it to the providers that stay,
+   GitHub and Microsoft always among them), and run the Deploy workflow. Dev: build and deploy
+   with `VITE_SIGNIN_PROVIDERS` set the same way.
+2. Clear the settings that go (`scripts/settings.sh prod ATLASRELAY_ORCID_CLIENT_ID ""` and the
+   rest), then `SIGNIN_REMOVAL_OK=1 scripts/provision.sh prod`. Without `SIGNIN_REMOVAL_OK=1` the
+   script refuses to remove settings the last deployment had.
+3. Delete the registrations with the providers.
 
 ## Testing a deployed site
 
@@ -718,8 +875,8 @@ The Traffic tab, `scripts/logs.sh traffic` and `scripts/logs.sh actions` read `A
   origin of the page that linked here. `direct` means the browser sent no referrer: a typed or
   bookmarked address, a link in an email or chat app, or a site that withholds referrers.
   `internal` marks later page views, and page loads that started from another page of this site.
-  Someone coming back from a first-time GitHub or Microsoft sign-in may show up with github.com or
-  a Microsoft login host as the referrer. Page views from before this was recorded show
+  Someone coming back from a first-time sign-in may show up with the provider (github.com, a
+  Microsoft login host, accounts.google.com or orcid.org) as the referrer. Page views from before this was recorded show
   `(not recorded)`.
 - **Campaign** (`Properties.utm_source`, `utm_medium`, `utm_campaign`): copied from the landing URL
   onto every page view of that page load. Tag the links you post, for example
@@ -860,7 +1017,7 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
   projects advertised as pledgeable that nobody can pledge to, because the handler needs
   the owner's address to name a recipient. Their projects and pledges stay, carrying only a display
   name, because other people's records point at them. The internal account id stays on those rows,
-  so the same GitHub or Microsoft account signing in again is reconnected to that history; deletion
+  so the same account signing in again with the same provider is reconnected to that history; deletion
   is not a ban. Record what you did and why in the abuse issue, since there is no other audit
   trail.
 - **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and got no usable

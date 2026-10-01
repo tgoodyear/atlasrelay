@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HttpRequest } from '@azure/functions';
-import { getPrincipal } from '../src/lib/auth';
+import { accountId, getPrincipal } from '../src/lib/auth';
 
 function request(principal?: object): HttpRequest {
   const headers: Record<string, string> = {};
@@ -20,4 +20,32 @@ test('the principal Static Web Apps sends is decoded', () => {
 test('an app that is not linked to the site treats every request as anonymous', () => {
   assert.equal(getPrincipal(request(signedIn), { IGNORE_CLIENT_PRINCIPAL: '1' }), null);
   assert.deepEqual(getPrincipal(request(signedIn), { IGNORE_CLIENT_PRINCIPAL: '' }), { ...signedIn });
+});
+
+test('Google and ORCID principals are accepted, with ids that cannot reach another provider\'s account', () => {
+  const orcid = { identityProvider: 'orcid', userId: 'abc123', userDetails: 'Josiah Carberry', userRoles: ['anonymous', 'authenticated'] };
+  assert.deepEqual(getPrincipal(request(orcid), {}), { ...orcid, userId: 'orcid:abc123' });
+  const google = { ...orcid, identityProvider: 'google', userDetails: 'someone@gmail.com' };
+  assert.deepEqual(getPrincipal(request(google), {}), { ...google, userId: 'google:abc123' });
+  // The same id from GitHub, Google and ORCID is three different accounts.
+  const ids = ['github', 'aad', 'google', 'orcid'].map((identityProvider) => getPrincipal(request({ ...signedIn, identityProvider }), {})?.userId);
+  assert.deepEqual(ids, ['abc123', 'abc123', 'google:abc123', 'orcid:abc123']);
+  assert.equal(accountId('orcid', 'x'), 'orcid:x');
+  assert.equal(accountId('github', 'x'), 'x');
+});
+
+test('a principal from a provider the site does not offer is anonymous', () => {
+  for (const identityProvider of ['facebook', 'twitter', 'apple', 'myProvider', '']) {
+    assert.equal(getPrincipal(request({ ...signedIn, identityProvider }), {}), null, identityProvider);
+  }
+  // Provider names are compared without case; the stored name is lower case.
+  assert.equal(getPrincipal(request({ ...signedIn, identityProvider: 'ORCID' }), {})?.identityProvider, 'orcid');
+});
+
+test('a principal with no name gets a placeholder from the provider\'s id, and odd ids are refused', () => {
+  const p = getPrincipal(request({ identityProvider: 'orcid', userId: 'f00ba4cafe', userDetails: '', userRoles: ['authenticated'] }), {});
+  assert.equal(p?.userDetails, 'user-f00ba4');
+  for (const userId of ['a/b', 'a#b', 'a?b', 'a\\b', 'a\nb', 42]) {
+    assert.equal(getPrincipal(request({ ...signedIn, userId }), {}), null, String(userId));
+  }
 });

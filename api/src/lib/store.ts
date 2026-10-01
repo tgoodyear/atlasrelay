@@ -5,6 +5,7 @@ import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
 import { logError, tableDependencyPolicy } from './telemetry';
 import { createTableClient, tableAccess } from './tables';
+import { initialDisplayName } from './views';
 
 export type ProjectStatus = 'open' | 'closed';
 export type PledgeMethod = 'api' | 'manual';
@@ -258,9 +259,7 @@ export async function ensureUser(id: string, provider: string, handle: string): 
   const existing = await getUser(id);
   if (existing) return existing;
   const ts = now();
-  // Some identity providers put the email address in the handle, and the display name is shown
-  // to anonymous visitors, so seed it with a non-address form of the handle.
-  const displayName = handle.includes('@') ? handle.split('@')[0] : handle;
+  const displayName = initialDisplayName(handle, id);
   const user: User = { id, provider, handle, displayName, atlasEmail: '', affiliation: '', url: '', createdAt: ts, updatedAt: ts };
   await (await table('users')).upsertEntity({ partitionKey: USERS_PK, rowKey: id, ...user }, 'Merge');
   return user;

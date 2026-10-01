@@ -52,9 +52,9 @@ export default function Layout() {
               </>
             ) : (
               !loading && (
-                <a href="/.auth/login/github?post_login_redirect_uri=/dashboard" className="btn btn-sm">
+                <Link to="/signin" className="btn btn-sm" onClick={close}>
                   Sign in
-                </a>
+                </Link>
               )
             )}
           </nav>

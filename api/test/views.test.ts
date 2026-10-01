@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { privatePledge, publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
+import { initialDisplayName, privatePledge, publicName, publicPledge, publicProject, publicUser } from '../src/lib/views';
 import type { Pledge, Project } from '../src/lib/store';
 import { DELETED_ACCOUNT_NAME, nextResultsPostedAt, projectPatchEntity, projectUpdateArgs } from '../src/lib/store';
 import { bool } from '../src/lib/validate';
@@ -12,6 +12,15 @@ test('publicName never returns an email address', () => {
   assert.equal(publicName('', 'someone@example.org', 'abc123def'), 'someone');
   assert.equal(publicName('Alice R.', 'alice@example.org', 'abc123def'), 'Alice R.');
   assert.equal(publicName('', '', 'abc123def456'), 'user-abc123');
+});
+
+test('a new account never starts with an ORCID iD or an email address as its public name', () => {
+  assert.equal(initialDisplayName('Josiah Carberry', 'orcid:abc123def'), 'Josiah Carberry');
+  assert.equal(initialDisplayName('0000-0002-1825-0097', 'orcid:abc123def'), 'user-abc123');
+  assert.equal(initialDisplayName('https://orcid.org/0000-0002-1694-233X', 'orcid:abc123def'), 'user-abc123');
+  assert.equal(initialDisplayName('someone@gmail.com', 'google:abc123def'), 'someone');
+  assert.equal(initialDisplayName('  ', 'google:abc123def'), 'user-abc123');
+  assert.equal(publicName('', '', 'orcid:abc123def'), 'user-abc123');
 });
 
 test('publicName treats any at-sign as an address, not only dotted domains', () => {

@@ -19,8 +19,8 @@ credits, projects or email addresses to demonstrate a finding.
 
 ## Reporting abuse or asking for a takedown
 
-Nobody vets the projects posted here. Posting needs a GitHub or Microsoft sign-in and a
-self-declared RIPE NCC Access email, and the site cannot tell a real research project from an
+Nobody vets the projects posted here. Posting needs a sign-in (GitHub or Microsoft, and Google or
+ORCID once the site offers them) and a self-declared RIPE NCC Access email, and the site cannot tell a real research project from an
 invented one. The transfer page tells donors this.
 
 If a project is fraudulent, misrepresents who is behind it, or should come down for another
@@ -88,6 +88,11 @@ form, making a pledge, posting a project, following a sign-in or atlas.ripe.net 
 route, public project ids, the pledge method and the amount as a power-of-ten range. The
 [privacy page](https://atlasrelay.org/privacy) lists everything collected.
 
+**Accounts from different sign-in providers are never merged.** The site keys each account by the
+id Azure Static Web Apps issues for that sign-in, never by email address, so a Google account and a
+Microsoft account with the same email are two accounts. Google and ORCID account ids also carry the
+provider's name. A sign-in from any provider the site does not offer is treated as signed out.
+
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.
 
@@ -103,6 +108,19 @@ its own federation, read or change app settings, change DNS, read or change stor
 anything. Infrastructure is
 deployed by a subscription Owner as a deployment stack whose deny settings block deleting its
 resources outside the stack.
+
+Sign-in uses Azure Static Web Apps' built-in GitHub and Microsoft providers, which need no secret
+of the site's own. Google and ORCID sign-in need the site's own app registrations, and once a site
+has any registration of its own, Static Web Apps turns its built-in providers off, so GitHub and
+Microsoft then need the site's own registrations too. Each registration has a client secret. The
+secrets are kept in the owner's git-ignored settings file and in the static web app's app settings,
+which the CI identity cannot read; `staticwebapp.config.json`, which ships with the site, names the
+settings and holds no values. The config asks for no scopes beyond the ones Static Web Apps uses
+to sign people in (for ORCID, only `openid`), and the API never receives a provider's token.
+A leaked secret lets someone act as the site's registration with that provider, within the
+redirect URIs registered there. It does not let anyone sign in to this site as another person, and
+it reaches no Azure resource or data. The runbook ("Google and ORCID sign-in") has the steps to
+rotate a secret, and rotating one is the response to a leak.
 
 The API runs on an Azure Function App that only the static web app can call: linking the two puts
 an identity provider in front of the Function App that refuses requests the site did not send, and

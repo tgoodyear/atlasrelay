@@ -178,6 +178,14 @@ if [ "$ENV_NAME" = prod ]; then
   # Compiled into the browser bundle (web/src/lib/telemetry.ts). A variable, not a secret: the
   # connection string is public once the site ships it.
   gh variable set APPINSIGHTS_CONNECTION_STRING --repo "$REPO" --body "$(aget APPLICATIONINSIGHTS_CONNECTION_STRING)"
+  # The sign-in providers the site's build offers (web/src/lib/signin.ts), matching the settings
+  # this deployment just wrote. Unset means the built-in GitHub and Microsoft sign-in.
+  signin=$(aget SIGNIN_PROVIDERS)
+  if [ -n "$signin" ]; then
+    gh variable set SIGNIN_PROVIDERS --repo "$REPO" --body "$signin"
+  elif gh variable get SIGNIN_PROVIDERS --repo "$REPO" > /dev/null 2>&1; then
+    gh variable delete SIGNIN_PROVIDERS --repo "$REPO"
+  fi
 else
   if [ -n "$(aget E2E_JOB_NAME)" ]; then
     step "GitHub Environment variables for the full-flow tests"

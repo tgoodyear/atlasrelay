@@ -68,9 +68,14 @@ jobs:
       # Browser telemetry (web/src/lib/telemetry.ts) is compiled in only when this is set.
       # scripts/bootstrap.sh sets the variable from the Bicep output. It is not a secret: it ends up
       # in the public JavaScript bundle either way.
+      # SIGNIN_PROVIDERS picks the sign-in providers and writes staticwebapp.config.json to match
+      # (web/src/lib/signin.ts). Unset: the built-in GitHub and Microsoft sign-in. scripts/bootstrap.sh
+      # sets it once prod's own sign-in registrations are in its app settings (docs/RUNBOOK.md,
+      # "Google and ORCID sign-in"). It names providers, nothing secret.
       - name: Build web
         env:
           VITE_APPINSIGHTS_CONNECTION_STRING: ${{ vars.APPINSIGHTS_CONNECTION_STRING }}
+          VITE_SIGNIN_PROVIDERS: ${{ vars.SIGNIN_PROVIDERS }}
         run: npm run build -w web
 
       - name: Build API

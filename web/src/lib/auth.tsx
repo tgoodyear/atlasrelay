@@ -53,8 +53,3 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth(): AuthState {
   return useContext(AuthContext);
 }
-
-export function loginUrl(provider: 'github' | 'aad' = 'github', returnTo?: string): string {
-  const back = returnTo ?? (typeof window !== 'undefined' ? window.location.pathname : '/');
-  return `/.auth/login/${provider}?post_login_redirect_uri=${encodeURIComponent(back)}`;
-}

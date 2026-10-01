@@ -21,7 +21,12 @@ export function fakeKey(): string {
   return `${FAKE_KEY_PREFIX}${randomBytes(4).toString('hex')}`;
 }
 
-export type Provider = 'github' | 'aad';
+export type Provider = 'github' | 'aad' | 'google' | 'orcid';
+
+/** The account id the API keeps for a principal: Google and ORCID ids carry the provider (api/src/lib/auth.ts). */
+export function accountIdOf(p: Pick<Principal, 'identityProvider' | 'userId'>): string {
+  return p.identityProvider === 'google' || p.identityProvider === 'orcid' ? `${p.identityProvider}:${p.userId}` : p.userId;
+}
 
 export interface Principal {
   identityProvider: Provider;
@@ -90,7 +95,7 @@ async function createPerson(browser: Browser, opts: PersonOptions): Promise<Pers
   const principal: Principal = {
     identityProvider: provider,
     userId: `e2e${id}`,
-    userDetails: provider === 'aad' ? `${role}.${id}@example.org` : `${role}-${id}`,
+    userDetails: provider === 'aad' || provider === 'google' ? `${role}.${id}@example.org` : `${role}-${id}`,
     userRoles: ['anonymous', 'authenticated'],
     claims: [],
   };
@@ -98,7 +103,7 @@ async function createPerson(browser: Browser, opts: PersonOptions): Promise<Pers
   await localOnly(context);
   await signInAgain(context, principal);
   const page = await context.newPage();
-  const person: Person = { id: principal.userId, name, email: '', principal, context, page, request: context.request };
+  const person: Person = { id: accountIdOf(principal), name, email: '', principal, context, page, request: context.request };
   const profile = opts.profile ?? 'full';
   if (profile !== 'none') {
     const email = profile === 'full' ? `${role}-${id}@example.org` : '';

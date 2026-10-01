@@ -101,7 +101,7 @@ export function scrubItem(item: TelemetryItemLike, role: string, pageLoadId: str
 export function routeName(pathname: string): string {
   // React Router matches routes without regard to case, so /Projects is the projects page.
   const path = pathname.toLowerCase().replace(/\/+$/, '') || '/';
-  if (['/', '/projects', '/projects/new', '/dashboard', '/profile', '/how-it-works', '/privacy'].includes(path)) return path;
+  if (['/', '/projects', '/projects/new', '/dashboard', '/profile', '/signin', '/how-it-works', '/privacy'].includes(path)) return path;
   if (/^\/projects\/[^/]+\/edit$/.test(path)) return '/projects/:id/edit';
   if (/^\/projects\/[^/]+$/.test(path)) return '/projects/:id';
   return '(not found)';

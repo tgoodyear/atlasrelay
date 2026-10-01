@@ -12,14 +12,14 @@ the project, the pledge and its confirmation.
 | Simple UI | Single-page React app with a handful of screens. |
 | Serverless | Azure Static Web Apps (Standard) + an Azure Function App on the Flex Consumption plan, linked to the site as its API + Azure Table Storage + App Insights. |
 | CI/CD from GitHub | GitHub Actions workflows for the app deploy (build and test on PRs, deploy on push to `main`, logging in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub), infra checks (Bicep lint on PRs and `main`), and the full-flow tests on dev, which run in Azure. The infrastructure itself is one deployment stack per environment, deployed by a subscription Owner. |
-| Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth. RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); the design leaves a slot for it. |
+| Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth, or, once the owner registers the apps, GitHub, Microsoft, Google and ORCID through the site's own registrations ([Sign-in providers](#sign-in-providers)). RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); custom providers are where it would go. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
 
 ## System diagram
 
 ```
  Browser (React SPA)
-   │  /.auth/login/github | /.auth/login/aad      (SWA built-in auth, free)
+   │  /.auth/login/github | aad | google | orcid   (SWA auth; see Sign-in providers)
    │  /api/*  (x-ms-client-principal injected by SWA edge)
    ▼
  Azure Static Web Apps (Standard) ── linked backend: Function App (Flex Consumption,
@@ -36,11 +36,11 @@ the project, the pledge and its confirmation.
 
 ## Domain model
 
-### User (`users` table, PK `user`, RK `<swa userId>`)
+### User (`users` table, PK `user`, RK `<account id>`)
 
 | Field | Notes |
 | --- | --- |
-| `provider`, `handle` | From the SWA client principal (`github`/`aad`, username or email). |
+| `provider`, `handle` | From the SWA client principal (`github`, `aad`, `google` or `orcid`; the account name it passes on, which can be an email address). |
 | `displayName` | Shown publicly next to projects and pledges. |
 | `atlasEmail` | RIPE NCC Access email. **Private.** Required to publish a project. Only revealed to a donor who has created a pledge for that project. |
 | `affiliation`, `url` | Optional public profile fields. |
@@ -104,7 +104,7 @@ the partition after each change, so the project row never drifts.
 ## Flows
 
 ### Requester
-1. Sign in (GitHub or Microsoft).
+1. Sign in (GitHub or Microsoft, and Google or ORCID where the site offers them).
 2. Complete profile: display name + RIPE NCC Access email (validated, private).
 3. Create project: title, one-paragraph summary, description, credits needed, tags,
    optional links and deadline. Publish.
@@ -264,6 +264,7 @@ remain, carrying only the chosen display name, because other people rely on that
 Sign-in handles are never returned publicly. Static Web Apps fills `userDetails` with the email
 address for some identity providers, and that value seeds both the handle and the initial display
 name, so `publicName()` reduces anything email-shaped to its local part before it leaves the API.
+An ORCID iD never becomes a display name either (`initialDisplayName()`).
 
 Browser telemetry (page views, load times, errors, the page's API calls and five named actions)
 goes to App Insights with no cookies, nothing stored in the browser, and no user id. Query strings,
@@ -278,7 +279,9 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 [Monitoring](RUNBOOK.md#monitoring) and [Traffic](RUNBOOK.md#traffic).
 
 ### Trust model
-- Requester identity is a GitHub/Microsoft account plus a self-declared RIPE email.
+- Requester identity is a GitHub, Microsoft, Google or ORCID account plus a self-declared RIPE email.
+  Accounts from different providers are never merged, even when they share an email address:
+  the site keys accounts by the id Static Web Apps issues, never by email.
   We cannot verify the email against RIPE without federation. Mitigations: the email is
   only shown to committed donors; API transfers fail loudly if the email is not a RIPE
   NCC Access account (RIPE returns 4xx); projects display the owner's display name and
@@ -317,6 +320,55 @@ sets `IGNORE_CLIENT_PRINCIPAL=1` and the API treats every request as anonymous. 
 at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code only
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
 the SPA shows its own sign-in prompt.
+
+## Sign-in providers
+
+Static Web Apps offers two kinds of sign-in, and a site uses one or the other
+([authentication and authorization](https://learn.microsoft.com/azure/static-web-apps/authentication-authorization),
+[custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)):
+
+- **Built-in**: GitHub and Microsoft Entra ID through Azure's own app registrations, with nothing
+  to configure. The site uses this unless a build says otherwise.
+- **Custom**: the site's own registrations, declared under `auth.identityProviders` in
+  `staticwebapp.config.json`, with each client id and secret in an app setting. Google and ORCID
+  are only available this way. Microsoft's page says: "Using any custom registrations disables all
+  preconfigured providers." So a site that offers Google or ORCID needs its own GitHub and
+  Microsoft registrations as well, or those sign-ins stop working.
+
+The build picks the kind. `web/src/lib/signin.ts` turns `VITE_SIGNIN_PROVIDERS` into the
+`staticwebapp.config.json` that ships: empty gives the committed file (built-in GitHub and
+Microsoft); a list such as `github,aad,google,orcid` adds the `auth` section, the `/login/<provider>`
+shortcuts and the sign-in buttons for those providers, and refuses to build without `github` and
+`aad`. Every provider the build does not offer answers 404 at `/.auth/login/<provider>`, because the
+platform still answered some of them on its own (`/.auth/login/google` and `/.auth/login/facebook`
+went on to the provider in 2026-10). The client ids and secrets go from the owner's settings file
+into the site's app settings through Bicep (`infra/app.bicep`); the shipped config names the
+settings and holds no values. The Deploy workflow builds prod with the repository variable
+`SIGNIN_PROVIDERS`, which `scripts/bootstrap.sh` sets from the settings. The runbook has the steps
+([Google and ORCID sign-in](RUNBOOK.md#google-and-orcid-sign-in)).
+
+| Provider | Kind | What the site asks for | Account name (`userDetails`) |
+| --- | --- | --- | --- |
+| GitHub | built-in, or the site's own OAuth app | the platform's default | username |
+| Microsoft | built-in, or the site's own Entra app, issuer `login.microsoftonline.com/common/v2.0` | the platform's default | can be an email address |
+| Google | the site's own OAuth client | the platform's default (`openid`, `profile`, `email` on the built-in redirect in 2026-10; not documented) | can be an email address |
+| ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the `name` claim |
+
+The API reads `identityProvider`, `userId` and `userDetails` from `x-ms-client-principal`; the
+header carries no claims for any provider. Static Web Apps documents `userId` as "an Azure Static
+Web Apps-specific unique identifier for the user", unique per site. `api/src/lib/auth.ts` accepts
+only the four providers above, and stores Google and ORCID accounts under `google:<userId>` and
+`orcid:<userId>`, so that no Google or ORCID sign-in can reach an account made with another
+provider even if the platform ever handed out the same id twice. GitHub and Microsoft accounts
+keep the bare ids they were created with.
+
+ORCID iDs are public by design, and a researcher may well want theirs on their projects, but the
+site does not publish it. The build sets ORCID's `nameClaimType` to `name`, so the account name
+should be the person's name rather than the iD (the `sub` claim); the header the API reads carries
+no claims; and an account name shaped like an iD is never used as a display name, in case the
+platform passes the iD on anyway. Showing it would need an explicit, opt-in
+profile field that the person fills in, a line on the privacy page, and a way to remove it; that
+is left for later.
 
 ## Pages and routing
 
@@ -440,7 +492,8 @@ a backend to a preview environment either, so a preview would have no API.
 
 Why the Standard plan: only Standard can link a Function App, and a linked Function App is what
 lets the API sign in to storage with a managed identity (managed functions have none). Standard
-also allows custom OIDC providers, which RIPE NCC Access sign-in would need.
+also allows custom sign-in providers, which Google and ORCID sign-in use and RIPE NCC Access
+sign-in would need.
 
 Why Flex Consumption: it takes identity-based host storage with no Azure Files share (on the
 Consumption and Premium plans the share's connection needs a key), runs Node 24, scales to zero

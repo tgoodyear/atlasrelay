@@ -6,7 +6,8 @@ import { PledgeStatusPill, ResultsPill, StatusPill, TagPills } from '../componen
 import Progress from '../components/Progress';
 import Spinner from '../components/Spinner';
 import { api, ApiError, fmt, fmtDate, pingsFor, type Pledge, type Project, type PublicUser } from '../lib/api';
-import { loginUrl, useAuth } from '../lib/auth';
+import { useAuth } from '../lib/auth';
+import { providerLabel } from '../lib/signin';
 import { META } from '../lib/pages';
 import { trackAction } from '../lib/telemetry';
 import { usePageMeta } from '../lib/usePageMeta';
@@ -250,7 +251,7 @@ export default function ProjectDetail() {
                 <button className="btn btn-lg btn-amber" style={{ width: '100%' }} onClick={() => { trackAction('pledge-started', { projectId: project.id }); setShowPledge(true); }}>Send credits</button>
               )}
               {canPledge && !principal && (
-                <a className="btn btn-lg btn-amber" style={{ width: '100%' }} href={loginUrl('github', `/projects/${project.id}`)}>Sign in to send credits</a>
+                <Link className="btn btn-lg btn-amber" style={{ width: '100%' }} to={`/signin?next=${encodeURIComponent(`/projects/${project.id}`)}`}>Sign in to send credits</Link>
               )}
               {isOwner && (
                 <div className="stack" style={{ gap: '0.5rem' }}>
@@ -269,7 +270,7 @@ export default function ProjectDetail() {
                 <dt>Requested</dt><dd>{fmt(project.creditsRequested)}</dd>
                 <dt>Received</dt><dd>{fmt(project.creditsConfirmed)}</dd>
                 <dt>Pending</dt><dd>{fmt(project.creditsPending)}</dd>
-                <dt>Posted by</dt><dd>{owner ? `${project.ownerName} (signed in with ${owner.provider === 'aad' ? 'Microsoft' : 'GitHub'})` : project.ownerName}</dd>
+                <dt>Posted by</dt><dd>{owner ? `${project.ownerName} (signed in with ${providerLabel(owner.provider)})` : project.ownerName}</dd>
                 {project.deadline && (<><dt>Deadline</dt><dd>{fmtDate(project.deadline)}</dd></>)}
                 <dt>Updated</dt><dd>{fmtDate(project.updatedAt)}</dd>
               </dl>

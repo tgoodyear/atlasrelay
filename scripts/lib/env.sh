@@ -134,6 +134,31 @@ sync_budget_start() {
     return 1
   fi
 }
+# The sign-in providers the environment's own registrations cover, as the site's build takes them
+# (VITE_SIGNIN_PROVIDERS, web/src/lib/signin.ts): empty for the built-in GitHub and Microsoft
+# sign-in, else a list such as github,aad,google,orcid. Each registration is a client id and a
+# secret, set together. Any registration of the site's own turns Static Web Apps' built-in
+# providers off, so Google or ORCID needs GitHub and Microsoft registrations too; a set that would
+# lose them is refused here, before anything is deployed.
+signin_providers() {
+  local p name id secret providers=""
+  for p in GITHUB:github MICROSOFT:aad GOOGLE:google ORCID:orcid; do
+    name=${p#*:}; p=${p%%:*}
+    id=$(aget "ATLASRELAY_${p}_CLIENT_ID") || return 1
+    secret=$(aget "ATLASRELAY_${p}_CLIENT_SECRET") || return 1
+    if [ -n "$id" ] && [ -n "$secret" ]; then
+      providers="${providers:+$providers,}$name"
+    elif [ -n "$id$secret" ]; then
+      echo "error: set both ATLASRELAY_${p}_CLIENT_ID and ATLASRELAY_${p}_CLIENT_SECRET, or neither" >&2
+      return 1
+    fi
+  done
+  if [ -n "$providers" ] && [[ ",$providers," != *,github,aad,* ]]; then
+    echo "error: sign-in through the site's own registrations ($providers) turns the built-in GitHub and Microsoft sign-in off; set ATLASRELAY_GITHUB_CLIENT_ID/SECRET and ATLASRELAY_MICROSOFT_CLIENT_ID/SECRET too (docs/RUNBOOK.md, \"Google and ORCID sign-in\")" >&2
+    return 1
+  fi
+  echo "$providers"
+}
 # A new custom role can take a minute or two to replicate before it can be assigned
 # (RoleDefinitionDoesNotExist). The deployment is idempotent, so retry.
 provision() {
@@ -143,8 +168,24 @@ provision() {
     *) die "ACTION_ON_UNMANAGE must be deleteResources or detachAll" ;;
   esac
   sync_budget_start || die "could not work out the budget's start date"
+  local providers previous p
+  providers=$(signin_providers) || die "the sign-in settings are incomplete"
+  # Removing a registration's settings breaks sign-in with it, and with GitHub and Microsoft too
+  # when it is one of theirs, for as long as the live site's build still names it. The site has to
+  # go first (docs/RUNBOOK.md, "Turning them off"); SIGNIN_REMOVAL_OK=1 says it has.
+  previous=$(aget SIGNIN_PROVIDERS) || die "could not read SIGNIN_PROVIDERS"
+  for p in ${previous//,/ }; do
+    if [[ ",$providers," != *",$p,"* ]] && [ "${SIGNIN_REMOVAL_OK:-}" != 1 ]; then
+      die "this removes the $p sign-in settings, which the last deployment had. First deploy a site build whose VITE_SIGNIN_PROVIDERS leaves $p out (empty, for github or aad) (docs/RUNBOOK.md, \"Turning them off\"), then run again with SIGNIN_REMOVAL_OK=1"
+    fi
+  done
   for attempt in 1 2 3; do
-    deploy_stack && save_outputs && return 0
+    if deploy_stack && save_outputs; then
+      # What the site's build needs to offer exactly these providers. It changes nothing on its
+      # own: the Deploy workflow reads it from the repository variable SIGNIN_PROVIDERS.
+      aset SIGNIN_PROVIDERS "$providers" || die "could not save SIGNIN_PROVIDERS"
+      return 0
+    fi
     [ "$attempt" = 3 ] && die "provisioning failed three times"
     echo "retrying in 60s"
     sleep 60

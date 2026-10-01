@@ -1,9 +1,12 @@
 import { Link } from 'react-router-dom';
 import { META } from '../lib/pages';
+import { OFFERED } from '../lib/offered';
+import { providerList } from '../lib/signin';
 import { usePageMeta } from '../lib/usePageMeta';
 
 export default function HowItWorks() {
   usePageMeta(META.howItWorks);
+  const providers = providerList(OFFERED);
   return (
     <div className="narrow">
       <div className="page-head">
@@ -15,7 +18,7 @@ export default function HowItWorks() {
         <div className="card"><div className="card-body">
           <h2>If you need credits</h2>
           <ol className="steps">
-            <li>Sign in with GitHub or Microsoft and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. Donors send credits to that email. It never appears on a public page; a signed-in donor sees it when they start a manual pledge to your project, and you see that donor's name.</li>
+            <li>Sign in with {providers} and add the email of your <a href="https://access.ripe.net" target="_blank" rel="noreferrer">RIPE NCC Access</a> account to your profile. Donors send credits to that email. It never appears on a public page; a signed-in donor sees it when they start a manual pledge to your project, and you see that donor's name.</li>
             <li>Post a project: what you are measuring, why it matters, how many credits you need, and by when. Rough guide from the <a href="https://atlas.ripe.net/docs/getting-started/credits/" target="_blank" rel="noreferrer">RIPE Atlas docs</a>: a ping result costs 3 credits, DNS 10 to 20, traceroute 30, one-off measurements double.</li>
             <li>When a donor sends credits manually, they appear in your <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">Atlas credits page</a>. Confirm the pledge on the project page. To record the amount that actually arrived, paste a key of your own with only <strong>Get information about your credits</strong>. We read your recent transfers to find this one, and you choose when more than one could fit. The key is not stored. When the amount comes from your log, the pledge shows as verified with RIPE Atlas. API transfers are normally confirmed automatically; if recording one fails, it waits on your dashboard for you to confirm.</li>
             <li>Close the project when you are done and, ideally, link your results so donors see what they enabled.</li>
@@ -50,7 +53,7 @@ export default function HowItWorks() {
         <div className="card"><div className="card-body">
           <h2>What this site stores about you</h2>
           <p className="muted">
-            Signing in records an identifier from GitHub or Microsoft, your display name, and
+            Signing in records an identifier from the account you sign in with, your display name, and
             anything you choose to add: affiliation, a homepage, and the email of your RIPE NCC
             Access account. Projects and pledges you create are stored with your display name.
           </p>
@@ -81,7 +84,7 @@ export default function HowItWorks() {
         <div className="card"><div className="card-body faq">
           <h2>Questions</h2>
           <details>
-            <summary>Why do I need to sign in with GitHub or Microsoft rather than RIPE NCC Access?</summary>
+            <summary>Why do I need to sign in with {providers} rather than RIPE NCC Access?</summary>
             <p>RIPE NCC does not currently let third-party sites use RIPE NCC Access for sign-in. If that changes we will add it, which would also let us verify recipient emails automatically.</p>
           </details>
           <details>
@@ -97,7 +100,7 @@ export default function HowItWorks() {
           </details>
           <details>
             <summary>How do I know the researcher is who they say they are?</summary>
-            <p>You don't, and nobody here checks. Posting needs a GitHub or Microsoft sign-in and a RIPE NCC Access email. The email is self-declared, and this site cannot confirm who a person is or that the credits will be used as described.</p>
+            <p>You don't, and nobody here checks. Posting needs a {providers} sign-in and a RIPE NCC Access email. The email is self-declared, and this site cannot confirm who a person is or that the credits will be used as described.</p>
             <p>What you can see is the display name they chose, their affiliation, and any links they gave to homepages, papers or repositories. The sign-in handle is not published. An API transfer at least proves the recipient email belongs to a real RIPE NCC Access account.</p>
             <p>Treat it like any crowdfunding page: read the links, start small, and send only what you are willing to lose. Credits cannot be recalled once transferred. If a project looks fraudulent, <a href="https://github.com/tgoodyear/atlasrelay/issues/new?labels=abuse&amp;title=Report%20a%20project" target="_blank" rel="noreferrer">report it</a>.</p>
           </details>

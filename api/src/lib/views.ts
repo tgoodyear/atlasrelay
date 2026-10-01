@@ -17,7 +17,22 @@ export function publicName(displayName: string, handle: string, id: string): str
     const local = value.split('@')[0].trim();
     if (local) return local;
   }
-  return `user-${(id || '').slice(0, 6)}`;
+  // An id may carry its provider in front ("orcid:<id>", api/src/lib/auth.ts); the placeholder uses the id itself.
+  return `user-${(id || '').split(':').pop()!.slice(0, 6)}`;
+}
+
+// An ORCID iD: four groups of four digits, the last character possibly X.
+const ORCID_ID = /^(https?:\/\/orcid\.org\/)?\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/i;
+
+/**
+ * The display name a new account starts with, shown to anonymous visitors. Some identity providers
+ * put the email address in the handle, so it gets the part before the @. An ORCID iD is never used:
+ * the site does not publish it unless the person types it in themselves (docs/ARCHITECTURE.md).
+ */
+export function initialDisplayName(handle: string, id: string): string {
+  const value = handle.trim();
+  if (!value || ORCID_ID.test(value)) return publicName('', '', id);
+  return value.includes('@') ? value.split('@')[0] : value;
 }
 
 /**

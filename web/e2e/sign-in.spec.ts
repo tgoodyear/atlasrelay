@@ -86,13 +86,34 @@ async function stub(page: Page, opts: StubOptions = {}): Promise<Stubs> {
   return stubs;
 }
 
-test('header sign-in sends sign-in-clicked before following the link', async ({ page }) => {
-  const stubs = await stub(page);
+test('the header leads to the sign-in page, which offers GitHub and Microsoft in a default build', async ({ page }) => {
+  await stub(page);
   await page.goto('/');
+  await page.getByRole('link', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/signin$/);
+  await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
+  const options = page.getByRole('list', { name: 'Sign-in options' }).getByRole('link');
+  await expect(options).toHaveText(['Sign in with GitHub', 'Sign in with Microsoft']);
+  await expect(options.first()).toHaveAttribute('href', '/.auth/login/github?post_login_redirect_uri=%2Fdashboard');
+});
+
+test('the sign-in page sends people back where they came from, and only to this site', async ({ page }) => {
+  await stub(page);
+  await page.goto('/signin?next=%2Fprojects%2Fabc');
+  await expect(page.getByRole('link', { name: 'Sign in with Microsoft' })).toHaveAttribute('href', '/.auth/login/aad?post_login_redirect_uri=%2Fprojects%2Fabc');
+  await page.goto('/signin?next=https%3A%2F%2Fevil.example%2F');
+  await expect(page.getByRole('link', { name: 'Sign in with Microsoft' })).toHaveAttribute('href', '/.auth/login/aad?post_login_redirect_uri=%2Fdashboard');
+  await page.goto('/signin?next=%2F%2Fevil.example%2F');
+  await expect(page.getByRole('link', { name: 'Sign in with GitHub' })).toHaveAttribute('href', '/.auth/login/github?post_login_redirect_uri=%2Fdashboard');
+});
+
+test('a sign-in link sends sign-in-clicked before following the link', async ({ page }) => {
+  const stubs = await stub(page);
+  await page.goto('/signin');
   // Wait for the SDK to be running: it sends the first page view.
   await expect.poll(() => stubs.log).toContain('PageviewData');
-  await page.getByRole('link', { name: 'Sign in' }).click();
-  await page.waitForURL('**/.auth/login/github?post_login_redirect_uri=/dashboard');
+  await page.getByRole('link', { name: 'Sign in with GitHub' }).click();
+  await page.waitForURL('**/.auth/login/github?post_login_redirect_uri=%2Fdashboard');
   await expect.poll(() => stubs.log).toContain('login:github');
   const event = stubs.log.indexOf('event:sign-in-clicked:github');
   expect(event, stubs.log.join(' ')).toBeGreaterThanOrEqual(0);
@@ -102,7 +123,7 @@ test('header sign-in sends sign-in-clicked before following the link', async ({ 
 test('a click before the SDK has loaded waits for it, then sends and follows the link', async ({ page }) => {
   const stubs = await stub(page, { sdkDelayMs: 400 });
   await page.goto('/dashboard');
-  await page.getByRole('link', { name: 'Continue with Microsoft' }).click();
+  await page.getByRole('link', { name: 'Sign in with Microsoft' }).click();
   await page.waitForURL('**/.auth/login/aad?post_login_redirect_uri=%2Fdashboard');
   await expect.poll(() => stubs.log).toContain('login:aad');
   const event = stubs.log.indexOf('event:sign-in-clicked:aad');
@@ -112,9 +133,9 @@ test('a click before the SDK has loaded waits for it, then sends and follows the
 
 test('a slow ingestion reply holds the link until it arrives', async ({ page }) => {
   const stubs = await stub(page, { signInReplyDelayMs: 600 });
-  await page.goto('/');
+  await page.goto('/signin');
   await expect.poll(() => stubs.log).toContain('PageviewData');
-  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'Sign in with GitHub' }).click();
   await page.waitForURL('**/.auth/login/github**');
   await expect.poll(() => stubs.log).toContain('login:github');
   expect(stubs.log.indexOf('answered:sign-in-clicked'), stubs.log.join(' ')).toBeGreaterThanOrEqual(0);
@@ -139,10 +160,10 @@ test('an ingestion reply slower than 1.5 s does not hold the link longer, and it
       return original(input, init);
     };
   });
-  await page.goto('/');
+  await page.goto('/signin');
   await expect.poll(() => stubs.log).toContain('PageviewData');
   const start = Date.now();
-  await page.getByRole('link', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'Sign in with GitHub' }).click();
   await page.waitForURL('**/.auth/login/github**', { timeout: 4000 });
   await expect.poll(() => stubs.log).toContain('login:github');
   const held = stubs.at['login:github'] - start;
@@ -156,8 +177,8 @@ test('an ingestion reply slower than 1.5 s does not hold the link longer, and it
 for (const blocked of ['ingestion', 'sdk'] as const) {
   test(`sign-in still works within 1.5 s when the ${blocked === 'sdk' ? 'SDK cannot load' : 'ingestion endpoint is blocked'}`, async ({ page }) => {
     const stubs = await stub(page, blocked === 'sdk' ? { sdk: 'abort' } : { ingestion: 'abort', sdkDelayMs: 200 });
-    await page.goto('/');
-    const link = page.getByRole('link', { name: 'Sign in' });
+    await page.goto('/signin');
+    const link = page.getByRole('link', { name: 'Sign in with GitHub' });
     await link.waitFor();
     const start = Date.now();
     await link.click();
@@ -169,7 +190,7 @@ for (const blocked of ['ingestion', 'sdk'] as const) {
 
 test('ctrl-click and middle-click on a sign-in link are left to the browser', async ({ page }) => {
   await stub(page, { sdkDelayMs: 2000 });
-  await page.goto('/');
+  await page.goto('/signin');
   // Runs after the telemetry listener (capture, on document). Records whether it held the click,
   // then stops the browser opening a tab.
   await page.evaluate(() => {
@@ -182,9 +203,9 @@ test('ctrl-click and middle-click on a sign-in link are left to the browser', as
       });
     }
   });
-  const link = page.getByRole('link', { name: 'Sign in' });
+  const link = page.getByRole('link', { name: 'Sign in with GitHub' });
   await link.click({ modifiers: ['ControlOrMeta'] });
   await link.click({ button: 'middle' });
   expect(await page.evaluate(() => (window as unknown as { seen: boolean[] }).seen)).toEqual([false, false]);
-  expect(new URL(page.url()).pathname).toBe('/');
+  expect(new URL(page.url()).pathname).toBe('/signin');
 });

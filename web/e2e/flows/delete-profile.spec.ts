@@ -9,7 +9,7 @@ async function deleteProfile(p: Person): Promise<string[]> {
   await p.page.goto('/profile');
   await p.page.getByRole('button', { name: 'Delete my profile' }).click();
   // Deleting signs the person out and lands on the home page.
-  await expect(p.page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+  await expect(p.page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
   await expect(p.page).toHaveURL(/localhost:\d+\/$/);
   expect(dialogs[0]).toBe('Delete your profile and remove your RIPE NCC Access email?');
   return dialogs;

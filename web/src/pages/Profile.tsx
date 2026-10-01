@@ -6,6 +6,7 @@ import Spinner from '../components/Spinner';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { META } from '../lib/pages';
+import { providerLabel } from '../lib/signin';
 import { usePageMeta } from '../lib/usePageMeta';
 
 export default function Profile() {
@@ -56,7 +57,7 @@ export default function Profile() {
     <div className="narrow">
       <div className="page-head">
         <h1>Your profile</h1>
-        <p>Signed in with {principal.identityProvider === 'aad' ? 'Microsoft' : 'GitHub'} as <strong>{principal.userDetails || user?.displayName || 'you'}</strong>.</p>
+        <p>Signed in with {providerLabel(principal.identityProvider)} as <strong>{principal.userDetails || user?.displayName || 'you'}</strong>.</p>
       </div>
       {next && !user?.hasAtlasEmail && <div className="alert alert-info">Add your RIPE NCC Access email first, then you can post a project.</div>}
       <form className="card" onSubmit={submit}>

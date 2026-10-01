@@ -19,6 +19,10 @@ That starts Azurite for local table storage, the Functions host, Vite, and the
 Static Web Apps emulator on http://localhost:4280. The emulator lets you sign in
 as any username without a real account.
 
+Leave `VITE_SIGNIN_PROVIDERS` unset locally. With it set, the build adds the site's own sign-in
+registrations to `staticwebapp.config.json`, and the emulator then sends you to the real
+providers instead of its own sign-in page (docs/ARCHITECTURE.md, "Sign-in providers").
+
 ## Before you open a pull request
 
 ```bash

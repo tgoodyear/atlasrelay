@@ -41,6 +41,30 @@ param operatorPrincipalId string = ''
 @description('Tags applied to every resource')
 param tags object = {}
 
+// The site's own sign-in registrations (docs/RUNBOOK.md, "Google and ORCID sign-in"). A provider
+// whose id or secret is empty gets no settings. Which providers the site offers is decided by the
+// build (web/src/lib/signin.ts), which names these settings in staticwebapp.config.json.
+@description('Client id of the site\'s own GitHub OAuth app. Empty: none.')
+param githubClientId string = ''
+@secure()
+@description('Client secret of that GitHub OAuth app')
+param githubClientSecret string = ''
+@description('Application (client) id of the site\'s own Microsoft Entra app registration. Empty: none.')
+param microsoftClientId string = ''
+@secure()
+@description('Client secret of that Entra app registration')
+param microsoftClientSecret string = ''
+@description('Client id of the site\'s Google OAuth client. Empty: none.')
+param googleClientId string = ''
+@secure()
+@description('Client secret of that Google OAuth client')
+param googleClientSecret string = ''
+@description('Client id of the site\'s ORCID public API client (APP-...). Empty: none.')
+param orcidClientId string = ''
+@secure()
+@description('Client secret of that ORCID client')
+param orcidClientSecret string = ''
+
 var swaName = 'swa-${baseName}'
 var tableNames = [
   'users'
@@ -125,7 +149,33 @@ resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
   }
 }
 
-// The site has no app settings of its own: the API reads its settings from the Function App.
+// The site's only app settings are the sign-in registrations above; the API reads its settings
+// from the Function App. Deployed even when empty, so that clearing a registration's settings
+// removes them from the site. This writes the whole set: nothing else may add site settings.
+var signinSettings = union(
+  empty(githubClientId) || empty(githubClientSecret) ? {} : {
+    SIGNIN_GITHUB_CLIENT_ID: githubClientId
+    SIGNIN_GITHUB_CLIENT_SECRET: githubClientSecret
+  },
+  empty(microsoftClientId) || empty(microsoftClientSecret) ? {} : {
+    SIGNIN_MICROSOFT_CLIENT_ID: microsoftClientId
+    SIGNIN_MICROSOFT_CLIENT_SECRET: microsoftClientSecret
+  },
+  empty(googleClientId) || empty(googleClientSecret) ? {} : {
+    SIGNIN_GOOGLE_CLIENT_ID: googleClientId
+    SIGNIN_GOOGLE_CLIENT_SECRET: googleClientSecret
+  },
+  empty(orcidClientId) || empty(orcidClientSecret) ? {} : {
+    SIGNIN_ORCID_CLIENT_ID: orcidClientId
+    SIGNIN_ORCID_CLIENT_SECRET: orcidClientSecret
+  }
+)
+
+resource swaSettings 'Microsoft.Web/staticSites/config@2024-04-01' = {
+  parent: swa
+  name: 'appsettings'
+  properties: signinSettings
+}
 
 // Custom domains are not declared here. Static Web Apps validates a binding against public DNS,
 // after the registrar delegates the zone, which happens between deployments; the apex also needs

@@ -71,6 +71,10 @@ test('researcher adds a RIPE email, posts a project, and edits it', async ({ per
   await visitor.page.getByRole('link', { name: title }).click();
   await expect(visitor.page).toHaveURL(new RegExp(`/projects/${id}$`));
   await expect(visitor.page.getByRole('link', { name: 'Sign in to send credits' })).toBeVisible();
+  // Signing in from here comes back to the project.
+  await visitor.page.getByRole('link', { name: 'Sign in to send credits' }).click();
+  await expect(visitor.page).toHaveURL(new RegExp(`/signin\\?next=%2Fprojects%2F${id}$`));
+  await expect(visitor.page.getByRole('link', { name: 'Sign in with GitHub' })).toHaveAttribute('href', `/.auth/login/github?post_login_redirect_uri=%2Fprojects%2F${id}`);
 
   const sitemap = await (await visitor.request.get('/sitemap.xml')).text();
   expect(sitemap).toContain(`<loc>https://atlasrelay.org/projects/${id}</loc>`);

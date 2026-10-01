@@ -140,4 +140,8 @@ test('public API answers, and private routes need a sign-in', async ({ request }
   const login = await request.get('/login', { maxRedirects: 0 });
   expect(login.status()).toBe(302);
   expect(login.headers()['location']).toContain('/.auth/login/github');
+  // Providers the site never offers (web/src/lib/signin.ts).
+  for (const provider of ['facebook', 'twitter', 'apple']) {
+    expect((await request.get(`/.auth/login/${provider}`, { maxRedirects: 0 })).status(), provider).toBe(404);
+  }
 });
