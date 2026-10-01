@@ -430,7 +430,7 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Resource | Bicep | SKU |
 | --- | --- | --- |
 | Resource group `rg-atlasrelay-prod` (westus2) | `infra/main.bicep` | |
-| Static Web App `swa-atlasrelay-prod` (staging environments disabled), no app settings | `infra/app.bicep` | Standard |
+| Static Web App `swa-atlasrelay-prod` (staging environments disabled); its only app settings are the sign-in registrations (`SIGNIN_*`), when the owner has set them | `infra/app.bicep` | Standard |
 | Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims`; shared keys refused | `infra/app.bicep` | Standard LRS |
 | Function App `func-atlasrelay-prod-<6 characters>` (Node 24) on plan `plan-atlasrelay-prod-api`, linked to the site as its backend, with its app settings | `infra/api.bicep` | Flex Consumption, on demand only |
 | User-assigned managed identity `id-atlasrelay-prod-api`, the Function App's identity for storage | `infra/api.bicep` | |
