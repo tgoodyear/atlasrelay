@@ -11,6 +11,12 @@
 #   --domain NAME         the domain, e.g. atlasrelay.org. prod creates its zone; any other
 #                         environment adds <env>.<domain> to the prod zone
 #   --alert-email ADDR    where alerts go
+#   --no-approval         outside prod: let jobs in the GitHub Environment run without waiting for
+#                         the repository owner's approval (the default is to wait)
+#
+# Outside prod the stack also holds the full-flow test harness (infra/testharness.bicep), and the
+# GitHub Environment waits for the repository owner's approval before a job in it gets an Azure
+# token, unless --no-approval. docs/RUNBOOK.md, "Full-flow tests on dev".
 #
 # Needs: az 2.61+, gh and jq, signed in (az login --tenant ..., gh auth login), Owner on the
 # subscription and admin on the GitHub repository.
@@ -25,7 +31,7 @@ usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0";
 [ $# -ge 1 ] || usage
 ENV_NAME=$1; shift
 case "$ENV_NAME" in -*|"") usage ;; esac
-SUBSCRIPTION="" LOCATION="" REPO="" DOMAIN="" EMAIL=""
+SUBSCRIPTION="" LOCATION="" REPO="" DOMAIN="" EMAIL="" APPROVAL=true
 while [ $# -gt 0 ]; do
   case "$1" in
     --subscription) SUBSCRIPTION=$2; shift 2 ;;
@@ -33,6 +39,7 @@ while [ $# -gt 0 ]; do
     --repo) REPO=$2; shift 2 ;;
     --domain) DOMAIN=$2; shift 2 ;;
     --alert-email) EMAIL=$2; shift 2 ;;
+    --no-approval) APPROVAL=false; shift ;;
     *) usage ;;
   esac
 done
@@ -68,7 +75,8 @@ echo "environment $ENV_NAME, subscription $SUBSCRIPTION, repository $REPO"
 
 step "Registering resource providers"
 for ns in Microsoft.Web Microsoft.Storage Microsoft.ManagedIdentity Microsoft.Consumption \
-  Microsoft.OperationalInsights Microsoft.Insights Microsoft.AlertsManagement Microsoft.Network; do
+  Microsoft.OperationalInsights Microsoft.Insights Microsoft.AlertsManagement Microsoft.Network \
+  Microsoft.App Microsoft.KeyVault Microsoft.ContainerRegistry; do
   [ "$(az provider show -n "$ns" "${AZ_SUB[@]}" --query registrationState -o tsv 2> /dev/null)" = Registered ] ||
     az provider register -n "$ns" "${AZ_SUB[@]}" --wait -o none
   echo "  $ns: Registered"
@@ -125,10 +133,24 @@ done
 [ -n "$assigned" ] || echo "  warning: role assignment not visible yet; the first workflow run may need a retry"
 
 step "GitHub Environment '$ENV_NAME' in $REPO"
-# The CI identity trusts jobs in this GitHub Environment, and only main may use it.
-gh api -X PUT "repos/$REPO/environments/$ENV_NAME" --input - > /dev/null << 'JSON'
+# The CI identity trusts jobs in this GitHub Environment, and only main may use it. Outside prod,
+# a job in it also waits for the repository owner's approval, administrators included, unless
+# --no-approval (the full-flow tests run there).
+if [ "$ENV_NAME" = prod ]; then
+  gh api -X PUT "repos/$REPO/environments/$ENV_NAME" --input - > /dev/null << 'JSON'
 {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
 JSON
+else
+  owner=${REPO%%/*}
+  owner_id=$(gh api "users/$owner" --jq .id) || die "can't look up the GitHub user $owner"
+  jq -n --argjson id "$owner_id" --argjson approval "$APPROVAL" '{
+    deployment_branch_policy: {protected_branches: false, custom_branch_policies: true},
+    reviewers: (if $approval then [{type: "User", id: $id}] else [] end),
+    prevent_self_review: false,
+    can_admins_bypass: false
+  }' | gh api -X PUT "repos/$REPO/environments/$ENV_NAME" --input - > /dev/null
+  if [ "$APPROVAL" = true ]; then echo "  jobs wait for approval by $owner"; else echo "  jobs run without approval"; fi
+fi
 # Exactly one policy may exist: the branch main. Anything else (another branch pattern, or a tag
 # named main) would let other refs use the identity.
 policies="repos/$REPO/environments/$ENV_NAME/deployment-branch-policies"
@@ -157,6 +179,21 @@ if [ "$ENV_NAME" = prod ]; then
   # connection string is public once the site ships it.
   gh variable set APPINSIGHTS_CONNECTION_STRING --repo "$REPO" --body "$(aget APPLICATIONINSIGHTS_CONNECTION_STRING)"
 else
+  if [ -n "$(aget E2E_JOB_NAME)" ]; then
+    step "GitHub Environment variables for the full-flow tests"
+    # Identifiers, not credentials: e2e-dev.yml reads them in the job that runs in this environment.
+    for kv in "AZURE_CLIENT_ID=$(aget CI_CLIENT_ID)" "AZURE_TENANT_ID=$(aget AZURE_TENANT_ID)" \
+      "AZURE_SUBSCRIPTION_ID=$SUBSCRIPTION" "E2E_RESOURCE_GROUP=$(aget AZURE_RESOURCE_GROUP)" \
+      "E2E_JOB_NAME=$(aget E2E_JOB_NAME)" "E2E_RESULTS_ACCOUNT=$(aget E2E_RESULTS_ACCOUNT)" \
+      "E2E_RESULTS_CONTAINER=$(aget E2E_RESULTS_CONTAINER)" "E2E_LOG_WORKSPACE_ID=$(aget E2E_LOG_WORKSPACE_ID)" \
+      "E2E_REGISTRY=$(aget E2E_REGISTRY)"; do
+      gh variable set "${kv%%=*}" --env "$ENV_NAME" --repo "$REPO" --body "${kv#*=}"
+    done
+    # e2e-dev.yml tests dev only, and skips while this is unset (scripts/teardown.sh dev clears it).
+    if [ "$ENV_NAME" = dev ]; then
+      gh variable set DEV_ENABLED --repo "$REPO" --body true
+    fi
+  fi
   echo
   echo "The Deploy workflow deploys prod only. To deploy $ENV_NAME, see \"Dev environment\" in docs/RUNBOOK.md."
 fi
@@ -171,3 +208,8 @@ elif [ -n "$domain" ]; then
   echo "Once $ENV_NAME.$domain resolves: scripts/bind-custom-domain.sh $ENV_NAME"
 fi
 [ "$ENV_NAME" != prod ] || echo "Deploy the app: gh workflow run deploy.yml --repo $REPO --ref main"
+if [ -n "$(aget E2E_JOB_NAME)" ]; then
+  echo "Full-flow tests: create the test accounts and store them with scripts/set-test-users.sh $ENV_NAME,"
+  echo "and copy the RIPE Atlas keys with scripts/set-ripe-keys.sh $ENV_NAME"
+  echo "(docs/RUNBOOK.md, Full-flow tests on dev)."
+fi

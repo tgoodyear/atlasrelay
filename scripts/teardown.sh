@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Delete one Atlas Relay environment: its deployment stack with every resource it manages, its
-# resource group and custom role, and its GitHub Environment. The data goes with it. For prod
+# resource group and custom roles, and its GitHub Environment. The data goes with it, and the
+# full-flow test vault is purged so the environment can be bootstrapped again at once. For prod
 # that includes the DNS zone: a new zone gets new name servers, and the registrar has to be
 # updated before the domain resolves again. Local settings (.azure/<env>/.env) are kept, renamed.
 #
@@ -40,6 +41,8 @@ fi
 groups=$(grep -Ei '^/subscriptions/[^/]+/resourceGroups/[^/]+$' <<< "$ids" | sed 's|.*/||' || true)
 # The custom role is declared in the group but stored with the subscription, so it outlives it.
 roles=$(grep -i '/providers/Microsoft.Authorization/roleDefinitions/' <<< "$ids" || true)
+# A deleted vault stays soft-deleted for a week under its name, which the next bootstrap reuses.
+vaults=$(grep -io '/providers/Microsoft.KeyVault/vaults/[^/]*$' <<< "$ids" | sed 's|.*/||' || true)
 # Anything managed outside the environment's own group, such as a non-prod environment's CNAME in
 # the prod zone, has to be deleted on its own.
 others=""
@@ -62,6 +65,8 @@ sed 's/^/  resource group (everything in it) /' <<< "$groups"
 [ -z "$roles" ] || sed 's/^/  /' <<< "$roles"
 [ -z "$others" ] || sed 's/^/  /' <<< "$others"
 echo "and the GitHub Environment $ENV_NAME in $REPO."
+[ -z "$vaults" ] || echo "The Key Vault $(tr '\n' ' ' <<< "$vaults")is purged after it is deleted, with the test accounts in it."
+[ "$ENV_NAME" != dev ] || echo "The repository variable DEV_ENABLED is removed, so the full-flow test workflow skips."
 if [ "$ENV_NAME" = prod ]; then
   zone=$(aget ATLASRELAY_DNS_ZONE)
   [ -z "$zone" ] || echo "The DNS zone $zone goes with the resource group; the domain stops resolving."
@@ -71,6 +76,12 @@ fi
 read -r -p "Type the environment name to confirm: " answer
 [ "$answer" = "$ENV_NAME" ] || die "not confirmed"
 
+if [ "$ENV_NAME" = dev ]; then
+  # First, so the full-flow test workflow stops trying to reach an environment that is going away.
+  if ! out=$(gh variable delete DEV_ENABLED --repo "$REPO" 2>&1); then
+    grep -qiE 'not found|HTTP 404' <<< "$out" || die "can't remove the variable DEV_ENABLED from $REPO: $out"
+  fi
+fi
 if [ "$ENV_NAME" = prod ]; then
   gh variable set AZURE_BOOTSTRAPPED --repo "$REPO" --body false
   # Only the ones that exist; any failure deleting one stops here, since the Deploy workflow
@@ -105,6 +116,23 @@ for g in $groups; do
   [ "$exists" = true ] || continue
   echo "deleting resource group $g"
   az group delete -n "$g" "${AZ_SUB[@]}" --yes -o none
+done
+# A deleted vault shows up in the soft-deleted list after a short delay. Once purged, it leaves the
+# resume file, so a teardown run again later does not wait for it.
+for v in $vaults; do
+  deleted=""
+  for _ in $(seq 1 30); do
+    deleted=$(az keyvault list-deleted "${AZ_SUB[@]}" --resource-type vault --query "[?name=='$v'].name" -o tsv) ||
+      die "can't list deleted vaults"
+    [ -z "$deleted" ] || break
+    sleep 10
+  done
+  [ -n "$deleted" ] ||
+    die "the Key Vault $v is not listed as deleted yet; run scripts/teardown.sh $ENV_NAME again in a few minutes to purge it"
+  echo "purging the deleted Key Vault $v"
+  az keyvault purge --name "$v" "${AZ_SUB[@]}" -o none
+  grep -iv "/providers/Microsoft.KeyVault/vaults/$v\$" "$resume" > "$resume.tmp" || true
+  mv "$resume.tmp" "$resume"
 done
 for id in $roles; do
   if ! out=$(az resource show --ids "$id" -o none 2>&1); then

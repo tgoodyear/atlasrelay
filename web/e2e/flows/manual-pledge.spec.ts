@@ -1,4 +1,5 @@
 import { fmtCompact } from '../../src/lib/api';
+import { confirmReceived, markSent, pledgeByHand, pledgeRow } from '../ui';
 import { expect, postProject, test } from './fixtures';
 
 // A donor pledges to transfer by hand on atlas.ripe.net: the site shows them where to send the
@@ -19,22 +20,14 @@ test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ 
 
   const { page } = donor;
   await page.goto(`/projects/${project.id}`);
-  await page.getByRole('button', { name: 'Send credits' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Send credits' });
-  await expect(dialog.getByLabel('Amount')).toHaveValue('700');
-  await dialog.getByRole('radio', { name: /I'll transfer on atlas.ripe.net myself/ }).check();
-  await expect(dialog.getByLabel('RIPE Atlas API key')).toHaveCount(0);
-  await dialog.getByLabel('Message (optional, public)').fill('Good luck with the study');
-  await dialog.getByRole('button', { name: 'Create pledge' }).click();
-
-  const done = page.getByRole('dialog', { name: 'Finish the transfer on atlas.ripe.net' });
-  await expect(done.getByText('Pledge recorded. Now make the transfer on RIPE Atlas.')).toBeVisible();
+  const done = await pledgeByHand(page, { message: 'Good luck with the study' });
   await expect(done.locator('.copy-box')).toContainText(researcher.email);
   await expect(done.getByRole('link', { name: 'atlas.ripe.net/credits/transfer' })).toHaveAttribute('href', 'https://atlas.ripe.net/credits/transfer/');
+  // The form's default amount is what the project still needs.
   await expect(done.getByText('700', { exact: true })).toBeVisible();
   await done.getByRole('button', { name: 'Done' }).click();
 
-  const pledge = page.locator('.pledge').filter({ hasText: donor.name });
+  const pledge = pledgeRow(page, donor.name);
   await expect(pledge.getByText('Pledged', { exact: true })).toBeVisible();
   await expect(pledge.getByText('Good luck with the study')).toBeVisible();
   await expect(page.locator('dl.kv')).toContainText('Pending700');
@@ -45,8 +38,7 @@ test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ 
   await expect(visitor.page.locator('.pledge').filter({ hasText: donor.name })).toContainText('Pledged');
   await expect(visitor.page.locator('body')).not.toContainText(researcher.email);
 
-  await pledge.getByRole('button', { name: "I've sent the credits" }).click();
-  await expect(pledge.getByText('Sent, awaiting confirmation')).toBeVisible();
+  await markSent(page, donor.name);
 
   // The donor's dashboard lists it.
   await page.goto('/dashboard');
@@ -60,9 +52,7 @@ test('manual pledge: pledged, sent, confirmed, and the totals follow', async ({ 
   await owner.goto('/dashboard');
   await expect(owner.getByText('1 of your projects has pending pledges.')).toBeVisible();
   await owner.getByRole('link', { name: 'Review pledges' }).click();
-  const ownerRow = owner.locator('.pledge').filter({ hasText: donor.name });
-  await ownerRow.getByRole('button', { name: 'Confirm received' }).click();
-  await expect(ownerRow.getByText('Confirmed', { exact: true })).toBeVisible();
+  await confirmReceived(owner, donor.name);
   await expect(owner.locator('dl.kv')).toContainText('Received700');
   await expect(owner.locator('dl.kv')).toContainText('Pending0');
   await expect(owner.locator('.pill-green', { hasText: 'Funded' })).toBeVisible();

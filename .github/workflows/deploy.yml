@@ -134,6 +134,10 @@ jobs:
       - name: Run browser tests
         run: npm run test:e2e -w web
 
+      # The build job runs this file too, and skips it there for want of a browser.
+      - name: Check a pasted key is redacted from a real trace
+        run: E2E_TRACE_TEST_REQUIRED=1 node --test e2e-real/test/trace-redaction.test.mjs
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:

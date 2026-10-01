@@ -1,0 +1,217 @@
+name: Full-flow tests on dev
+
+# Signs two test accounts into the dev site through the real Microsoft sign-in and runs the full
+# flow there (e2e-real/), including real RIPE Atlas transfers between two test accounts. The tests
+# run in Azure, as the Container Apps job E2E_JOB_NAME, which reads the accounts' passwords and the
+# RIPE Atlas keys from a Key Vault that has no public network access. This workflow builds the test
+# image in dev's container registry, starts the job with it, waits, and collects the redacted
+# results. It never holds a password or a key. docs/RUNBOOK.md, "Full-flow tests on dev".
+#
+# Only the owner can make it run:
+# - It runs after a push to main (only the owner can merge under the "Protect main" ruleset) that
+#   changes the tests, or by hand. There is no pull request trigger of any kind, so a fork or a
+#   pull request cannot start it.
+# - Every job checks the repository, the actor and the branch.
+# - The job that gets an Azure token runs in the GitHub Environment dev, which only main may use and
+#   which waits for the owner's approval (unless scripts/bootstrap.sh dev last ran with
+#   --no-approval). The CI identity trusts that environment and nothing else.
+# - While dev does not exist (the repository variable DEV_ENABLED is not true), it only prints a
+#   notice.
+#
+# It tests the site as it is deployed on dev and deploys nothing there, so the push trigger covers
+# only what it builds and runs: the test image (e2e-real/ and web/e2e/ui.ts), the code that builds
+# and starts it, and this file. To test a change to web/, api/ or infra/, put it on dev first
+# (docs/RUNBOOK.md, "Dev environment") and then start this workflow by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'e2e-real/**'
+      - 'web/e2e/ui.ts'
+      - 'scripts/lib/e2e-job.sh'
+      - '.github/workflows/e2e-dev.yml'
+  workflow_dispatch:
+
+# One run at a time: two runs would sign the same accounts in and delete each other's profiles.
+# This queues the workflow's own runs; inside the job, e2e-real/lib/lock.mjs also keeps a run out
+# while one started by scripts/run-e2e.sh is going.
+concurrency:
+  group: e2e-dev
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  not-enabled:
+    name: dev is not bootstrapped
+    if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Skip
+        run: echo "::notice::The dev environment does not exist (repository variable DEV_ENABLED is not true), so there is nothing to test. scripts/bootstrap.sh dev sets it."
+
+  run:
+    name: Run the tests in Azure
+    if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # The CI identity trusts jobs in this GitHub Environment only; scripts/bootstrap.sh restricts it
+    # to main and, unless run with --no-approval, makes it wait for the owner's approval.
+    environment: dev
+    timeout-minutes: 70
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # Variables of the GitHub Environment dev, set by scripts/bootstrap.sh dev.
+      RESOURCE_GROUP: ${{ vars.E2E_RESOURCE_GROUP }}
+      JOB_NAME: ${{ vars.E2E_JOB_NAME }}
+      RESULTS_ACCOUNT: ${{ vars.E2E_RESULTS_ACCOUNT }}
+      RESULTS_CONTAINER: ${{ vars.E2E_RESULTS_CONTAINER }}
+      LOG_WORKSPACE_ID: ${{ vars.E2E_LOG_WORKSPACE_ID }}
+      REGISTRY: ${{ vars.E2E_REGISTRY }}
+      SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      API: 2025-07-01
+    steps:
+      - name: Check the settings
+        run: |
+          for v in RESOURCE_GROUP JOB_NAME RESULTS_ACCOUNT RESULTS_CONTAINER LOG_WORKSPACE_ID REGISTRY SUBSCRIPTION_ID; do
+            [ -n "${!v}" ] || { echo "::error::$v is empty; run scripts/bootstrap.sh dev"; exit 1; }
+          done
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the Playwright versions agree
+        run: node --test e2e-real/test/versions.test.mjs
+
+      - name: Azure login (OIDC via managed identity)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Built by ACR Tasks in dev's registry from e2e-real/ and web/e2e/ui.ts at this commit; the
+      # image stays private there and the job pulls it as the test identity.
+      - name: Build the test image
+        id: image
+        run: |
+          . scripts/lib/e2e-job.sh
+          image="$(e2e_build_image "$REGISTRY" "$RESOURCE_GROUP" "sha-$GITHUB_SHA")"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "built $image"
+
+      # The job's own container definition with the image swapped for the one just built, pinned by
+      # digest, and a run id the results are filed under (scripts/lib/e2e-job.sh).
+      - name: Start the job
+        id: start
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.image }}
+        run: |
+          . scripts/lib/e2e-job.sh
+          job_url="https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$JOB_NAME"
+          run_id="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          execution="$(e2e_start_job "$job_url" "$IMAGE_REF" "$run_id" "$GITHUB_SHA")"
+          {
+            echo "execution=$execution"
+            echo "run_id=$run_id"
+            echo "job_url=$job_url"
+          } >> "$GITHUB_OUTPUT"
+          echo "started $execution (run $run_id) with $IMAGE_REF"
+
+      # The job's replica timeout is 45 minutes; a start can wait a few minutes for capacity.
+      - name: Wait for the execution
+        id: wait
+        env:
+          EXECUTION: ${{ steps.start.outputs.execution }}
+          JOB_URL: ${{ steps.start.outputs.job_url }}
+        run: |
+          deadline=$(( $(date +%s) + 55 * 60 ))
+          status=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            status="$(az rest --method get --url "$JOB_URL/executions/$EXECUTION?api-version=$API" --query properties.status -o tsv 2> /dev/null || true)"
+            case "$status" in
+              Succeeded|Failed|Stopped|Degraded) break ;;
+            esac
+            echo "$(date -u +%H:%M:%S) ${status:-pending}"
+            sleep 20
+          done
+          case "$status" in
+            Succeeded|Failed|Stopped|Degraded) ;;
+            *)
+              echo "::error::execution $EXECUTION did not finish in 55 minutes (last status: ${status:-unknown}); stopping it"
+              az rest --method post --url "$JOB_URL/executions/$EXECUTION/stop?api-version=$API" -o none || true
+              status=TimedOut ;;
+          esac
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "execution $EXECUTION: $status"
+
+      - name: Download the results
+        if: always() && steps.start.outputs.run_id != ''
+        env:
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+        run: |
+          mkdir -p results
+          az storage blob download-batch --auth-mode login --account-name "$RESULTS_ACCOUNT" \
+            --source "$RESULTS_CONTAINER" --pattern "runs/$RUN_ID/*" --destination results \
+            --only-show-errors -o none || echo "::warning::could not download the results"
+          [ -f "results/runs/$RUN_ID/summary.json" ] || echo "::warning::the run uploaded no summary.json"
+
+      # The console output is in the results when the run got that far. This covers a container that
+      # never started or died early. Log Analytics takes a few minutes to receive the lines.
+      - name: Read the job's logs
+        if: always() && steps.start.outputs.execution != '' && steps.wait.outputs.status != 'Succeeded'
+        env:
+          EXECUTION: ${{ steps.start.outputs.execution }}
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+        run: |
+          mkdir -p "results/runs/$RUN_ID"
+          # column_ifexists: the tables' columns have changed between Container Apps versions.
+          query="union isfuzzy=true
+            (ContainerAppConsoleLogs | extend Source = 'console'),
+            (ContainerAppSystemLogs | extend Source = 'system')
+            | where tostring(column_ifexists('ContainerGroupName', '')) startswith '$EXECUTION'
+              or tostring(column_ifexists('ReplicaName', '')) startswith '$EXECUTION'
+              or tostring(column_ifexists('ExecutionName', '')) == '$EXECUTION'
+            | project TimeGenerated, Source, Text = tostring(column_ifexists('Log', ''))
+            | order by TimeGenerated asc"
+          body="$(jq -n --arg q "$query" '{query: $q, timespan: "PT6H"}')"
+          az rest --method post --resource https://api.loganalytics.io \
+            --url "https://api.loganalytics.io/v1/workspaces/$LOG_WORKSPACE_ID/query" --body "$body" \
+            --query 'tables[0].rows[]' -o tsv > "results/runs/$RUN_ID/job-logs.tsv" ||
+            echo "::warning::could not read the job's logs"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.start.outputs.run_id != ''
+        with:
+          name: e2e-dev-${{ steps.start.outputs.run_id }}
+          path: results/runs/${{ steps.start.outputs.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Verdict
+        if: always() && steps.start.outputs.run_id != ''
+        env:
+          RUN_ID: ${{ steps.start.outputs.run_id }}
+          STATUS: ${{ steps.wait.outputs.status }}
+        run: |
+          summary="results/runs/$RUN_ID/summary.json"
+          {
+            echo "### Full-flow tests on dev"
+            echo
+            echo "Execution status: ${STATUS:-unknown}"
+            echo
+            echo "The site under test is the build deployed on dev; this workflow does not deploy it."
+            if [ -f "$summary" ]; then
+              jq -r '"Result: \(.status) (\(.stats.expected) passed, \(.stats.unexpected) failed, \(.stats.skipped) skipped)",
+                "", "| Test | Outcome |", "| --- | --- |",
+                (.tests[] | "| \(.title | gsub("\\|"; "/")) | \(.outcome) |")' "$summary"
+            else
+              echo "No summary.json: the run did not finish its upload. See job-logs.tsv in the artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$STATUS" = Succeeded ] || { echo "::error::the job execution ended $STATUS"; exit 1; }
+          [ "$(jq -r .status "$summary" 2> /dev/null)" = passed ] || { echo "::error::the tests did not pass"; exit 1; }
+          echo "passed"

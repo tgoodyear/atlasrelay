@@ -26,3 +26,7 @@ param dnsApexTxtValues = {
   'atlasrelay.org': ['google-site-verification=PmPeiS951f6LV0yLSeciOw2VCg8GoDdKAQTllGN6fkQ']
 }
 param swaApexToken = readEnvironmentVariable('ATLASRELAY_SWA_APEX_TOKEN', '')
+// The full-flow test harness goes with every environment but prod, and there is no setting to turn it
+// off: removing it from a live environment would leave its vault soft-deleted under a name the next
+// deployment needs. scripts/teardown.sh removes it with the environment.
+param testHarness = readEnvironmentVariable('AZURE_ENV_NAME') != 'prod'

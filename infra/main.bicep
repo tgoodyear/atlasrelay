@@ -12,6 +12,8 @@
 //                     to the Function App) + assignments
 //   dns.bicep         public DNS zone for the domain (prod only)
 //   dns-subdomain.bicep  <env>.<domain> CNAME in the prod zone (other environments)
+//   testharness.bicep    full-flow test job, private vault, network (other environments)
+//   testharness-rbac.bicep  what CI may do with the test job (other environments)
 //
 // The stack runs with --action-on-unmanage deleteResources (a resource dropped from this template
 // is deleted on the next deployment) and --deny-settings-mode denyDelete (nobody deletes a managed
@@ -64,7 +66,8 @@ Off only to relink a lost identity provider ("Direct requests to the Function Ap
 docs/RUNBOOK.md) or to check a new app directly; an unlinked app answers every request as anonymous.''')
 param linkApi bool = true
 
-@description('Object id of the Owner who works on the tables by hand. Empty: nobody has data access.')
+@description('''Object id of the Owner who works on the tables by hand and, outside prod, writes the test
+accounts into the test vault (scripts/set-test-users.sh). Empty: nobody has data access.''')
 param operatorPrincipalId string = ''
 
 @description('Extra app settings for the Function App')
@@ -96,8 +99,14 @@ param dnsApexTxtValues object = {}
 scripts/bind-custom-domain.sh. Published at the apex (prod only). Empty until the apex is bound.''')
 param swaApexToken string = ''
 
+@description('''Deploy the full-flow test harness (testharness.bicep): a Container Apps job that signs
+test accounts into the site, with their passwords in a private Key Vault. Never in prod, whatever
+this says; main.bicepparam sets it for every other environment.''')
+param testHarness bool = toLower(environmentName) != 'prod'
+
 var env = toLower(environmentName)
 var isProd = env == 'prod'
+var harness = testHarness && !isProd
 var baseName = 'atlasrelay-${env}'
 var tags = {
   project: 'atlasrelay'
@@ -107,6 +116,10 @@ var tags = {
 // The availability test requests the domain once the apex is bound (its token is recorded), and
 // the site's own hostname before that. Only prod has one.
 var apexBound = !empty(dnsZoneName) && !empty(swaApexToken)
+// The hostname the site is reached on: the domain once the apex is bound, else the site's own.
+var siteHostname = isProd && apexBound
+  ? dnsZoneName
+  : (!isProd && !empty(dnsZoneName) ? '${env}.${dnsZoneName}' : app.outputs.staticWebAppHostname)
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: 'rg-${baseName}'
@@ -237,6 +250,36 @@ module subdomain 'dns-subdomain.bicep' = if (!isProd && !empty(dnsZoneName)) {
   }
 }
 
+// ---------- full-flow test harness (not prod) ----------
+
+module testharness 'testharness.bicep' = if (harness) {
+  name: 'testharness'
+  scope: rg
+  params: {
+    environmentName: env
+    location: location
+    // The site's own azurestaticapps.net hostname, not <env>.<domain>: it serves as soon as the site
+    // exists, while a newly bound custom domain answered the platform's 404 on some requests for
+    // hours (2026-10-01), which no test run should depend on.
+    baseUrl: 'https://${app.outputs.staticWebAppHostname}'
+    workspaceId: platform.outputs.workspaceId
+    operatorPrincipalId: operatorPrincipalId
+    tags: tags
+  }
+}
+
+module testharnessRbac 'testharness-rbac.bicep' = if (harness) {
+  name: 'testharness-rbac'
+  scope: rg
+  params: {
+    environmentName: env
+    principalId: identity.outputs.principalId
+    resultsAccountName: testharness!.outputs.resultsAccountName
+    resultsContainerName: testharness!.outputs.resultsContainerName
+    registryName: testharness!.outputs.registryName
+  }
+}
+
 // Output names are upper case: scripts/lib/env.sh saves them as settings under these names.
 output AZURE_RESOURCE_GROUP string = rg.name
 output AZURE_TENANT_ID string = tenant().tenantId
@@ -255,9 +298,14 @@ output APPINSIGHTS_NAME string = platform.outputs.appInsightsName
 // repository variable APPINSIGHTS_CONNECTION_STRING). It names the ingestion endpoint and the
 // instrumentation key; it is not a credential and is public once the site ships it.
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = platform.outputs.appInsightsConnectionString
-// The hostname the site is reached on: the domain once the apex is bound, else the site's own.
-output SITE_HOSTNAME string = isProd && apexBound
-  ? dnsZoneName
-  : (!isProd && !empty(dnsZoneName) ? '${env}.${dnsZoneName}' : app.outputs.staticWebAppHostname)
+output SITE_HOSTNAME string = siteHostname
 // Set these as the domain's name servers at the registrar (prod only).
 output NAME_SERVERS string = isProd && !empty(dnsZoneName) ? join(dns!.outputs.nameServers, ' ') : ''
+// The full-flow test harness; empty when it is not deployed. scripts/bootstrap.sh copies them to
+// the GitHub Environment's variables for e2e-dev.yml.
+output E2E_JOB_NAME string = harness ? testharness!.outputs.jobName : ''
+output E2E_KEY_VAULT_NAME string = harness ? testharness!.outputs.vaultName : ''
+output E2E_RESULTS_ACCOUNT string = harness ? testharness!.outputs.resultsAccountName : ''
+output E2E_RESULTS_CONTAINER string = harness ? testharness!.outputs.resultsContainerName : ''
+output E2E_LOG_WORKSPACE_ID string = harness ? platform.outputs.workspaceCustomerId : ''
+output E2E_REGISTRY string = harness ? testharness!.outputs.registryName : ''
