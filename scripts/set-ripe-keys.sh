@@ -6,9 +6,12 @@
 #   scripts/set-ripe-keys.sh <env> --from-vault VAULT --donor SECRET --recipient SECRET
 #                            [--from-subscription ID] [--ip ADDRESS] [--yes]
 #
-#   --from-vault VAULT        the Key Vault the keys are in now; you need to be able to read it. It
-#                             should refuse every network: the script admits this machine's address
-#                             while it reads, and removes it again
+#   --from-vault VAULT        the Key Vault the keys are in now. It must refuse every network; the
+#                             script admits this machine's address while it reads and removes it
+#                             again, so you need both read access to its secrets (for example Key
+#                             Vault Secrets User) and permission to change its network rules
+#                             (Microsoft.KeyVault/vaults/write, which Contributor or Owner has),
+#                             in --from-subscription when the vault is elsewhere
 #   --donor SECRET            the secret holding the key of the account with credits: the donor
 #                             pastes it into the pledge form
 #   --recipient SECRET        the secret holding the key of the researcher's account: it receives
@@ -69,24 +72,25 @@ fi
 
 # The source vault refuses every network. Admit this machine's address only while reading from it,
 # and remove the rule again on the way out, whatever happens.
-# source_acl: "<default action> <public network access> <ip rule count> <vnet rule count>"
+# source_acl: "<default action> <bypass> <public network access> <ip rules> <vnet rules> <private endpoints>"
 source_acl() {
   az keyvault show --name "$FROM_VAULT" --subscription "$FROM_SUB" \
-    --query "[properties.networkAcls.defaultAction, properties.publicNetworkAccess, length(properties.networkAcls.ipRules || \`[]\`), length(properties.networkAcls.virtualNetworkRules || \`[]\`)]" \
+    --query "[properties.networkAcls.defaultAction, properties.networkAcls.bypass, properties.publicNetworkAccess, length(properties.networkAcls.ipRules || \`[]\`), length(properties.networkAcls.virtualNetworkRules || \`[]\`), length(properties.privateEndpointConnections || \`[]\`)]" \
     -o tsv | tr '\t\n' '  ' | sed 's/ *$//'
 }
+CLOSED="Deny None Enabled 0 0 0"
 # The vault must refuse every network before this script touches it, so the one rule it adds is
 # the only way in, and removing it closes the vault again.
 acl=$(source_acl) || die "can't read $FROM_VAULT's network settings"
-[ "$acl" = "Deny Enabled 0 0" ] ||
-  die "$FROM_VAULT must refuse every network first (default action Deny, public network access Enabled, no address or network rules); it has: $acl. docs/RUNBOOK.md, \"Full-flow tests on dev\""
+[ "$acl" = "$CLOSED" ] ||
+  die "$FROM_VAULT must refuse every network first (default action Deny, bypass None, public network access Enabled, no address or network rules, no private endpoints); it has: $acl. docs/RUNBOOK.md, \"Full-flow tests on dev\""
 
 # Fails when the vault is still open, so `set -e` stops the script with the EXIT trap still set,
 # which tries again.
 source_close() {
   az keyvault network-rule remove --name "$FROM_VAULT" --subscription "$FROM_SUB" \
     --ip-address "$IP/32" -o none 2> /dev/null || true
-  if [ "$(source_acl 2> /dev/null)" = "Deny Enabled 0 0" ]; then
+  if [ "$(source_acl 2> /dev/null)" = "$CLOSED" ]; then
     return 0
   fi
   echo "WARNING: $FROM_VAULT still has a network rule; remove $IP/32 from it by hand" >&2
