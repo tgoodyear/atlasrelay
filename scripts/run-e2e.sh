@@ -3,9 +3,11 @@
 # machine: the same steps as .github/workflows/e2e-dev.yml, for a branch that is not on main yet.
 # docs/RUNBOOK.md, "Full-flow tests on dev".
 #
-#   scripts/run-e2e.sh <env> [--no-wait]
+#   scripts/run-e2e.sh <env> [--no-wait] [--base-url URL]
 #
-#   --no-wait   start the job and return, without waiting for it to finish
+#   --no-wait        start the job and return, without waiting for it to finish
+#   --base-url URL   test this address instead of the job's own, e.g. the site's default
+#                    azurestaticapps.net hostname while a new custom domain is still settling
 #
 # The image is built in the environment's registry with ACR Tasks from the files in this working
 # tree, committed or not, and tagged local-<commit>-<time>. The run's results go to the results
@@ -20,9 +22,11 @@ usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0";
 ENV_NAME=$1; shift
 case "$ENV_NAME" in -*|"") usage ;; esac
 WAIT=true
+BASE_URL_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-wait) WAIT=false; shift ;;
+    --base-url) [ $# -ge 2 ] || usage; BASE_URL_OVERRIDE=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -52,7 +56,7 @@ echo "built $image"
 
 job_url="https://management.azure.com/subscriptions/$(aget AZURE_SUBSCRIPTION_ID)/resourceGroups/$RG/providers/Microsoft.App/jobs/$JOB"
 run_id="local-$stamp"
-execution=$(e2e_start_job "$job_url" "$image" "$run_id" "$sha")
+execution=$(e2e_start_job "$job_url" "$image" "$run_id" "$sha" "$BASE_URL_OVERRIDE")
 echo "started $execution (run $run_id)"
 echo "results: storage account $(aget E2E_RESULTS_ACCOUNT), container $(aget E2E_RESULTS_CONTAINER), runs/$run_id/"
 [ "$WAIT" = true ] || exit 0

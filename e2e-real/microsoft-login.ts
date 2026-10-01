@@ -53,6 +53,24 @@ async function onScreen(page: Page): Promise<string | null> {
   return null;
 }
 
+/**
+ * Microsoft's sign-in page shows its fields before its script has bound them. A value filled in
+ * that gap is on screen but not in the page's model, so it submits an empty field ("Enter a valid
+ * email address"); seen in the job's container, where pages load slower than on a laptop. Wait for
+ * the page to load, then type, and check the value stuck.
+ */
+async function fillWhenReady(page: Page, field: Locator, value: string): Promise<void> {
+  await page.waitForLoadState('load').catch(() => undefined);
+  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await field.fill('');
+    await field.pressSequentially(value, { delay: 20 });
+    if ((await field.inputValue()) === value) return;
+    await page.waitForTimeout(1000);
+  }
+  throw new Error('Microsoft sign-in did not take the typed value');
+}
+
 async function submit(page: Page, field?: Locator): Promise<void> {
   const button = page.locator(PRIMARY).first();
   if (await visible(button)) await button.click();
@@ -68,6 +86,7 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
   const deadline = Date.now() + 120_000;
   const seen: string[] = [];
   let lastTotpWindow = -1;
+  let usernameRetried = false;
   let last = { screen: '', at: 0 };
   while (Date.now() < deadline) {
     const url = new URL(page.url());
@@ -88,6 +107,14 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
     switch (screen) {
       case 'error': {
         const text = (await page.locator('#usernameError, #passwordError, #idTD_Error, #errorText, [data-testid="error"]').first().innerText()).trim();
+        // "Enter a valid email address" means the page saw an empty field, not a wrong account:
+        // the username went in before the page was ready. Start that screen again, once.
+        if (/valid email address/i.test(text) && !usernameRetried) {
+          usernameRetried = true;
+          last = { screen: '', at: 0 };
+          await page.reload();
+          break;
+        }
         throw new Error(`Microsoft sign-in refused the account: ${text.slice(0, 300)}`);
       }
       case 'mfa-method':
@@ -107,13 +134,13 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
       }
       case 'username': {
         const field = SCREENS.find((s) => s.name === 'username')!.locator(page).first();
-        await field.fill(account.username);
+        await fillWhenReady(page, field, account.username);
         await submit(page, field);
         break;
       }
       case 'password': {
         const field = SCREENS.find((s) => s.name === 'password')!.locator(page).first();
-        await field.fill(account.password);
+        await fillWhenReady(page, field, account.password);
         await submit(page, field);
         break;
       }

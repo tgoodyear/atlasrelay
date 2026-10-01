@@ -280,6 +280,7 @@ var roles = {
   keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
   keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
   storageBlobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+  storageBlobDataReader: '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 }
 
 resource testReadsSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -311,6 +312,16 @@ resource operatorWritesSecrets 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsOfficer)
     principalId: operatorPrincipalId
     description: 'scripts/set-test-users.sh and scripts/set-ripe-keys.sh write the test secrets'
+  }
+}
+
+resource operatorReadsResults 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(operatorPrincipalId)) {
+  scope: results::blobs::container
+  name: guid(results::blobs::container.id, operatorPrincipalId, roles.storageBlobDataReader)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.storageBlobDataReader)
+    principalId: operatorPrincipalId
+    description: 'The operator reads the results of runs started with scripts/run-e2e.sh'
   }
 }
 
