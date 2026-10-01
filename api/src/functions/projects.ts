@@ -355,10 +355,15 @@ app.http('projects-update', {
     if (ceilingChanges && !lockToken) {
       throw new HttpError(409, 'A pledge on this project is being confirmed right now. Your changes were not saved. Try again in a moment.');
     }
+    // The edit form always sends the request. An unchanged value is left out of the write, so only
+    // an edit that holds the lock above can write this column: otherwise an edit that read an old
+    // value could put it back after another tab changed it, between a confirmation's check and write.
+    const { creditsRequested: _unchangedRequest, ...otherFields } = fields;
+    const writeFields = ceilingChanges ? fields : otherFields;
     let updated: Project;
     try {
       updated = await patchProject(id, {
-        ...fields,
+        ...writeFields,
         ...(status ? { status } : {}),
         ...(resultsPostedAt !== project.resultsPostedAt ? { resultsPostedAt } : {}),
       });

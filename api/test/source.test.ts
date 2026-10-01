@@ -207,4 +207,8 @@ test('the ceiling is decided on a project row read under the lock, and a change 
   const write = edit.indexOf('await patchProject(');
   const release = edit.indexOf('releaseConfirmLock(');
   assert.ok(editLock > 0 && write > editLock && release > write, 'a project edit that changes the request holds the confirmation lock around its write');
+  // Only an edit holding the lock may write the request: an unchanged value is left out of the write.
+  assert.match(edit, /const writeFields = ceilingChanges \? fields : otherFields;/, 'an unchanged request is dropped from the write');
+  const patchCall = edit.slice(write, edit.indexOf('});', write));
+  assert.ok(patchCall.includes('...writeFields') && !/\.\.\.fields\b/.test(patchCall), 'the edit writes writeFields, never the raw fields');
 });
