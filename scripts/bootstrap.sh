@@ -16,7 +16,7 @@
 #
 # Outside prod the stack also holds the full-flow test harness (infra/testharness.bicep), and the
 # GitHub Environment waits for the repository owner's approval before a job in it gets an Azure
-# token. docs/RUNBOOK.md, "Full-flow tests on dev".
+# token, unless --no-approval. docs/RUNBOOK.md, "Full-flow tests on dev".
 #
 # Needs: az 2.61+, gh and jq, signed in (az login --tenant ..., gh auth login), Owner on the
 # subscription and admin on the GitHub repository.

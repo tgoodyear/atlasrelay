@@ -6,7 +6,9 @@
 //    when an account has a TOTP seed), plus E2E_RIPE_DONOR_KEY, E2E_RIPE_DONOR_ACCOUNT,
 //    E2E_RIPE_RECIPIENT_KEY and E2E_RIPE_RECIPIENT_ACCOUNT for the real-transfer tests.
 // 2. Take the lock every run of the job shares (lib/lock.mjs), when RESULTS_CONTAINER_URL is set,
-//    so two runs never sign the same accounts in or move credits at the same time.
+//    so two runs never sign the same accounts in or move credits at the same time. A run that
+//    loses the lock stops the suite the way Ctrl+C does: the running test is interrupted, its
+//    afterEach hooks still run (the credit return among them), and the run fails.
 // 3. Run the Playwright suite. Its output is printed with every secret replaced.
 // 4. Redact the results directory: the passwords, TOTP seeds, RIPE keys and account emails, and
 //    the site's session cookies, which traces record in request headers.
@@ -130,6 +132,19 @@ function cookieValues() {
   return values;
 }
 
+/** @type {import('node:child_process').ChildProcess | null} the Playwright runner, while it runs */
+let playwright = null;
+let lockLost = false;
+
+/** The lock is gone: stop the suite as Ctrl+C would, so the afterEach hooks still run. */
+function stopForLostLock() {
+  lockLost = true;
+  if (playwright && playwright.exitCode === null) {
+    log('stopping the tests: this run no longer holds the lock');
+    playwright.kill('SIGINT');
+  }
+}
+
 /** @param {Record<string, string>} env */
 function runPlaywright(env) {
   const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
@@ -139,6 +154,7 @@ function runPlaywright(env) {
       env: { ...process.env, ...env, E2E_STATE_DIR: stateDir, E2E_OUTPUT_DIR: outDir, FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    playwright = child;
     const err = lineRedactor((s) => process.stderr.write(s), currentNeedles);
     // console.txt is redacted as a whole at the end, so a secret split across chunks is caught.
     child.stdout.setEncoding('utf8').on('data', (c) => {
@@ -205,8 +221,9 @@ try {
   const container = process.env.RESULTS_CONTAINER_URL;
   if (container) {
     const token = await managedIdentityToken('https://storage.azure.com/', process.env.AZURE_CLIENT_ID);
-    lock = await acquireLock(container, token, { log });
+    lock = await acquireLock(container, token, { log, onLost: stopForLostLock });
     log('holding the lock: no other run can start the tests until this one ends');
+    if (lockLost) throw new Error('lost the lock before the tests started');
   } else {
     log('RESULTS_CONTAINER_URL is unset, so this run takes no lock; make sure no other run is going');
   }
@@ -217,7 +234,12 @@ try {
 }
 if (lock) {
   await lock.release();
-  log('released the lock');
+  if (lockLost) {
+    setupError ||= 'this run lost the lock while the tests ran, so another run may have overlapped it; the suite was stopped';
+    exitCode = 1;
+  } else {
+    log('released the lock');
+  }
 }
 
 // Everything below runs whatever happened above, so a failed run still reports.

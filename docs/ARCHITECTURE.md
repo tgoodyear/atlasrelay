@@ -509,12 +509,13 @@ docs/     this spec, RIPE research notes, runbook
 - `e2e-dev.yml` (push to `main` that touches the app, the templates, `e2e-real/` or
   `scripts/lib/e2e-job.sh`, and manual; never on pull requests; every job checks that the
   repository is `tgoodyear/atlasrelay`, the actor `tgoodyear` and the ref `main`): job `run`, in
-  the GitHub Environment `dev` (main only, waits for the owner's approval), logs in with OIDC as the
-  dev CI identity, builds `e2e-real/Dockerfile` in dev's registry with ACR Tasks, starts the
-  Container Apps job with the new image pinned by digest, polls the execution, downloads the
-  results from blob storage and uploads them as an artifact, reads the job's logs from Log
-  Analytics when the execution failed, and fails unless every test passed. Without the repository
-  variable `DEV_ENABLED=true` it only prints a notice.
+  the GitHub Environment `dev` (main only; waits for the owner's approval unless
+  `scripts/bootstrap.sh dev` last ran with `--no-approval`), logs in with OIDC as the dev CI identity, builds
+  `e2e-real/Dockerfile` in dev's registry with ACR Tasks, starts the Container Apps job with the
+  new image pinned by digest, polls the execution, downloads the results from blob storage and
+  uploads them as an artifact, reads the job's logs from Log Analytics when the execution failed,
+  and fails unless every test passed. Without the repository variable `DEV_ENABLED=true` it only
+  prints a notice.
 - `e2e-image.yml` (PRs that change `e2e-real/` or `web/e2e/ui.ts`): builds the test image and
   lists the tests inside it. Pushes nothing, holds no identity.
 - `deploy.yml` degrades to build-only until bootstrap has run; after that

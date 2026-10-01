@@ -13,7 +13,8 @@ name: Full-flow tests on dev
 #   a fork or a pull request cannot start it.
 # - Every job checks the repository, the actor and the branch.
 # - The job that gets an Azure token runs in the GitHub Environment dev, which only main may use and
-#   which waits for the owner's approval. The CI identity trusts that environment and nothing else.
+#   which waits for the owner's approval (unless scripts/bootstrap.sh dev last ran with
+#   --no-approval). The CI identity trusts that environment and nothing else.
 # - While dev does not exist (the repository variable DEV_ENABLED is not true), it only prints a
 #   notice.
 on:
@@ -52,7 +53,7 @@ jobs:
     if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED == 'true'
     runs-on: ubuntu-latest
     # The CI identity trusts jobs in this GitHub Environment only; scripts/bootstrap.sh restricts it
-    # to main and makes it wait for the owner's approval.
+    # to main and, unless run with --no-approval, makes it wait for the owner's approval.
     environment: dev
     timeout-minutes: 45
     permissions:

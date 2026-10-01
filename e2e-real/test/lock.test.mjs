@@ -63,21 +63,53 @@ test('any other answer is an error, not a wait', async () => {
   await assert.rejects(acquireLock(CONTAINER, 'token', { fetchImpl: denied }), /Creating the lock .*HTTP 403/);
 });
 
-test('renews the lease and reports a renewal that fails', async () => {
-  let renewals = 0;
-  const { fetchImpl } = fakeBlob((c) => {
-    if (!c.url.includes('comp=lease')) return 201;
-    const action = c.headers['x-ms-lease-action'];
-    if (action === 'acquire') return 201;
-    if (action === 'renew') return ++renewals === 1 ? 200 : 409;
-    return 200;
-  });
+/**
+ * Takes the lock against a blob service whose renewals answer from `renewals` in turn (200 after
+ * the list runs out), lets it renew a few times, and reports what the lock saw.
+ * @param {(number | Error)[]} renewals
+ */
+async function renewing(renewals) {
+  let n = 0;
+  /** @type {typeof fetch} */
+  const fetchImpl = async (url, init = {}) => {
+    const action = /** @type {Record<string, string>} */ (init.headers)['x-ms-lease-action'];
+    if (!String(url).includes('comp=lease') || action === 'acquire') return new Response('', { status: 201 });
+    if (action !== 'renew') return new Response('', { status: 200 });
+    const answer = renewals[n++] ?? 200;
+    if (answer instanceof Error) throw answer;
+    return new Response('', { status: answer });
+  };
   /** @type {string[]} */
   const lines = [];
-  const lock = await acquireLock(CONTAINER, 'token', { fetchImpl, renewMs: 5, log: (l) => lines.push(l) });
-  await new Promise((r) => setTimeout(r, 60));
+  let lostCalls = 0;
+  const lock = await acquireLock(CONTAINER, 'token', { fetchImpl, renewMs: 5, log: (l) => lines.push(l), onLost: () => lostCalls++ });
+  await new Promise((r) => setTimeout(r, 80));
   await lock.release();
-  assert.ok(renewals >= 2);
-  assert.equal(lock.lost(), true);
-  assert.equal(lines.filter((l) => l.includes('could not renew')).length, 1);
+  return { lost: lock.lost(), lostCalls, lines, renewals: n };
+}
+
+test('keeps the lock through renewals that pass', async () => {
+  const r = await renewing([]);
+  assert.ok(r.renewals >= 3);
+  assert.equal(r.lost, false);
+  assert.equal(r.lostCalls, 0);
+});
+
+test('a renewal the blob service refuses loses the lock at once, and says so once', async () => {
+  const r = await renewing([200, 409]);
+  assert.equal(r.lost, true);
+  assert.equal(r.lostCalls, 1);
+  assert.equal(r.renewals, 2);
+  assert.deepEqual(r.lines.filter((l) => l.startsWith('error:')).length, 1);
+  assert.match(r.lines.find((l) => l.startsWith('error:')) ?? '', /lost the lock .*HTTP 409/);
+});
+
+test('one failed renewal is retried; two in a row lose the lock', async () => {
+  const once = await renewing([new TypeError('fetch failed'), 200, 503, 200]);
+  assert.equal(once.lost, false);
+  assert.equal(once.lines.filter((l) => l.startsWith('warning: could not renew')).length, 2);
+  const twice = await renewing([200, 503, new TypeError('fetch failed')]);
+  assert.equal(twice.lost, true);
+  assert.equal(twice.lostCalls, 1);
+  assert.match(twice.lines.find((l) => l.startsWith('error:')) ?? '', /2 renewals in a row failed, the last with fetch failed/);
 });

@@ -367,12 +367,14 @@ The first test:
    transfer and the results without the recipient email;
 6. the recipient key sends the same amount back to the donor account with the RIPE Atlas API.
 
-Step 6 runs in a `finally` block, so a test that fails after the credits moved still returns them.
-If the site said the transfer went through, the credits go back. If the test stopped before the
-site answered, they go back only when the recipient's balance shows them arrived. The return is
-one request, never retried; if it fails, the run's output says `RETURN FAILED` and how many credits
-to send back by hand. A passing run leaves both balances where they started, apart from whatever
-the accounts earn or spend on their own meanwhile.
+Step 6 runs in an `afterEach` hook with 3 minutes of its own, so a test that fails, times out or is
+stopped after the credits moved still returns them. The hook closes the test's browser windows
+before it looks at what happened, so a test that timed out cannot click **Transfer** once the hook
+has read the outcome. If the site said the transfer went through, the credits go back. If the
+test stopped before the site answered, they go back only when the recipient's balance shows them
+arrived. The return is one request, never retried; if it fails, the run's output says
+`RETURN FAILED` and how many credits to send back by hand. A passing run leaves both balances where
+they started, apart from whatever the accounts earn or spend on their own meanwhile.
 
 The second test pledges more than a key holds. It reads both balances and pays with the key whose
 balance is lower, asking for that balance plus one. The project names the other account. The site

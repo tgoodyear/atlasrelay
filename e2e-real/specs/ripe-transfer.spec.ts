@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { pledgeRow, postProjectInForm, postResults, saveProfile } from '../../web/e2e/ui';
 import { ripeAccounts, ripeTransferCredits, type RipeSide } from '../accounts';
 import { deleteBothProfiles, signedIn } from '../site';
@@ -13,8 +13,9 @@ import { pollUntil, ripeClient, shortSide, type RipeClient } from '../lib/ripe.m
 //
 // Each run nets to zero. The first test sends E2E_RIPE_TRANSFER_CREDITS (100 by default) from the
 // donor account through the site, checks the recipient's balance rose by that much, then sends the
-// same amount back from the recipient account with the RIPE Atlas API. The return runs in a
-// finally block, so a test that fails after the credits moved still returns them. The second test
+// same amount back from the recipient account with the RIPE Atlas API. The return runs in an
+// afterEach hook with a timeout of its own, so a test that fails, times out or is interrupted after
+// the credits moved still returns them. The second test
 // pledges one credit more than the poorer key holds, and checks that the site refuses and that no
 // transfer appears in either account's transaction log.
 //
@@ -54,6 +55,34 @@ test.beforeAll(async () => {
   note('both keys can read their balance and transfer credits');
 });
 
+/**
+ * Where a transfer submitted through the site stands, from the page: 'transferred' when the site
+ * said RIPE accepted it, 'refused' when it said nothing was sent, 'unknown' from the click until
+ * one of those appears (or for good, when neither does).
+ */
+type Outcome = 'not sent' | 'unknown' | 'transferred' | 'refused';
+
+/** What sendBack needs to return a transfer; the test updates outcome as it goes. */
+type Return = { from: Side; to: Side; amount: number; fromBefore: number; outcome: Outcome; alsoMoved?: () => Promise<boolean> };
+
+/** The running test's browser contexts and the transfer it may have made, for the hook below. */
+let pending: { contexts: BrowserContext[]; ret: Return } | null = null;
+
+// The credit return. A hook rather than a finally block: a test that times out is abandoned, and
+// its finally block may never run, while afterEach hooks still do (also when the run is
+// interrupted). It runs first, before the profiles are deleted, with 3 minutes of its own. The
+// contexts close before it reads the outcome: an abandoned test body keeps running, and once its
+// pages are gone it cannot click Transfer after the outcome was read. A close that fails cannot
+// keep the credits from going back.
+test.afterEach(async ({}, testInfo) => {
+  const p = pending;
+  pending = null;
+  if (!p) return;
+  testInfo.setTimeout(3 * 60_000);
+  for (const context of p.contexts) await context.close().catch(() => {});
+  await sendBack({ ...p.ret, testFailed: testInfo.status !== testInfo.expectedStatus });
+});
+
 test.beforeEach(deleteBothProfiles);
 test.afterEach(deleteBothProfiles);
 
@@ -80,27 +109,12 @@ async function postProjectFor(page: Page, account: string, credits: number, what
 }
 
 /**
- * Where a transfer submitted through the site stands, from the page: 'transferred' when the site
- * said RIPE accepted it, 'refused' when it said nothing was sent, 'unknown' from the click until
- * one of those appears (or for good, when neither does).
- */
-type Outcome = 'not sent' | 'unknown' | 'transferred' | 'refused';
-
-/**
  * Sends `amount` back from `from` to `to` when credits went `to` -> `from` through the site. Trusts
  * the site's 'transferred'; on 'unknown', sends only if `from`'s balance shows the credits arrived
  * and `alsoMoved`, when given, agrees. One transfer, never retried. Throws, unless the test already
  * failed, in which case it reports and leaves the test's own error to be the one shown.
  */
-async function sendBack(o: {
-  from: Side;
-  to: Side;
-  amount: number;
-  fromBefore: number;
-  outcome: Outcome;
-  testFailed: boolean;
-  alsoMoved?: () => Promise<boolean>;
-}): Promise<void> {
+async function sendBack(o: Return & { testFailed: boolean }): Promise<void> {
   if (o.outcome === 'not sent' || o.outcome === 'refused') {
     note(`return: nothing to return (${o.outcome})`);
     return;
@@ -132,67 +146,58 @@ test('donor pastes a RIPE Atlas key, the credits reach the researcher, and the r
   expect(before.donor, `the donor account holds fewer than the ${amount} credits a run sends; seed it (docs/RUNBOOK.md)`).toBeGreaterThanOrEqual(amount);
   const researcher = await signedIn(browser, 'researcher');
   const donor = await signedIn(browser, 'donor');
-  let outcome: Outcome = 'not sent';
-  let failed = false;
-  try {
-    let projectPath = '';
-    const resultsSummary = `Results of real-transfer test run ${run}.`;
+  const ret: Return = { from: 'recipient', to: 'donor', amount, fromBefore: before.recipient, outcome: 'not sent' };
+  pending = { contexts: [researcher.context, donor.context], ret };
+  let projectPath = '';
+  const resultsSummary = `Results of real-transfer test run ${run}.`;
 
-    await test.step('researcher puts the recipient RIPE account on the profile and posts a project', async () => {
-      projectPath = await postProjectFor(researcher.page, accounts.recipient.account, amount, 'real transfer');
-    });
+  await test.step('researcher puts the recipient RIPE account on the profile and posts a project', async () => {
+    projectPath = await postProjectFor(researcher.page, accounts.recipient.account, amount, 'real transfer');
+  });
 
-    await test.step('donor pastes the donor key, checks the balance, and transfers', async () => {
-      const { page } = donor;
-      await saveProfile(page, { displayName: names.donor, atlasEmail: '' });
-      await page.goto(projectPath);
-      const dialog = await openApiPledge(page, amount, accounts.donor.key);
-      await dialog.getByRole('button', { name: 'Check balance' }).click();
-      await expect(dialog.getByText(/^Balance: [\d,]+ credits$/)).toBeVisible();
-      outcome = 'unknown';
-      await dialog.getByRole('button', { name: `Transfer ${fmt(amount)} credits` }).click();
-      const done = page.getByRole('dialog', { name: 'Credits transferred' });
-      await expect(done.getByText(`RIPE Atlas accepted the transfer of ${fmt(amount)} credits. The pledge is confirmed.`)).toBeVisible({ timeout: 60_000 });
-      outcome = 'transferred';
-      note(`forward: the site reports ${amount} credits transferred`);
-      await done.getByRole('button', { name: 'Done' }).click();
-      await expect(pledgeRow(page, names.donor).getByText('Transferred via API')).toBeVisible();
-    });
+  await test.step('donor pastes the donor key, checks the balance, and transfers', async () => {
+    const { page } = donor;
+    await saveProfile(page, { displayName: names.donor, atlasEmail: '' });
+    await page.goto(projectPath);
+    const dialog = await openApiPledge(page, amount, accounts.donor.key);
+    await dialog.getByRole('button', { name: 'Check balance' }).click();
+    await expect(dialog.getByText(/^Balance: [\d,]+ credits$/)).toBeVisible();
+    ret.outcome = 'unknown';
+    await dialog.getByRole('button', { name: `Transfer ${fmt(amount)} credits` }).click();
+    const done = page.getByRole('dialog', { name: 'Credits transferred' });
+    await expect(done.getByText(`RIPE Atlas accepted the transfer of ${fmt(amount)} credits. The pledge is confirmed.`)).toBeVisible({ timeout: 60_000 });
+    ret.outcome = 'transferred';
+    note(`forward: the site reports ${amount} credits transferred`);
+    await done.getByRole('button', { name: 'Done' }).click();
+    await expect(pledgeRow(page, names.donor).getByText('Transferred via API')).toBeVisible();
+  });
 
-    await test.step('RIPE Atlas shows the credits in the recipient account', async () => {
-      const now = await pollUntil(() => api.recipient.balance(), (b) => b - before.recipient >= amount, { timeoutMs: 60_000 });
-      note(`forward: the recipient balance changed by ${now - before.recipient}`);
-      expect(now - before.recipient, 'the recipient account did not receive the credits').toBeGreaterThanOrEqual(amount);
-    });
+  await test.step('RIPE Atlas shows the credits in the recipient account', async () => {
+    const now = await pollUntil(() => api.recipient.balance(), (b) => b - before.recipient >= amount, { timeoutMs: 60_000 });
+    note(`forward: the recipient balance changed by ${now - before.recipient}`);
+    expect(now - before.recipient, 'the recipient account did not receive the credits').toBeGreaterThanOrEqual(amount);
+  });
 
-    await test.step('researcher sees the pledge confirmed and posts results', async () => {
-      const { page } = researcher;
-      await page.goto(projectPath);
-      // An API pledge is confirmed by the site when RIPE accepts it; the researcher has nothing to click.
-      await expect(pledgeRow(page, names.donor).getByText('Transferred via API')).toBeVisible();
-      await expect(page.locator('dl.kv')).toContainText(`Received${fmt(amount)}`);
-      await expect(page.locator('.pill-green', { hasText: 'Funded' })).toBeVisible();
-      const section = await postResults(page, { summary: resultsSummary, url: 'https://example.org/atlasrelay-e2e' });
-      await expect(section.getByText(resultsSummary)).toBeVisible();
-    });
+  await test.step('researcher sees the pledge confirmed and posts results', async () => {
+    const { page } = researcher;
+    await page.goto(projectPath);
+    // An API pledge is confirmed by the site when RIPE accepts it; the researcher has nothing to click.
+    await expect(pledgeRow(page, names.donor).getByText('Transferred via API')).toBeVisible();
+    await expect(page.locator('dl.kv')).toContainText(`Received${fmt(amount)}`);
+    await expect(page.locator('.pill-green', { hasText: 'Funded' })).toBeVisible();
+    const section = await postResults(page, { summary: resultsSummary, url: 'https://example.org/atlasrelay-e2e' });
+    await expect(section.getByText(resultsSummary)).toBeVisible();
+  });
 
-    await test.step('a visitor sees the transfer and the results, and not the recipient email', async () => {
-      const visitor = await browser.newContext({ baseURL: process.env.BASE_URL });
-      const page = await visitor.newPage();
-      await page.goto(projectPath);
-      await expect(pledgeRow(page, names.donor).getByText('Transferred via API')).toBeVisible();
-      await expect(page.getByText(resultsSummary)).toBeVisible();
-      expect((await page.locator('body').innerText()).toLowerCase().includes(accounts.recipient.account.toLowerCase()), 'the page shows the recipient email').toBe(false);
-      await visitor.close();
-    });
-  } catch (err) {
-    failed = true;
-    throw err;
-  } finally {
-    await researcher.context.close();
-    await donor.context.close();
-    await sendBack({ from: 'recipient', to: 'donor', amount, fromBefore: before.recipient, outcome, testFailed: failed });
-  }
+  await test.step('a visitor sees the transfer and the results, and not the recipient email', async () => {
+    const visitor = await browser.newContext({ baseURL: process.env.BASE_URL });
+    const page = await visitor.newPage();
+    await page.goto(projectPath);
+    await expect(pledgeRow(page, names.donor).getByText('Transferred via API')).toBeVisible();
+    await expect(page.getByText(resultsSummary)).toBeVisible();
+    expect((await page.locator('body').innerText()).toLowerCase().includes(accounts.recipient.account.toLowerCase()), 'the page shows the recipient email').toBe(false);
+    await visitor.close();
+  });
 });
 
 test('a pledge larger than the paying key\'s balance is refused and moves nothing', async ({ browser }) => {
@@ -210,68 +215,58 @@ test('a pledge larger than the paying key\'s balance is refused and moves nothin
   note(`short: the ${payer} key pays ${amount} credits, one more than its balance; the site's balance check should refuse`);
   const researcher = await signedIn(browser, 'researcher');
   const donor = await signedIn(browser, 'donor');
-  let outcome: Outcome = 'not sent';
-  let failed = false;
-  try {
-    let projectPath = '';
-    await test.step(`researcher puts the ${payee} RIPE account on the profile and posts a project`, async () => {
-      projectPath = await postProjectFor(researcher.page, accounts[payee].account, amount, 'short balance');
-    });
+  // Only if the refusal never came: credits that went payer -> payee go back. The payee may earn
+  // credits on its own, and the amount can be as small as 1, so its balance alone is not evidence:
+  // the payer's must have fallen too.
+  const ret: Return = {
+    from: payee,
+    to: payer,
+    amount,
+    fromBefore: before[payee],
+    outcome: 'not sent',
+    alsoMoved: async () => (await api[payer].balance()) < before[payer],
+  };
+  pending = { contexts: [researcher.context, donor.context], ret };
+  let projectPath = '';
+  await test.step(`researcher puts the ${payee} RIPE account on the profile and posts a project`, async () => {
+    projectPath = await postProjectFor(researcher.page, accounts[payee].account, amount, 'short balance');
+  });
 
-    await test.step(`donor pastes the ${payer} key and asks to transfer more than it holds`, async () => {
-      const { page } = donor;
-      await saveProfile(page, { displayName: names.donor, atlasEmail: '' });
-      await page.goto(projectPath);
-      const dialog = await openApiPledge(page, amount, accounts[payer].key);
-      await dialog.getByRole('button', { name: 'Check balance' }).click();
-      await expect(dialog.getByText(/\(less than the amount\)/)).toBeVisible();
-      outcome = 'unknown';
-      await dialog.getByRole('button', { name: `Transfer ${fmt(amount)} credits` }).click();
-      const error = dialog.locator('.alert-error');
-      await expect(error).toHaveText(new RegExp(`^Your RIPE Atlas balance is [\\d,]+ credits, less than the ${fmt(amount)} you want to send$`), { timeout: 60_000 });
-      outcome = 'refused';
-      note('short: the site refused before sending');
-      // Nothing moved, so the form stays open for the donor to correct, with the key cleared.
-      await expect(dialog.getByRole('heading', { name: 'Send credits' })).toBeVisible();
-      await expect(dialog.getByLabel('RIPE Atlas API key')).toHaveValue('');
-    });
+  await test.step(`donor pastes the ${payer} key and asks to transfer more than it holds`, async () => {
+    const { page } = donor;
+    await saveProfile(page, { displayName: names.donor, atlasEmail: '' });
+    await page.goto(projectPath);
+    const dialog = await openApiPledge(page, amount, accounts[payer].key);
+    await dialog.getByRole('button', { name: 'Check balance' }).click();
+    await expect(dialog.getByText(/\(less than the amount\)/)).toBeVisible();
+    ret.outcome = 'unknown';
+    await dialog.getByRole('button', { name: `Transfer ${fmt(amount)} credits` }).click();
+    const error = dialog.locator('.alert-error');
+    await expect(error).toHaveText(new RegExp(`^Your RIPE Atlas balance is [\\d,]+ credits, less than the ${fmt(amount)} you want to send$`), { timeout: 60_000 });
+    ret.outcome = 'refused';
+    note('short: the site refused before sending');
+    // Nothing moved, so the form stays open for the donor to correct, with the key cleared.
+    await expect(dialog.getByRole('heading', { name: 'Send credits' })).toBeVisible();
+    await expect(dialog.getByLabel('RIPE Atlas API key')).toHaveValue('');
+  });
 
-    await test.step('the site records nothing received and the pledge cancelled', async () => {
-      const project = (await (await donor.context.request.get(`/api${projectPath}`)).json()).project;
-      expect(project).toMatchObject({ creditsConfirmed: 0, creditsPending: 0 });
-      const mine = (await (await donor.context.request.get(`/api${projectPath}/pledges`)).json()).pledges as { status: string }[];
-      expect(mine.map((p) => p.status)).toEqual(['cancelled']);
-    });
+  await test.step('the site records nothing received and the pledge cancelled', async () => {
+    const project = (await (await donor.context.request.get(`/api${projectPath}`)).json()).project;
+    expect(project).toMatchObject({ creditsConfirmed: 0, creditsPending: 0 });
+    const mine = (await (await donor.context.request.get(`/api${projectPath}/pledges`)).json()).pledges as { status: string }[];
+    expect(mine.map((p) => p.status)).toEqual(['cancelled']);
+  });
 
-    await test.step('neither account shows a transfer, and the paying account kept its credits', async () => {
-      // RIPE lists a transfer 40 to 70 seconds after it moves the credits; wait that out.
-      await new Promise((r) => setTimeout(r, 90_000));
-      for (const side of [payer, payee]) {
-        const rows = await api[side].transfersSince(startedAt);
-        const sign = side === payer ? -1 : 1;
-        expect(rows.filter((t) => t.amount === sign * amount), `a transfer of ${amount} credits in the ${side} account's log`).toEqual([]);
-      }
-      const after = { donor: await api.donor.balance(), recipient: await api.recipient.balance() };
-      note(`short: balances changed by donor ${after.donor - before.donor}, recipient ${after.recipient - before.recipient}`);
-      expect(after[payer], `the ${payer} balance fell`).toBeGreaterThanOrEqual(before[payer]);
-    });
-  } catch (err) {
-    failed = true;
-    throw err;
-  } finally {
-    await researcher.context.close();
-    await donor.context.close();
-    // Only if the refusal never came: credits that went payer -> payee go back. The payee may earn
-    // credits on its own, and the amount can be as small as 1, so its balance alone is not
-    // evidence: the payer's must have fallen too.
-    await sendBack({
-      from: payee,
-      to: payer,
-      amount,
-      fromBefore: before[payee],
-      outcome,
-      testFailed: failed,
-      alsoMoved: async () => (await api[payer].balance()) < before[payer],
-    });
-  }
+  await test.step('neither account shows a transfer, and the paying account kept its credits', async () => {
+    // RIPE lists a transfer 40 to 70 seconds after it moves the credits; wait that out.
+    await new Promise((r) => setTimeout(r, 90_000));
+    for (const side of [payer, payee]) {
+      const rows = await api[side].transfersSince(startedAt);
+      const sign = side === payer ? -1 : 1;
+      expect(rows.filter((t) => t.amount === sign * amount), `a transfer of ${amount} credits in the ${side} account's log`).toEqual([]);
+    }
+    const after = { donor: await api.donor.balance(), recipient: await api.recipient.balance() };
+    note(`short: balances changed by donor ${after.donor - before.donor}, recipient ${after.recipient - before.recipient}`);
+    expect(after[payer], `the ${payer} balance fell`).toBeGreaterThanOrEqual(before[payer]);
+  });
 });

@@ -122,6 +122,7 @@ window set when it was created, and can be disabled or deleted on atlas.ripe.net
 Only the repository owner can make that workflow run. It has no pull request trigger of any kind,
 so a fork or a pull request cannot start it; every job checks the repository, the actor and the
 branch; and the job that gets an Azure token runs in the GitHub Environment `dev`, which only
-`main` may use and which waits for the owner's approval. The tests run in Azure rather than on a
-self-hosted runner, because a self-hosted runner in a public repository can be given work by a
-pull request from a fork.
+`main` may use and which waits for the owner's approval. The approval is on by default; the owner
+can turn it off with `scripts/bootstrap.sh dev --no-approval`, which leaves the other checks in
+place. The tests run in Azure rather than on a self-hosted runner, because a self-hosted runner in
+a public repository can be given work by a pull request from a fork.
