@@ -518,7 +518,10 @@ test('a test site build sends noindex on every response and keeps the other head
     const signedIn = signInConfig(config, signIn) as unknown as SwaConfig;
     assert.deepEqual(built.routes.filter((r) => r.route !== '/sitemap.xml'), signedIn.routes.filter((r) => r.route !== '/sitemap.xml'));
   }
-  assert.equal(TEST_ROBOTS_TXT, 'User-agent: *\nDisallow: /\n');
+  // Pages stay crawlable, so a search engine can see their noindex; only the API is disallowed.
+  assert.match(TEST_ROBOTS_TXT, /^User-agent: \*$/m);
+  assert.match(TEST_ROBOTS_TXT, /^Disallow: \/api\/$/m);
+  assert.doesNotMatch(TEST_ROBOTS_TXT, /^Disallow: \/$/m);
   assert.ok(!TEST_ROBOTS_TXT.includes('Sitemap'));
 });
 

@@ -7,7 +7,8 @@
 //
 //   - every response carries X-Robots-Tag: noindex, nofollow (staticwebapp.config.json
 //     globalHeaders), and every HTML page a robots meta tag saying the same;
-//   - robots.txt disallows everything and names no sitemap, /sitemap.xml answers 404, and the
+//   - robots.txt names no sitemap but lets crawlers in, because a crawler only sees noindex on a page
+//     it may fetch (dev was crawlable before), /sitemap.xml answers 404, and the
 //     IndexNow key file is left out (scripts/indexnow.mjs only ever submits atlasrelay.org);
 //   - every page starts with a banner saying it is a test site and linking to the real one.
 //
@@ -63,8 +64,13 @@ export function siteEnvHtml(html: string, env: SiteEnv): string {
     .replace(body, () => `<body>\n    ${bannerHtml()}`);
 }
 
-/** robots.txt for a test site: nothing may be crawled, and there is no sitemap. */
-export const TEST_ROBOTS_TXT = 'User-agent: *\nDisallow: /\n';
+/**
+ * robots.txt for a test site: no sitemap. Pages are not disallowed: a search engine only drops a
+ * page it has already indexed once it fetches it and sees noindex, which robots.txt would stop
+ * (https://developers.google.com/search/docs/crawling-indexing/block-indexing). The API stays
+ * disallowed, as on prod.
+ */
+export const TEST_ROBOTS_TXT = '# A test site: every page carries noindex, so crawlers may fetch them to see it.\nUser-agent: *\nDisallow: /api/\n';
 
 interface Route {
   route: string;

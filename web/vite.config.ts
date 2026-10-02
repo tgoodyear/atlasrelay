@@ -58,7 +58,7 @@ function signInProviders(): Plugin {
 
 // A test site's build (VITE_SITE_ENV set to an environment other than prod, see src/lib/siteEnv.ts):
 // adds the robots meta tag and the test site banner to index.html, which every page shell and the
-// API's project pages are made from, replaces robots.txt with one that disallows everything, and
+// API's project pages are made from, replaces robots.txt with one that names no sitemap, and
 // leaves out the IndexNow key file. A prod build (the default) is left exactly as it was.
 function siteEnvironment(): Plugin {
   let outDir = '';

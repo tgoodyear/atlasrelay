@@ -548,8 +548,9 @@ build puts a banner at the top of every page saying it is a test site, that its 
 and its credit transfers real, with a link to atlasrelay.org. It keeps dev out of search engines:
 `X-Robots-Tag: noindex, nofollow` on every response from the site (Static Web Apps does not add it
 to function responses), a `noindex, nofollow` robots meta tag on every page, including the
-server-rendered project pages, a `robots.txt` that disallows everything, `/sitemap.xml` answering
-404, and no IndexNow key file. `scripts/indexnow.mjs` only submits atlasrelay.org, after a prod
+server-rendered project pages, a `robots.txt` with no sitemap, `/sitemap.xml` answering 404, and
+no IndexNow key file. `robots.txt` does not disallow the pages: a search engine has to fetch a page
+to see its noindex, and dev was crawlable before. `scripts/indexnow.mjs` only submits atlasrelay.org, after a prod
 deploy. Without the variable, or with `prod`, the build is the production site, so the Deploy
 workflow does not set it.
 

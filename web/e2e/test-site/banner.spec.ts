@@ -40,9 +40,11 @@ test('moving around the app keeps the banner and the noindex tag', async ({ page
   await expect(page.locator('meta[name="robots"][data-site-env]')).toHaveCount(1);
 });
 
-test('robots.txt disallows everything, and the build has no sitemap route or IndexNow key', async ({ request }) => {
+test('robots.txt names no sitemap and keeps pages crawlable, and the build has no sitemap route or IndexNow key', async ({ request }) => {
   const robots = await (await request.get('/robots.txt')).text();
-  expect(robots).toBe('User-agent: *\nDisallow: /\n');
+  expect(robots).not.toContain('Sitemap');
+  expect(robots).not.toMatch(/^Disallow: \/$/m);
+  expect(robots).toMatch(/^Disallow: \/api\/$/m);
   const config = await (await request.get('/staticwebapp.config.json')).json();
   expect(config.globalHeaders['x-robots-tag']).toBe('noindex, nofollow');
   expect(config.globalHeaders['content-security-policy']).toContain("default-src 'self'");
