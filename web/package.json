@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test && tsc --noEmit -p e2e",
-    "test": "node --test --import tsx test/seo.test.ts test/telemetry.test.ts",
+    "test": "node --test --import tsx test/seo.test.ts test/telemetry.test.ts test/api.test.ts",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:flows": "playwright test -c playwright.flows.config.ts",

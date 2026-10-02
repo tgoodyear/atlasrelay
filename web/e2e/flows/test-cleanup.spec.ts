@@ -4,7 +4,7 @@ import { allRows, deleteRow, expect, postProject, putRow, row, test, type Person
 // local stack turns it on the way Bicep does outside prod (E2E_PROJECT_CLEANUP=1). That the route
 // does not exist without the setting is covered by the API's unit tests and scripts/check-params.sh.
 
-const cleanup = (who: { request: Person['request'] }, id: string) => who.request.delete(`/api/test/projects/${id}`, { headers: { 'content-type': 'application/json' } });
+const cleanup = (who: { request: Person['request'] }, id: string) => who.request.delete(`/api/test/projects/${id}`, { headers: { 'content-type': 'application/json' }, data: '{}' });
 
 /**
  * Move the project's deletion stamp back past the two minutes the API waits after closing it, as if

@@ -174,12 +174,15 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  // The API refuses any non-GET request that does not say application/json, body or not (see
-  // assertSameOriginWrite in api/src/lib/http.ts), so DELETE /api/me sends it with no body.
+  // The API refuses any non-GET request that does not say application/json (see
+  // assertSameOriginWrite in api/src/lib/http.ts). Static Web Apps drops the Content-Type of a
+  // request with no body before it reaches the API, so every write carries a JSON body, `{}` when
+  // there is nothing to send (DELETE /api/me).
   const method = (init.method ?? 'GET').toUpperCase();
   const mutating = method !== 'GET' && method !== 'HEAD';
   const res = await fetch(path, {
     ...init,
+    body: mutating && init.body == null ? '{}' : init.body,
     headers: { accept: 'application/json', ...(mutating || init.body ? { 'content-type': 'application/json' } : {}), ...(init.headers ?? {}) },
     credentials: 'same-origin',
   });
