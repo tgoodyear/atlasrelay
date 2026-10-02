@@ -93,21 +93,37 @@ async function remove(t, r) {
 // Every step leaves something the next run can find, so a run that stops part way can simply be run
 // again. The projects that lose a pledge are marked first, because once their pledge is gone nothing
 // would lead a later run back to them; if any cannot be marked, nothing is deleted. Then the pledges
-// and claim rows, then the project rows, and their owner index rows last: an index row with no
-// project behind it is skipped by every reader, while a project row with no index row would be a
-// live project its owner's dashboard, the open-project cap and profile deletion could not see.
-for (const id of plan.dirty) {
-  try {
-    await tables.projects.updateEntity({ partitionKey: 'project', rowKey: id, totalsDirty: true }, 'Merge');
-  } catch (err) {
-    failed += 1;
-    console.error(`[purge] could not mark project ${id} for a totals rebuild: HTTP ${err?.statusCode ?? 'error'}`);
+// and claim rows, and the same projects are marked again: a listing or dashboard that rebuilt their
+// totals in between counted the pledges still there and cleared the mark. If a pledge or claim row
+// could not be deleted, or a project not marked again, the run stops there: the test projects are
+// what a later run finds the accounts by, so they stay until everything else is gone. Then the
+// project rows, and their owner index rows last: an index row with no project behind it is skipped
+// by every reader, while a project row with no index row would be a live project its owner's
+// dashboard, the open-project cap and profile deletion could not see.
+async function markDirty() {
+  const unmarked = [];
+  for (const id of plan.dirty) {
+    try {
+      await tables.projects.updateEntity({ partitionKey: 'project', rowKey: id, totalsDirty: true }, 'Merge');
+    } catch (err) {
+      failed += 1;
+      unmarked.push(id);
+      console.error(`[purge] could not mark project ${id} for a totals rebuild: HTTP ${err?.statusCode ?? 'error'}`);
+    }
   }
+  return unmarked;
 }
+await markDirty();
 if (failed) die(`${failed} project(s) could not be marked for a totals rebuild; nothing was deleted. Run again to retry.`);
 const n = { pledges: 0, claims: 0, index: 0, projects: 0 };
 for (const r of plan.pledges) n.pledges += await remove(tables.pledges, r);
 for (const r of plan.claims) n.claims += await remove(tables.claims, r);
+const unmarked = await markDirty();
+if (unmarked.length) {
+  // Their pledges are gone, so a later run would not find these again: name them for the operator.
+  die(`${unmarked.length} project(s) lost a pledge but could not be marked again for a totals rebuild: ${unmarked.join(', ')}. Set totalsDirty on them by hand; no project rows were deleted, so a later run finishes the rest.`);
+}
+if (failed) die(`${failed} pledge or claim row(s) could not be deleted; no project rows were deleted, so the test accounts can still be found. Run again to retry.`);
 // An owner index row goes only once its project row is confirmed gone; a project row that could not
 // be deleted keeps its index row, so it stays visible to its owner until a later run finishes it.
 const stillThere = new Set();
