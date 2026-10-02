@@ -55,23 +55,39 @@ test('every spec still writes the description the purge recognises', () => {
 });
 
 test('the test accounts are found from their projects, and a real person who pledged to one is not', () => {
-  const found = detectTestAccounts(rows());
+  const r = rows();
+  // D without its pledge on H's project: every pledge on a test project.
+  r.pledges = r.pledges.filter((pl) => pl.rowKey !== 'p4');
+  const found = detectTestAccounts(r);
   // H pledged to a test project under their own name, so is not a donor candidate at all.
   assert.deepEqual(found, { accounts: ['D', 'R'], skipped: [] });
+});
+
+test('a test-named donor who also pledged elsewhere is left for the operator to name', () => {
+  // D pledged to t2 as "E2E donor bbb", and to H's project too. Anyone can type a test name, so
+  // purging D on that alone could delete a real person's pledges.
+  const found = detectTestAccounts(rows());
+  assert.deepEqual(found.accounts, ['R']);
+  assert.deepEqual(found.skipped, [{ id: 'D', reason: 'pledged to a test project under a test name and also to other projects; pass --account with every account to purge, this one included' }]);
+  // Named by the operator, it is purged with everything else.
+  assert.ok(keys(planPurge(rows(), ['R', 'D']).pledges).includes('h1/p4'));
 });
 
 test('an account that owns anything the tests did not post is left for the operator to name', () => {
   const r = rows();
   r.projects.push(proj('r9', 'R', 'My own study'));
+  r.pledges = r.pledges.filter((pl) => pl.rowKey !== 'p4');
   assert.deepEqual(detectTestAccounts(r), { accounts: ['D'], skipped: [{ id: 'R', reason: 'owns 1 project(s) the tests did not post; pass --account with every account to purge, this one included' }] });
   // A test-looking title without the tests' description is not a test project either.
   const r2 = rows();
+  r2.pledges = r2.pledges.filter((pl) => pl.rowKey !== 'p4');
   r2.projects.push({ ...proj('r8', 'R', 'E2E my own'), description: 'hand written' });
   assert.deepEqual(detectTestAccounts(r2).accounts, ['D']);
 });
 
 test('a person who pledged to a test project and later deleted their profile is not taken for the test donor', () => {
   const r = rows();
+  r.pledges = r.pledges.filter((pl) => pl.rowKey !== 'p4');
   // P pledged to a test project and to H's project, then deleted their profile: both rows say Anonymous.
   r.pledges.push({ partitionKey: 't1', rowKey: 'p6', donorId: 'P', donorName: DELETED_ACCOUNT_NAME });
   r.pledges.push({ partitionKey: 'h1', rowKey: 'p7', donorId: 'P', donorName: DELETED_ACCOUNT_NAME });
@@ -80,6 +96,7 @@ test('a person who pledged to a test project and later deleted their profile is 
   assert.deepEqual(found.skipped.map((x) => x.id), ['P']);
   // An Anonymous donor whose every pledge is on a test project is the test donor after a profile deletion.
   const r2 = rows();
+  r2.pledges = r2.pledges.filter((pl) => pl.rowKey !== 'p4');
   r2.pledges.push({ partitionKey: 't2', rowKey: 'p8', donorId: 'Q', donorName: DELETED_ACCOUNT_NAME });
   assert.deepEqual(detectTestAccounts(r2).accounts, ['D', 'Q', 'R']);
 });

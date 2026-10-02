@@ -51,7 +51,11 @@ export function detectTestAccounts(rows) {
     const named = pledges.some((pl) => s(pl.donorName).startsWith(TEST_DONOR_PREFIX));
     const onlyTests = pledges.every((pl) => testIds.has(pl.partitionKey));
     const anonymous = pledges.every((pl) => s(pl.donorName) === DELETED_ACCOUNT_NAME || s(pl.donorName).startsWith(TEST_DONOR_PREFIX));
-    if (named || (onlyTests && anonymous)) candidates.add(donor);
+    // Only a donor whose every pledge is on a test project is taken without asking. A test name is
+    // something anyone can type, so a donor who also pledged elsewhere is named by the operator,
+    // whatever the name says: purging them deletes those other pledges too.
+    if (onlyTests && (named || anonymous)) candidates.add(donor);
+    else if (named) skipped.push({ id: donor, reason: 'pledged to a test project under a test name and also to other projects; pass --account with every account to purge, this one included' });
     else if (anonymous) skipped.push({ id: donor, reason: 'pledged to a test project as Anonymous and also to other projects; pass --account with every account to purge, this one included' });
   }
   const accounts = [];

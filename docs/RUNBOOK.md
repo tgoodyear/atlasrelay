@@ -301,7 +301,8 @@ scripts/purge-test-data.sh dev --apply    # delete
 ```
 
 An account that owns any project the tests did not post is left out and named in the output, and so
-is a donor that pledged to a test project as Anonymous and also pledged elsewhere. Pass
+is a donor that pledged to a test project and also pledged elsewhere, whatever name it pledged
+under. Pass
 `--account <id>` (repeatable) to purge only the accounts you name instead of the ones it finds, so
 name every account you want purged. `/api/stats` is sent with `max-age=300`, so a browser can show
 the old home-page figures for up to five minutes, and once more after that while it fetches new
