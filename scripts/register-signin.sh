@@ -13,7 +13,9 @@
 #   Entra admin center.
 # GitHub: creates a GitHub App from a manifest; you click "Create GitHub App" on github.com.
 # Google, ORCID: prints what to register, then asks for the client id and, without echoing it,
-#   the client secret.
+#   the client secret. ORCID outside dev shares dev's client when dev has one: the id from dev's
+#   settings and the secret from dev's sign-in vault, with no prompt (each ORCID account has one
+#   public API client).
 #
 # Secrets go from the provider straight into the vault, on standard input: never printed, never on
 # a command line, never in a file. The client ids go to the settings file and the vault. Once
@@ -303,12 +305,38 @@ EOF
   put_client_id google "$(aget ATLASRELAY_GOOGLE_CLIENT_ID)"
 }
 
+# Takes another environment's ORCID client: its id from that environment's settings and its secret
+# from that environment's sign-in vault, piped into this one without being printed. Returns 1, so
+# the caller asks instead, when that environment has no ORCID registration to share.
+share_orcid_from() {
+  local from=$1 from_id from_vault from_sub name
+  name=$(signin_secret_name orcid)
+  from_id=$(ENV_FILE=".azure/$from/.env" aget ATLASRELAY_ORCID_CLIENT_ID)
+  from_vault=$(ENV_FILE=".azure/$from/.env" aget SIGNIN_KEY_VAULT_NAME)
+  from_sub=$(ENV_FILE=".azure/$from/.env" aget AZURE_SUBSCRIPTION_ID)
+  [ -n "$from_id" ] && [ -n "$from_vault" ] && [ -n "$from_sub" ] || return 1
+  az keyvault secret show --vault-name "$from_vault" --name "$name" --subscription "$from_sub" \
+    --query name -o tsv > /dev/null 2>&1 || return 1
+  echo "  sharing $from's ORCID client $from_id"
+  az keyvault secret show --vault-name "$from_vault" --name "$name" --subscription "$from_sub" \
+    --query value -o tsv --only-show-errors | put_secret "$name"
+  aset ATLASRELAY_ORCID_CLIENT_ID "$from_id"
+  put_client_id orcid "$from_id"
+  PENDING+=("ORCID client $from_id (orcid.org, Developer tools): Redirect URIs must include $(callback_list orcid), next to $from's")
+}
+
 register_orcid() {
   echo "== ORCID: $NAME"
   [ -z "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] ||
     PENDING+=("ORCID client $(aget ATLASRELAY_ORCID_CLIENT_ID) (orcid.org, Developer tools): Redirect URIs must include $(callback_list orcid)")
   if [ -n "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] && [ "$ROTATE" != true ] && has_secret "$(signin_secret_name orcid)"; then
     echo "  already registered; use --rotate for a new secret"
+    return 0
+  fi
+  # Each ORCID account has one public API client, so the environments share dev's: its client id,
+  # and its secret copied from dev's sign-in vault to this one. The client's redirect URIs must
+  # list this environment's callback too, which only orcid.org can change.
+  if [ "$ENV_NAME" != dev ] && [ "$ROTATE" != true ] && share_orcid_from dev; then
     return 0
   fi
   cat << EOF
