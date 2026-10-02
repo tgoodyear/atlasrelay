@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc && node bundle.mjs",
     "watch": "concurrently -k -n tsc,bundle \"tsc -w --noEmit --preserveWatchOutput\" \"node bundle.mjs --watch\"",
-    "test": "tsc --noEmit && node --test --import tsx test/validate.test.ts test/source.test.ts test/atlas.test.ts test/receipts.test.ts test/pledges.test.ts test/projects.test.ts test/views.test.ts test/sitemap.test.ts test/projectHtml.test.ts test/projectPage.test.ts test/telemetry.test.ts test/tables.test.ts test/auth.test.ts",
+    "test": "tsc --noEmit && node --test --import tsx test/validate.test.ts test/source.test.ts test/atlas.test.ts test/receipts.test.ts test/pledges.test.ts test/projects.test.ts test/views.test.ts test/sitemap.test.ts test/projectHtml.test.ts test/projectPage.test.ts test/telemetry.test.ts test/tables.test.ts test/auth.test.ts test/testCleanup.test.ts",
     "start": "func start"
   },
   "dependencies": {

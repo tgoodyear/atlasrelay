@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 import { confirmReceived, markSent, pledgeByHand, pledgeRow, postProjectInForm, postResults, saveProfile } from '../../web/e2e/ui';
 import { RESEARCHER_ATLAS_EMAIL, type Role } from '../accounts';
-import { deleteBothProfiles, signedIn } from '../site';
+import { cleanUpRun, deleteBothProfiles, signedIn } from '../site';
 
 // The whole flow on a deployed site, as the two test accounts signed in with Microsoft
 // (global-setup.ts), with the same page steps as the local full-flow tests (web/e2e/ui.ts): the
@@ -11,9 +11,9 @@ import { deleteBothProfiles, signedIn } from '../site';
 // what the donor says, and the researcher's RIPE NCC Access email is on a reserved domain.
 // ripe-transfer.spec.ts moves real credits.
 //
-// Both profiles are deleted before and after the run. Deleting a profile closes its open projects
-// and shows its projects and pledges as Anonymous; the site has no way to delete a project, so
-// each run leaves one closed, anonymous project behind on the environment.
+// Both profiles are deleted before and after the run. Before that, the project the run posted is
+// deleted through the test-only cleanup route (site.ts, cleanUpRun), whether the test passed or
+// not, so a run leaves nothing on the environment's listing or home-page figures.
 
 const run = process.env.E2E_RUN_ID?.slice(-12) || randomBytes(4).toString('hex');
 const names: Record<Role, string> = { researcher: `E2E researcher ${run}`, donor: `E2E donor ${run}` };
@@ -24,6 +24,8 @@ const resultsSummary = `Results of full-flow test run ${run}.`;
 test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(deleteBothProfiles);
+// Hooks run in the order they are declared, and a failing one does not stop the next.
+test.afterAll(async ({}, testInfo) => cleanUpRun(run, testInfo));
 test.afterAll(deleteBothProfiles);
 
 test('researcher posts a project, donor pledges by hand, researcher confirms and posts results', async ({ browser }) => {
@@ -44,7 +46,7 @@ test('researcher posts a project, donor pledges by hand, researcher confirms and
     projectPath = await postProjectInForm(researcher.page, {
       title,
       summary: `Automated full-flow test run ${run}. Nothing is measured.`,
-      description: `Posted by the Atlas Relay full-flow tests (run ${run}).\n\nThe tests delete this account's profile when they finish, which closes the project.`,
+      description: `Posted by the Atlas Relay full-flow tests (run ${run}).\n\nThe tests delete this project when they finish.`,
       creditsRequested: credits,
       tags: ['ping'],
     });

@@ -276,9 +276,37 @@ tests use (`web/e2e/ui.ts`). It has three spec files:
 - `ripe-transfer.spec.ts`: real RIPE Atlas transfers between two RIPE Atlas test accounts, through
   the site's "Transfer now with an API key" form. See [Real RIPE Atlas transfers](#real-ripe-atlas-transfers).
 
-Each spec file deletes both profiles before and after its tests (`ripe-transfer.spec.ts` around
-each test); the site cannot delete a project, so each run leaves its projects behind, closed and
-shown as Anonymous.
+Each spec file deletes both profiles before and after its tests (`ripe-transfer.spec.ts` and
+`manual-verify.spec.ts` around each test). It also deletes the projects the run posted, through the
+test-only route `DELETE /api/test/projects/{id}`, whether or not the test passed, and prints
+`[cleanup] deleted N project(s): <ids>`. A run that could not delete one fails and names it. The
+route closes a project on the first call and deletes it on a later one, at least two minutes on, so
+no pledge request that started before the close can still be running. The two specs that move real
+credits close each test's project in a hook after the credit return and before the profiles go, and
+wait for the deletions once, in an `afterAll` hook, which runs even when an `afterEach` hook timed
+out (the credit return, at worst), which skips the hooks declared after it. The cleanup adds about
+two minutes to each spec file. The route exists only where `E2E_PROJECT_CLEANUP=1`,
+which the environment's stack sets on every environment except prod
+([Test cleanup](ARCHITECTURE.md#test-cleanup)). A run against an environment last deployed before
+that fails its cleanup with HTTP 404 until `scripts/provision.sh` deploys it again.
+
+Projects left by runs from before the tests cleaned up after themselves are removed with
+`scripts/purge-test-data.sh`, signed in as the operator (Storage Table Data Contributor on the data
+account). It finds the test accounts from the projects the tests posted, prints what it would
+delete, and deletes only with `--apply`. It refuses prod.
+
+```bash
+scripts/purge-test-data.sh dev            # dry run: accounts, counts, what is left afterwards
+scripts/purge-test-data.sh dev --apply    # delete
+```
+
+An account that owns any project the tests did not post is left out and named in the output, and so
+is a donor that pledged to a test project and also pledged elsewhere, whatever name it pledged
+under. Pass
+`--account <id>` (repeatable) to purge only the accounts you name instead of the ones it finds, so
+name every account you want purged. `/api/stats` is sent with `max-age=300`, so a browser can show
+the old home-page figures for up to five minutes, and once more after that while it fetches new
+ones.
 
 Each run tests the build it deploys. `.github/workflows/e2e-dev.yml`:
 

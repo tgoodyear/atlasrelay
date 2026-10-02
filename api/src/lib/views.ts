@@ -52,6 +52,8 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
   //   totalsCheckedAt  maintenance bookkeeping for the listing's refresh rotation.
   //   totalsDirty      maintenance bookkeeping: totals that could not be written and need redoing.
   //   storedAt         the storage row's own write time, used only by profile deletion.
+  //   createdByTests   the test-environment marker the cleanup route checks (lib/testCleanup.ts).
+  //   deletingSince    when that route closed the project to delete it.
   const {
     ownerId: _ownerId,
     moderationClosed: _moderationClosed,
@@ -59,6 +61,8 @@ export function publicProject(p: Project, live?: { confirmed: number; pending: n
     totalsCheckedAt: _totalsCheckedAt,
     totalsDirty: _totalsDirty,
     storedAt: _storedAt,
+    createdByTests: _createdByTests,
+    deletingSince: _deletingSince,
     ...rest
   } = p;
   return {
