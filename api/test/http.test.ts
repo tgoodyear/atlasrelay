@@ -82,11 +82,23 @@ test('a JSON request without Sec-Fetch-Site passes, as curl and older browsers s
   assert.equal(reached, true);
 });
 
-test('GET and HEAD are not checked', async () => {
+test('GET and HEAD need no Content-Type, and pass when same-origin, typed by the user or from a non-browser', async () => {
   for (const method of ['GET', 'HEAD']) {
-    const { res, reached } = await run(request(method, { 'sec-fetch-site': 'cross-site', 'content-type': 'text/plain' }), async () => json({ ok: true }));
-    assert.equal(res.status, 200, method);
-    assert.equal(reached, true, method);
+    for (const headers of [{}, { 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }, { 'content-type': 'text/plain' }] as Record<string, string>[]) {
+      const { res, reached } = await run(request(method, headers), async () => json({ ok: true }));
+      assert.equal(res.status, 200, `${method} ${JSON.stringify(headers)}`);
+      assert.equal(reached, true, `${method} ${JSON.stringify(headers)}`);
+    }
+  }
+});
+
+test('a cross-site or same-site GET is refused too, because some GET handlers write', async () => {
+  for (const method of ['GET', 'HEAD']) {
+    for (const site of ['cross-site', 'same-site']) {
+      const { res, reached } = await run(request(method, { 'sec-fetch-site': site }), async () => json({ ok: true }));
+      assert.equal(res.status, 403, `${method} ${site}`);
+      assert.equal(reached, false, `${method} ${site}`);
+    }
   }
 });
 
@@ -109,6 +121,7 @@ test('every API response carries nosniff: success, refusals, handler errors and 
     [request('POST', { 'content-type': 'text/plain' }), async () => json({})],
     [request('GET'), async () => { throw new HttpError(404, 'Not found'); }],
     [request('GET'), async () => { throw new Error('boom'); }],
+    [request('GET', { 'sec-fetch-site': 'cross-site' }), async () => json({})],
   ];
   for (const [req, inner] of cases) {
     const sink = { info: () => {}, warn: () => {}, error: () => {} };

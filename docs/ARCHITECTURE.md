@@ -325,14 +325,18 @@ at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code 
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
 the SPA shows its own sign-in prompt.
 
-Every state-changing request (any method but GET, HEAD and OPTIONS) must carry
+When the browser sends `Sec-Fetch-Site`, it must be `same-origin`, on every method, or the request
+gets a 403. GET is not exempt, because some GET handlers write: `GET /api/me` creates the profile
+row, and the project and dashboard reads tidy up expired rows. A GET or HEAD may also say `none`,
+which only the user can cause (a typed URL or a bookmark); `same-site` and `cross-site` are always
+refused. Every other method (anything but GET, HEAD and OPTIONS) must also carry
 `Content-Type: application/json`; parameters such as `charset=utf-8` are allowed and the media type
-is compared case-insensitively. Anything else gets a 415. When the browser sends `Sec-Fetch-Site`,
-it must be `same-origin`, or the request gets a 403; `same-site`, `cross-site` and `none` are all
-refused, since the site's pages call the API only with `fetch()` from the same origin. Requests
-without the header (curl, Playwright's request API, older browsers) are judged on the Content-Type
+is compared case-insensitively. Anything else gets a 415, and `none` is refused for these methods,
+since the site's pages call the API only with `fetch()` from the same origin. Requests without
+`Sec-Fetch-Site` (curl, Playwright's request API, older browsers) are judged on the Content-Type
 alone. Both checks run in `handle()` (`api/src/lib/http.ts`), before sign-in, the body or storage
-is read, and a source test fails if a state-changing route is registered without `handle()`.
+is read. A source test fails if any API route other than the read-only sitemap and project page is
+registered without `handle()`.
 Body-less requests such as `DELETE /api/me` follow the same rule, so the web client and the test
 harnesses send the header on every mutating call. Together these stop another site from posting a
 form or a no-CORS `fetch()` to the API with a visitor's sign-in cookie: a form cannot send
@@ -757,8 +761,8 @@ docs/     this spec, RIPE research notes, runbook
   endpoints for browser telemetry), HSTS, `X-Content-Type-Options`,
   `Referrer-Policy`, `Permissions-Policy`.
 - API responses set `X-Content-Type-Options: nosniff` themselves, since `globalHeaders` do not
-  reach the linked backend. State-changing API requests must be `application/json` and, when the
-  browser says, same-origin; see [API](#api-api-a-function-app-linked-to-the-site).
+  reach the linked backend. API requests must be same-origin when the browser says where they came
+  from, and state-changing ones must be `application/json`; see [API](#api-api-a-function-app-linked-to-the-site).
 - Input validation on every write; string lengths, enums, URL scheme allow-list
   (`https:` only), integer ranges.
 - Storage accounts: public blob access off, TLS 1.2 minimum, shared-key access off. See

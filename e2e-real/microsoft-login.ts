@@ -143,7 +143,7 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
         await page.locator('[data-value="PhoneAppOTP"]').first().click();
         break;
       case 'mfa-registration':
-        throw new Error('Microsoft asks this account to register a sign-in method. Give it a TOTP seed (docs/RUNBOOK.md).');
+        throw new Error('Microsoft asks this account to register a sign-in method: it has no authenticator app enrolled with Microsoft. Enroll one and store its seed (docs/RUNBOOK.md, "Test account TOTP seeds").');
       case 'password-change':
         throw new Error('Microsoft asks this account to change its password. Sign in once by hand, set a new one, and run scripts/set-test-users.sh again.');
       case 'pick-account': {

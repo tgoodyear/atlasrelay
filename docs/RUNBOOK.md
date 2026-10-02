@@ -788,8 +788,11 @@ When the execution did not succeed, the workflow prints the platform's events fo
 pulled, container started, exit code) from Log Analytics in its log, which covers a container that
 never started. The events take a few minutes to arrive.
 
-Microsoft sign-in errors name the page they stopped on: "register" or "verify" means the account
-has no TOTP seed in the vault, so give it one ([Test account TOTP seeds](#test-account-totp-seeds));
+Microsoft sign-in errors name the page they stopped on: "register a sign-in method" means
+Microsoft has no authenticator app enrolled for the account, so enroll one and store its seed;
+"no TOTP seed in the vault" means Microsoft asked for a code and the vault has no seed for that
+account, so store the seed it was enrolled with (both in
+[Test account TOTP seeds](#test-account-totp-seeds));
 "change its password"
 means the password expired or was reset, so sign in by hand, set a new one and run
 `scripts/set-test-users.sh dev` again.
