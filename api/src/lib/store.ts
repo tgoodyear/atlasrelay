@@ -627,7 +627,22 @@ export async function getCleanupTombstone(projectId: string): Promise<{ ownerId:
   return e ? { ownerId: String(e.ownerId ?? '') } : null;
 }
 
-export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }> {
+/**
+ * A conditional write that keeps the project closed and changes nothing else (updatedAt is written
+ * back as it was). Rejects with 412 when the row changed since `etag`; returns the new version, which
+ * the deletion then requires of the project row.
+ */
+export async function fenceProject(id: string, etag: string, updatedAt: string): Promise<string> {
+  const res = await (await table('projects')).updateEntity(
+    { partitionKey: PROJECTS_PK, rowKey: id, status: 'closed', updatedAt } as TableEntity,
+    'Merge',
+    { etag },
+  );
+  if (!res.etag) throw new HttpError(409, 'The project could not be checked. Try again.');
+  return res.etag;
+}
+
+export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>, projectEtag?: string): Promise<{ pledges: number; claims: number }> {
   const [pledgesT, claimsT, projectsT] = await Promise.all([table('pledges'), table(CLAIMS_TABLE), table('projects')]);
   const id = project.id;
   let pledges = 0;
@@ -644,7 +659,14 @@ export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerI
   // The project row before its index entry: an index entry with no project row is skipped by every
   // reader, while a project row with no index entry would be a live project its owner's dashboard,
   // the open-project cap and profile deletion could no longer see.
-  await deleteRow(projectsT, PROJECTS_PK, id);
+  // Conditional on the version the caller fenced, when it gave one: a write that landed after the
+  // fence (a reopen, say) fails this with 412, the project stays, and the tombstone lets the next
+  // call decide again and finish.
+  try {
+    await projectsT.deleteEntity(PROJECTS_PK, id, projectEtag ? { etag: projectEtag } : undefined);
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 404)) throw err;
+  }
   await deleteRow(projectsT, ownerIndexPk(project.ownerId), id);
   await sweepPledgesAndSlots();
   await deleteRow(claimsT, cleanupPk(id), 'tombstone');

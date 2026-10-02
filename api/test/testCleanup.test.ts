@@ -46,20 +46,25 @@ function fakeStore(
   row: Project | null,
   pledges: Pledge[] = [],
   slots: { donorId: string; pledgeId: string; createdAt: string }[] = [],
-  opts: { tombstone?: { ownerId: string }; fenceFails?: boolean } = {},
+  opts: { tombstone?: { ownerId: string }; fenceFails?: boolean; deleteFails?: boolean } = {},
 ) {
   const calls: string[] = [];
   const store: TestCleanupStore = {
     fence: async (id, etag) => {
       calls.push(`fence ${id} ${etag}`);
       if (opts.fenceFails) throw Object.assign(new Error('Precondition failed'), { statusCode: 412 });
+      return 'W/"v2"';
     },
     getCleanupTombstone: async (id) => { calls.push(`tombstone ${id}`); return opts.tombstone ?? null; },
     getProject: async (id) => { calls.push(`get ${id}`); return row; },
     listPledges: async (id) => { calls.push(`pledges ${id}`); return pledges; },
     listPledgeSlots: async (id) => { calls.push(`slots ${id}`); return slots; },
     beginDeletion: async (id) => { calls.push(`close ${id}`); },
-    deleteProjectRecords: async (p) => { calls.push(`delete ${p.id} ${p.ownerId}`); return { pledges: pledges.length, claims: 2 }; },
+    deleteProjectRecords: async (p, etag) => {
+      calls.push(`delete ${p.id} ${p.ownerId}${etag ? ` ${etag}` : ''}`);
+      if (opts.deleteFails) throw Object.assign(new Error('Precondition failed'), { statusCode: 412 });
+      return { pledges: pledges.length, claims: 2 };
+    },
   };
   return { store, calls };
 }
@@ -189,7 +194,7 @@ test('the owner of a marked project deletes it with everything under it', async 
   const { store, calls } = fakeStore(project(), [pledge(), stale], slots);
   const result = await deleteTestProject(request(OWNER), store, ON);
   assert.deepEqual(result, { deleted: ID, pledges: 2, claims: 2 });
-  assert.deepEqual(calls, [`get ${ID}`, `pledges ${ID}`, `slots ${ID}`, `fence ${ID} W/"v1"`, `delete ${ID} owner1`]);
+  assert.deepEqual(calls, [`get ${ID}`, `pledges ${ID}`, `slots ${ID}`, `fence ${ID} W/"v1"`, `delete ${ID} owner1 W/"v2"`]);
 });
 
 test('a cleanup that failed after the project row went is finished by its owner, and by nobody else', async () => {
@@ -199,6 +204,14 @@ test('a cleanup that failed after the project row went is finished by its owner,
   const theirs = fakeStore(null, [], [], { tombstone: { ownerId: 'owner1' } });
   assert.equal(await status(deleteTestProject(request(OTHER), theirs.store, ON)), 404);
   assert.equal(theirs.calls.some((c) => c.startsWith('delete')), false);
+});
+
+test('a write after the fence stops the project row being deleted', async () => {
+  // The project row is deleted only at the version the fence wrote; a reopen after it fails that with
+  // 412, which the caller sees as 409 and retries, finishing through the tombstone.
+  const { store, calls } = fakeStore(project(), [], [], { deleteFails: true });
+  assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 409);
+  assert.ok(calls.includes(`delete ${ID} owner1 W/"v2"`));
 });
 
 test('a project that changed after the checks is not deleted', async () => {

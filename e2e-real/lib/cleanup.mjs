@@ -65,14 +65,20 @@ export async function deleteRunProjects(io, run, { wait: waitOut = true } = {}) 
   const wait = io.wait ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   for (const { id } of mine) {
     let status = await io.remove(id);
-    if (status === 409) io.log(`[cleanup] project ${id} is closed; deleting it once no pledge to it can still be running`);
-    if (status === 409 && !waitOut) continue;
+    let started = false;
     // One loop, with a budget for each kind of answer, so the two can come in any order. A 409 is the
     // API's wait; a server error can leave a cleanup part done, which the API finishes on the next
     // call, even once the project row is gone.
     let waits = 0;
     let errors = 0;
-    while ((status === 409 && waits < WAIT_RETRIES) || (status >= 500 && errors < SERVER_ERROR_RETRIES)) {
+    for (;;) {
+      if (status === 409 && !started) {
+        started = true;
+        io.log(`[cleanup] project ${id} is closed; deleting it once no pledge to it can still be running`);
+      }
+      // Without waiting, a 409 at any point means the close has started, which is all that is asked.
+      if (status === 409 && !waitOut) break;
+      if (!((status === 409 && waits < WAIT_RETRIES) || (status >= 500 && errors < SERVER_ERROR_RETRIES))) break;
       if (status === 409) {
         waits += 1;
         await wait(WAIT_MS);
@@ -82,6 +88,7 @@ export async function deleteRunProjects(io, run, { wait: waitOut = true } = {}) 
       }
       status = await io.remove(id);
     }
+    if (status === 409 && !waitOut) continue;
     if (status === 200) {
       deleted.push(id);
       continue;

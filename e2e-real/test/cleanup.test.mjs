@@ -138,6 +138,13 @@ test('without waiting, a 409 starts the close and is not an error', async () => 
   await assert.rejects(deleteRunProjects(other.io, RUN, { wait: false }), /p1 \(HTTP 403\)/);
 });
 
+test('without waiting, a 409 after a server error is still only the close starting', async () => {
+  const { io, calls, waits } = site({ p1: [500, 409, 200] });
+  assert.deepEqual(await deleteRunProjects(io, RUN, { wait: false }), ['p2']);
+  assert.deepEqual(calls, ['p1', 'p1', 'p2']);
+  assert.equal(waits.length, 1, 'one short wait for the server error, none for the 409');
+});
+
 test('the retries outlast the two minutes the API waits after closing', async () => {
   const { WAIT_MS } = await import('../lib/cleanup.mjs');
   const store = readFileSync(new URL('../../api/src/lib/store.ts', import.meta.url), 'utf8');

@@ -538,7 +538,8 @@ the close may still take a slot and transfer, and two minutes is the bound on a 
 that the pledge slots and the confirmation lock already rely on. The edit form cannot reopen a
 project while it waits, and if a reopen slipped in anyway the next call starts the wait again. As a
 last guard it also refuses while a transfer is in flight or a slot taken in the last two minutes has
-no pledge row yet, and it deletes only after a conditional write on the version it checked. It
+no pledge row yet, and it deletes only after a conditional write on the version it checked; the
+project row itself is then deleted only at the version that write produced. It
 writes a tombstone in the claims table (`cleanup-<id>`) before deleting anything and removes it
 last, so the owner can finish a cleanup that failed part way by calling again, even once the
 project row is gone. It deletes the pledges, the donors' pledge slots, the

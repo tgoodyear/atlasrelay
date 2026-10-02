@@ -54,10 +54,11 @@ export interface TestCleanupStore {
    * A conditional write on the version just read, keeping the project closed. Rejects (412) when the
    * project changed since, so nothing that happened after the checks below can be deleted under.
    */
-  fence(id: string, etag: string): Promise<void>;
+  fence(id: string, etag: string, updatedAt: string): Promise<string>;
   /** The owner recorded when a cleanup started and has not finished (store.getCleanupTombstone). */
   getCleanupTombstone(id: string): Promise<{ ownerId: string } | null>;
-  deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }>;
+  /** With projectEtag, the project row is deleted only at that version (412 otherwise). */
+  deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>, projectEtag?: string): Promise<{ pledges: number; claims: number }>;
 }
 
 export interface TestCleanupResult {
@@ -83,7 +84,8 @@ export interface TestCleanupResult {
  *    unbroken closed period because the edit path refuses to reopen a project that carries it, and
  *    a reopen that slipped in anyway (one that read the project before the stamp) leaves it open,
  *    which starts the wait again. The pledge rows are checked as well, and the deletion goes ahead
- *    only after a conditional write on the version all of this was decided on.
+ *    only after a conditional write on the version all of this was decided on; the project row is
+ *    then deleted only at the version that write produced.
  *
  * A tombstone written before anything is deleted lets the owner finish a cleanup that failed part way,
  * even after the project row went.
@@ -124,15 +126,16 @@ export async function deleteTestProject(
   }
   // Everything above was decided on the version read at the top. A reopen or any other write since
   // then means the decision may no longer hold, so the next call decides again.
+  // The project row itself is then deleted only at the version the fence wrote, so a write landing
+  // after the fence (a reopen that read the row before it was stamped) stops the deletion too.
   if (!project.etag) throw new HttpError(409, 'The project could not be checked. Try again.');
+  const changed = (err: unknown) => (err as { statusCode?: number }).statusCode === 412;
   try {
-    await store.fence(id, project.etag);
+    const fenced = await store.fence(id, project.etag, project.updatedAt);
+    const removed = await store.deleteProjectRecords(project, fenced);
+    return { deleted: id, ...removed };
   } catch (err) {
-    if ((err as { statusCode?: number }).statusCode === 412) {
-      throw new HttpError(409, 'The project changed while it was being deleted. Try again.');
-    }
+    if (changed(err)) throw new HttpError(409, 'The project changed while it was being deleted. Try again.');
     throw err;
   }
-  const removed = await store.deleteProjectRecords(project);
-  return { deleted: id, ...removed };
 }
