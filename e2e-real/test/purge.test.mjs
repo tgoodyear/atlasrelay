@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { DELETED_ACCOUNT_NAME, TEST_DESCRIPTION_PREFIX, detectTestAccounts, isTestProject, planPurge } from '../lib/purge.mjs';
+import { DELETED_ACCOUNT_NAME, TEST_DESCRIPTION_PREFIX, detectTestAccounts, isDataAccount, isTestProject, planPurge } from '../lib/purge.mjs';
 
 // Dev as the tests left it: the researcher R posted two test projects and the donor D pledged to
 // both; a real person H posted a project of their own, and pledged to one test project; D also
@@ -104,6 +104,27 @@ test('an orphan pledge with no project row is deleted, not marked for a totals r
   const plan = planPurge(r, ['R', 'D']);
   assert.ok(keys(plan.pledges).includes('gone1/p9'));
   assert.deepEqual(plan.dirty, ['h1']);
+});
+
+test('a purged account\'s pledge slot goes even when its project row is already gone', () => {
+  const r = rows();
+  r.claims.push({ partitionKey: 'gone1', rowKey: 'D' }, { partitionKey: 'gone1', rowKey: 'X' }, { partitionKey: 'receipt-H', rowKey: 'D' });
+  const plan = planPurge(r, ['R', 'D']);
+  assert.ok(keys(plan.claims).includes('gone1/D'));
+  // Not another donor's slot, nor another owner's receipt whose transaction id reads like an account id.
+  assert.ok(!keys(plan.claims).includes('gone1/X'));
+  assert.ok(!keys(plan.claims).includes('receipt-H/D'));
+});
+
+test('only the named environment\'s own data account passes', () => {
+  assert.ok(isDataAccount('statlasrelaydevab12cd', 'dev'));
+  // An environment whose name begins another's cannot reach that one's account.
+  assert.ok(!isDataAccount('statlasrelaydevab12cd', 'd'));
+  assert.ok(!isDataAccount('statlasrelaydevab12c', 'dev'));
+  assert.ok(!isDataAccount('statlasrelaydevab12cde', 'dev'));
+  assert.ok(!isDataAccount('stfnatlasrelaydevab12', 'dev'));
+  assert.ok(!isDataAccount('statlasrelayprodab12cd', 'prod'));
+  assert.ok(!isDataAccount('', 'dev'));
 });
 
 test('the plan touches nothing when no account is given', () => {

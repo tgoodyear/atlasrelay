@@ -65,6 +65,28 @@ export function detectTestAccounts(rows) {
   return { accounts, skipped: skipped.sort((a, b) => (a.id < b.id ? -1 : 1)) };
 }
 
+/** Claim partitions that are not a project's pledge slots (api/src/lib/store.ts). */
+const NOT_SLOTS = ['confirm-', 'receipt-', 'cleanup-'];
+
+/**
+ * A donor's pledge slot on a project: partition = project id, row = donor id.
+ * @param {Row} r a row of the claims table
+ */
+function isPledgeSlot(r) {
+  return !NOT_SLOTS.some((prefix) => r.partitionKey.startsWith(prefix));
+}
+
+/**
+ * Whether `account` is `env`'s data account: statlasrelay + env + a 6-character suffix
+ * (infra/main.bicep). The whole name is checked, so an environment whose name begins another's
+ * (`d` and `dev`) cannot reach the other's account, and prod's never passes.
+ * @param {string} account
+ * @param {string} env
+ */
+export function isDataAccount(account, env) {
+  return env !== 'prod' && /^[a-z][a-z0-9]{0,5}$/.test(env) && new RegExp(`^statlasrelay${env}[a-z0-9]{6}$`).test(account);
+}
+
 /**
  * Every row to delete, and the projects whose cached totals have to be rebuilt because a pledge
  * of theirs goes. The table rows are what the API's own cleanup removes per project
@@ -87,8 +109,9 @@ export function planPurge(rows, accounts) {
     || [...acct].some((a) => r.partitionKey === `receipt-${a}`)
     // Tombstones of cleanups that did not finish (api/src/lib/store.ts, getCleanupTombstone).
     || (r.partitionKey.startsWith('cleanup-') && (gone.has(r.partitionKey.slice('cleanup-'.length)) || acct.has(s(r.ownerId))))
-    // The accounts' pledge slots on projects that stay.
-    || (acct.has(r.rowKey) && rows.projects.some((p) => p.partitionKey === 'project' && p.rowKey === r.partitionKey)));
+    // The accounts' pledge slots (partition = project id, row = donor id), whether or not the
+    // project is still there: a cleanup that stopped part way can leave a slot with no project row.
+    || (isPledgeSlot(r) && acct.has(s(r.rowKey))));
   const remaining = rows.projects.filter((r) => r.partitionKey === 'project' && !gone.has(r.rowKey));
   // Only projects that still exist have totals to rebuild. A pledge partition with no project row
   // (left by a cleanup that stopped part way) is deleted with the rest, and marking it would fail.

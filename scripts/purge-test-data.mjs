@@ -12,7 +12,7 @@
 // Prints account and project ids and counts, never names, emails or titles.
 import { TableClient, odata } from '@azure/data-tables';
 import { AzureCliCredential } from '@azure/identity';
-import { detectTestAccounts, planPurge } from '../e2e-real/lib/purge.mjs';
+import { detectTestAccounts, isDataAccount, planPurge } from '../e2e-real/lib/purge.mjs';
 
 const log = (line) => console.log(`[purge] ${line}`);
 function die(message) {
@@ -34,7 +34,7 @@ const account = process.env.PURGE_STORAGE_ACCOUNT ?? '';
 if (!/^[a-z][a-z0-9]{0,5}$/.test(env)) die('PURGE_ENV must name the environment');
 if (env === 'prod') die('refusing to run against prod');
 // The data account is statlasrelay<env><suffix> (infra/main.bicep), so a prod account cannot pass.
-if (!account.startsWith(`statlasrelay${env}`) || account.startsWith('statlasrelayprod')) {
+if (!isDataAccount(account, env) || account.startsWith('statlasrelayprod')) {
   die(`storage account ${account || '(unset)'} is not ${env}'s data account`);
 }
 
