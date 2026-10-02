@@ -170,11 +170,36 @@ signin_providers() {
     secrets=$(az keyvault secret list --vault-name "$vault" "${AZ_SUB[@]}" --query '[].name' -o tsv) ||
       { echo "error: can't list the secrets in $vault" >&2; return 1; }
     for name in ${providers//,/ }; do
+      # Microsoft has no secret: the site signs in with its managed identity.
+      [ "$name" = aad ] && continue
       grep -qx "$(signin_secret_name "$name")" <<< "$secrets" ||
         { echo "error: $name has a client id but no secret in $vault; run scripts/register-signin.sh $ENV_NAME $name" >&2; return 1; }
     done
   fi
   echo "$providers"
+}
+# Client ids are kept in the sign-in vault as well as the settings file (signin-<provider>-client-id,
+# written by scripts/register-signin.sh), so a fresh copy of the settings, in another worktree or on
+# another machine, does not deploy the site without its registrations. A client id missing from
+# the file is taken from the vault; one that differs is reported and the file's value is kept.
+sync_client_ids() {
+  local vault p key tag file stored
+  vault=$(aget SIGNIN_KEY_VAULT_NAME) || return 1
+  [ -n "$vault" ] || return 0
+  for p in $SIGNIN_PROVIDER_KEYS; do
+    key="ATLASRELAY_${p%%:*}_CLIENT_ID"
+    tag=$(tr 'A-Z' 'a-z' <<< "${p%%:*}")
+    file=$(aget "$key") || return 1
+    stored=$(az keyvault secret show --vault-name "$vault" --name "signin-$tag-client-id" "${AZ_SUB[@]}" \
+      --query value -o tsv 2> /dev/null) || stored=""
+    [ -n "$stored" ] || continue
+    if [ -z "$file" ]; then
+      aset "$key" "$stored" || return 1
+      echo "took $key from $vault"
+    elif [ "$file" != "$stored" ]; then
+      echo "warning: $key is $file here but $stored in $vault; keeping $file. Run scripts/register-signin.sh $ENV_NAME to settle it." >&2
+    fi
+  done
 }
 # A sign-in vault deleted with its environment stays recoverable, with its secrets, for its
 # retention period, and its name cannot be reused until then (purge protection, signin.bicep).
@@ -221,6 +246,7 @@ provision() {
   esac
   sync_budget_start || die "could not work out the budget's start date"
   recover_signin_vault || die "could not recover the deleted sign-in vault"
+  sync_client_ids || die "could not read the client ids from the sign-in vault"
   local providers previous p
   providers=$(signin_providers) || die "the sign-in settings are incomplete"
   # Removing a registration's settings breaks sign-in with it, and with GitHub and Microsoft too

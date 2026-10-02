@@ -46,12 +46,16 @@ const REQUIRED: readonly ProviderId[] = ['github', 'aad'];
 const NEVER: readonly string[] = ['facebook', 'twitter', 'apple'];
 
 /**
- * The app settings the custom providers read, as Static Web Apps sees them. infra/app.bicep writes
- * them from the environment's settings (ATLASRELAY_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET).
+ * The app settings the custom providers read, as Static Web Apps sees them. infra/signin.bicep
+ * writes them: client ids as values, secrets as Key Vault references into the sign-in vault.
+ * Microsoft has no secret: OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID is the setting Static Web Apps
+ * reserves for signing in with a user-assigned managed identity that the Entra app registration
+ * trusts (https://learn.microsoft.com/azure/static-web-apps/authentication-custom, "Use a managed
+ * identity instead of a secret").
  */
 export const APP_SETTINGS: Record<ProviderId, { clientId: string; clientSecret: string }> = {
   github: { clientId: 'SIGNIN_GITHUB_CLIENT_ID', clientSecret: 'SIGNIN_GITHUB_CLIENT_SECRET' },
-  aad: { clientId: 'SIGNIN_MICROSOFT_CLIENT_ID', clientSecret: 'SIGNIN_MICROSOFT_CLIENT_SECRET' },
+  aad: { clientId: 'SIGNIN_MICROSOFT_CLIENT_ID', clientSecret: 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID' },
   google: { clientId: 'SIGNIN_GOOGLE_CLIENT_ID', clientSecret: 'SIGNIN_GOOGLE_CLIENT_SECRET' },
   orcid: { clientId: 'SIGNIN_ORCID_CLIENT_ID', clientSecret: 'SIGNIN_ORCID_CLIENT_SECRET' },
 };
@@ -201,9 +205,13 @@ function identityProviders(on: ProviderId[]) {
           openIdConnectConfiguration: { wellKnownOpenIdConfiguration: ORCID_DISCOVERY },
         },
         login: {
-          // ORCID puts the iD in "sub". Using "name" here keeps the iD out of the account name the
-          // site stores and shows; people with no public name get a placeholder (api auth.ts).
-          nameClaimType: 'name',
+          // The account name (userDetails) is the ORCID iD, the "sub" claim. Static Web Apps refuses
+          // a sign-in with no account name ("403: We need an email address or a handle from your
+          // login service", seen on dev in 2026-10 with the default claim), and ORCID's token has no
+          // email or preferred_username; its "name" is there only when the record makes it public.
+          // The iD is public by design. It never becomes the public display name (api views.ts);
+          // the app offers the person's name from the token instead (web lib/displayName.ts).
+          nameClaimType: 'sub',
           // The only scope ORCID's OpenID Connect discovery lists.
           scopes: ['openid'],
           loginParameterNames: [],

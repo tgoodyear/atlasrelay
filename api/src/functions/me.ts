@@ -1,6 +1,6 @@
 import { app, HttpRequest } from '@azure/functions';
 import { requireAccount } from '../lib/account';
-import { handle, json, readJson } from '../lib/http';
+import { handle, HttpError, json, readJson } from '../lib/http';
 import { Project, anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listPledges, listProjectsByOwner, patchProject, pledgeRacedDeletion, projectMayHaveRacedDeletion, updateUser } from '../lib/store';
 import { email, httpsUrl, str } from '../lib/validate';
 import { initialDisplayName, privateUser } from '../lib/views';
@@ -27,6 +27,8 @@ app.http('me-put', {
     const body = await readJson(req);
     const patch: Record<string, string> = {};
     const displayName = str(body, 'displayName', { max: 80 });
+    // Shown to everyone, and the app may fill it from the sign-in's claims: no control characters.
+    if (displayName && /[\x00-\x1f\x7f]/.test(displayName)) throw new HttpError(400, 'Display name must not contain control characters');
     if (displayName !== undefined) patch.displayName = displayName || initialDisplayName(p.userDetails, p.userId, p.identityProvider);
     const atlasEmail = email(body, 'atlasEmail');
     if (atlasEmail !== undefined) patch.atlasEmail = atlasEmail;

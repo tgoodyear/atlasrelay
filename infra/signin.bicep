@@ -25,6 +25,9 @@ param staticWebAppPrincipalId string
 @description('Object id of the Owner who registers the apps and writes their secrets (scripts/register-signin.sh). Empty: nobody.')
 param operatorPrincipalId string = ''
 
+@description('Client id of the user-assigned identity the site signs in to Microsoft Entra with (app.bicep)')
+param signinIdentityClientId string
+
 @description('Log Analytics workspace that receives the vault\'s audit log')
 param workspaceId string
 
@@ -127,11 +130,18 @@ resource swa 'Microsoft.Web/staticSites@2024-04-01' existing = {
 var vaultUri = 'https://${vault.name}${environment().suffixes.keyvaultDns}/'
 var providers = [for p in items(secretNames): p.key]
 var configured = filter(providers, p => !empty(clientIds[?p] ?? ''))
+// Microsoft has no secret: the site proves itself with its user-assigned identity, named by the
+// setting Static Web Apps reserves for that (staticwebapp.config.json names it as the "secret").
 var settings = reduce(
-  map(configured, p => {
-    '${settingNames[p]}_CLIENT_ID': clientIds[p]
-    '${settingNames[p]}_CLIENT_SECRET': '@Microsoft.KeyVault(SecretUri=${vaultUri}secrets/${secretNames[p]}/)'
-  }),
+  map(configured, p => p == 'aad'
+    ? {
+        '${settingNames[p]}_CLIENT_ID': clientIds[p]
+        OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: signinIdentityClientId
+      }
+    : {
+        '${settingNames[p]}_CLIENT_ID': clientIds[p]
+        '${settingNames[p]}_CLIENT_SECRET': '@Microsoft.KeyVault(SecretUri=${vaultUri}secrets/${secretNames[p]}/)'
+      }),
   {},
   (all, one) => union(all, one)
 )

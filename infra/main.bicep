@@ -222,6 +222,7 @@ module signin 'signin.bicep' = {
     location: location
     staticWebAppName: app.outputs.staticWebAppName
     staticWebAppPrincipalId: app.outputs.staticWebAppPrincipalId
+    signinIdentityClientId: app.outputs.signinIdentityClientId
     operatorPrincipalId: operatorPrincipalId
     workspaceId: platform.outputs.workspaceId
     clientIds: signinClientIds
@@ -340,6 +341,9 @@ output APPLICATIONINSIGHTS_CONNECTION_STRING string = platform.outputs.appInsigh
 output SITE_HOSTNAME string = siteHostname
 // The vault scripts/register-signin.sh writes the sign-in client secrets to.
 output SIGNIN_KEY_VAULT_NAME string = signin.outputs.vaultName
+// The identity the site signs in to Microsoft Entra with; scripts/register-signin.sh makes the Entra
+// app registration trust it.
+output SIGNIN_IDENTITY_PRINCIPAL_ID string = app.outputs.signinIdentityPrincipalId
 // Set these as the domain's name servers at the registrar (prod only).
 output NAME_SERVERS string = isProd && !empty(dnsZoneName) ? join(dns!.outputs.nameServers, ' ') : ''
 // The full-flow test harness; empty when it is not deployed. scripts/bootstrap.sh copies them to

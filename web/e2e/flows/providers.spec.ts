@@ -29,6 +29,37 @@ test('an ORCID account is its own account, even with the same id as a GitHub one
   await expect(visitor.page.getByText('Signed in with ORCID as Josiah Carberry')).toBeVisible();
 });
 
+test('a new Google account takes the name from the sign-in, and the dashboard says so once', async ({ signedOut }) => {
+  const visitor = await signedOut();
+  const id = `e2e${uid()}`;
+  await signInAgain(visitor.context, {
+    identityProvider: 'google', userId: id, userDetails: `${id}@gmail.com`, userRoles: ['anonymous', 'authenticated'],
+    claims: [{ typ: 'name', val: 'Ada Lovelace' }, { typ: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress', val: `${id}@gmail.com` }],
+  });
+  await visitor.page.goto('/dashboard');
+  const prompt = visitor.page.getByRole('status').filter({ hasText: "This is how you'll appear on projects and pledges" });
+  await expect(prompt).toContainText('Ada Lovelace');
+  await expect(prompt.getByRole('link', { name: 'change' })).toHaveAttribute('href', '/profile');
+  expect((await (await visitor.request.get('/api/me')).json()).user.displayName).toBe('Ada Lovelace');
+  await prompt.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(prompt).toHaveCount(0);
+  // Saved once: another visit neither changes the name nor shows the prompt again.
+  await visitor.page.reload();
+  await expect(visitor.page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  await expect(visitor.page.getByText("This is how you'll appear")).toHaveCount(0);
+});
+
+test('a Google account with no name claim keeps the placeholder', async ({ signedOut }) => {
+  const visitor = await signedOut();
+  const id = `e2e${uid()}`;
+  await signInAgain(visitor.context, { identityProvider: 'google', userId: id, userDetails: `${id}@gmail.com`, userRoles: ['anonymous', 'authenticated'], claims: [] });
+  await visitor.page.goto('/dashboard');
+  await expect(visitor.page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  const me = (await (await visitor.request.get('/api/me')).json()).user;
+  expect(me.displayName).toBe(`user-${id.slice(0, 6)}`);
+  await expect(visitor.page.getByText("This is how you'll appear")).toHaveCount(0);
+});
+
 test('an ORCID account with no public name starts with a placeholder, never the iD', async ({ signedOut }) => {
   const visitor = await signedOut();
   const id = `e2e${uid()}`;

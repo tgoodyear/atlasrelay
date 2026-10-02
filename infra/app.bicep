@@ -108,6 +108,17 @@ resource operatorTables 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
 
 // ---------- web ----------
 
+// The identity the site signs in to Microsoft Entra with, in place of a client secret: the site's
+// Entra app registration trusts it through a federated identity credential that
+// scripts/register-signin.sh adds (https://learn.microsoft.com/azure/static-web-apps/authentication-custom,
+// "Use a managed identity instead of a secret"). Assigned to this site only, as Microsoft asks: any
+// resource holding it could get tokens as the app registration.
+resource signinIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-${baseName}-signin'
+  location: location
+  tags: tags
+}
+
 // Standard, because only Standard can link a Function App as the API (api.bicep).
 resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
   name: swaName
@@ -117,10 +128,15 @@ resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
     name: 'Standard'
     tier: 'Standard'
   }
-  // Reads the sign-in client secrets from the environment's sign-in vault (signin.bicep), through
-  // Key Vault references in the app settings. Only Standard has a managed identity.
+  // System-assigned: reads the sign-in client secrets from the environment's sign-in vault
+  // (signin.bicep), through Key Vault references in the app settings, which use it by default.
+  // User-assigned: signs in to Microsoft Entra as the site's app registration (above). Only
+  // Standard has managed identities.
   identity: {
-    type: 'SystemAssigned'
+    type: 'SystemAssigned, UserAssigned'
+    userAssignedIdentities: {
+      '${signinIdentity.id}': {}
+    }
   }
   properties: {
     allowConfigFileUpdates: true
@@ -144,6 +160,8 @@ output tableNames string[] = tableNames
 output staticWebAppName string = swa.name
 output staticWebAppHostname string = swa.properties.defaultHostname
 output staticWebAppPrincipalId string = swa.identity.principalId
+output signinIdentityClientId string = signinIdentity.properties.clientId
+output signinIdentityPrincipalId string = signinIdentity.properties.principalId
 // Address the platform serves this site on, used for the apex A record (Azure DNS alias records
 // cannot target a static site, so the apex needs a real address). Read through reference()
 // because the Bicep type for staticSites does not declare stableInboundIP, though the API

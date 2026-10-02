@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalUrl, DEFAULT_DESCRIPTION, documentTitle, HOME_TITLE, META, renderShell, ROOT_END, ROOT_START, SHELLS, SITE_ORIGIN, type Shell } from '../src/lib/pages.ts';
 import * as server from '../../api/src/lib/projectHtml.ts';
+import { nameFromClaims, shouldPrefill, usableName } from '../src/lib/displayName.ts';
 import { loginUrl, offeredProviders, parseSignIn, providerLabel, providerList, safeReturnPath, signInConfig } from '../src/lib/signin.ts';
 import { extractLocs, findKey } from '../../scripts/indexnow.mjs';
 
@@ -384,6 +385,8 @@ test('a custom sign-in build opens the providers it names, and keeps GitHub and 
   const idp = all.auth.identityProviders;
   assert.deepEqual(Object.keys(idp).sort(), ['azureActiveDirectory', 'customOpenIdConnectProviders', 'github', 'google']);
   assert.deepEqual(idp.github.registration, { clientIdSettingName: 'SIGNIN_GITHUB_CLIENT_ID', clientSecretSettingName: 'SIGNIN_GITHUB_CLIENT_SECRET' });
+  // Microsoft signs in with the site's managed identity, through the setting Static Web Apps reserves for it.
+  assert.equal(idp.azureActiveDirectory.registration.clientSecretSettingName, 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID');
   assert.deepEqual(idp.google.registration, { clientIdSettingName: 'SIGNIN_GOOGLE_CLIENT_ID', clientSecretSettingName: 'SIGNIN_GOOGLE_CLIENT_SECRET' });
   assert.equal(idp.azureActiveDirectory.registration.openIdIssuer, 'https://login.microsoftonline.com/common/v2.0');
   const orcid = idp.customOpenIdConnectProviders.orcid;
@@ -391,8 +394,9 @@ test('a custom sign-in build opens the providers it names, and keeps GitHub and 
   // ORCID accepts only client_secret_post at its token endpoint.
   assert.deepEqual(orcid.registration.clientCredential, { method: 'ClientSecretPost', clientSecretSettingName: 'SIGNIN_ORCID_CLIENT_SECRET' });
   assert.deepEqual(orcid.login.scopes, ['openid']);
-  // The iD is the "sub" claim; the account name must not be it, since it seeds the public display name.
-  assert.equal(orcid.login.nameClaimType, 'name');
+  // The account name is the iD ("sub"): Static Web Apps refuses a sign-in without one, and ORCID's
+  // token carries no email or preferred_username, and "name" only for a public record.
+  assert.equal(orcid.login.nameClaimType, 'sub');
   // Only setting names, never values, are in the file that ships with the site.
   assert.doesNotMatch(JSON.stringify(all.auth), /"(clientSecret|clientId)"\s*:/);
   for (const [route, target] of [['/login/google', 'google'], ['/login/orcid', 'orcid'], ['/login', 'github'], ['/login/microsoft', 'aad']]) {
@@ -435,4 +439,40 @@ test('sign-in buttons match the build, and return paths stay on the site', () =>
     assert.equal(safeReturnPath(bad), '/dashboard', String(bad));
   }
   assert.equal(loginUrl('orcid', '/projects/abc'), '/.auth/login/orcid?post_login_redirect_uri=%2Fprojects%2Fabc');
+});
+
+// ---------- display name from the sign-in ----------
+
+test('a new account is offered the name its provider gives, never an email address or an ORCID iD', () => {
+  const google = [
+    { typ: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress', val: 'someone@gmail.com' },
+    { typ: 'name', val: 'Ada  Lovelace' },
+    { typ: 'given_name', val: 'Ada' },
+  ];
+  assert.equal(nameFromClaims('google', google), 'Ada Lovelace');
+  // ORCID: "name", else given and family names; nothing when the record keeps them private.
+  assert.equal(nameFromClaims('orcid', [{ typ: 'sub', val: '0000-0002-1825-0097' }, { typ: 'name', val: 'Josiah Carberry' }]), 'Josiah Carberry');
+  assert.equal(nameFromClaims('orcid', [{ typ: 'given_name', val: 'Josiah' }, { typ: 'family_name', val: 'Carberry' }]), 'Josiah Carberry');
+  assert.equal(nameFromClaims('orcid', [{ typ: 'sub', val: '0000-0002-1825-0097' }]), '');
+  // Microsoft's claim types.
+  assert.equal(nameFromClaims('aad', [{ typ: 'name', val: 'Grace Hopper' }]), 'Grace Hopper');
+  assert.equal(nameFromClaims('aad', [{ typ: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname', val: 'Grace' }, { typ: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname', val: 'Hopper' }]), 'Grace Hopper');
+  // GitHub accounts already start with the username.
+  assert.equal(nameFromClaims('github', [{ typ: 'name', val: 'The Octocat' }]), '');
+  // Never an address, an iD, an over-long or empty value; no claims at all from the built-in providers.
+  assert.equal(nameFromClaims('google', [{ typ: 'name', val: 'someone@gmail.com' }]), '');
+  assert.equal(nameFromClaims('orcid', [{ typ: 'name', val: 'https://orcid.org/0000-0002-1825-0097' }]), '');
+  assert.equal(nameFromClaims('google', [{ typ: 'name', val: 'x'.repeat(81) }]), '');
+  assert.equal(nameFromClaims('google', [{ typ: 'name', val: '  ' }]), '');
+  assert.equal(nameFromClaims('aad', undefined), '');
+  assert.equal(usableName('Ada\nLovelace\x07'), 'Ada Lovelace');
+});
+
+test('the name is offered once, to a profile that has never been saved', () => {
+  const fresh = { displayName: 'user-abc123', createdAt: '2026-10-02T00:00:00Z', updatedAt: '2026-10-02T00:00:00Z' };
+  assert.equal(shouldPrefill(fresh, 'Ada Lovelace'), true);
+  assert.equal(shouldPrefill({ ...fresh, updatedAt: '2026-10-02T00:01:00Z' }, 'Ada Lovelace'), false);
+  assert.equal(shouldPrefill({ ...fresh, displayName: 'Ada Lovelace' }, 'Ada Lovelace'), false);
+  assert.equal(shouldPrefill(fresh, ''), false);
+  assert.equal(shouldPrefill({ displayName: 'x' }, 'Ada Lovelace'), false);
 });

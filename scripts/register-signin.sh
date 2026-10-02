@@ -61,8 +61,8 @@ callback() { echo "https://$HOST/.auth/login/$1/callback"; }
 
 # The vault comes with the stack. An environment provisioned before it existed gets it now.
 VAULT=$(aget SIGNIN_KEY_VAULT_NAME)
-if [ -z "$VAULT" ]; then
-  echo "== deploying the stack, for the sign-in vault"
+if [ -z "$VAULT" ] || [ -z "$(aget SIGNIN_IDENTITY_PRINCIPAL_ID)" ]; then
+  echo "== deploying the stack, for the sign-in vault and identity"
   provision
   VAULT=$(aget SIGNIN_KEY_VAULT_NAME)
   [ -n "$VAULT" ] || die "the deployment did not report a sign-in vault"
@@ -72,13 +72,15 @@ fi
 # for a few minutes, since the operator's role on a new vault takes a moment to apply. The value
 # is held in a shell variable, never in a file or on a command line (printf is a builtin).
 put_secret() {
-  local name=$1 value attempt
+  local name=$1 value attempt provider
+  provider=${name#signin-}; provider=${provider%-client-secret}
   IFS= read -r -d '' value || true
   value=${value%$'\n'}
   [ -n "$value" ] || die "no value for $name"
   for attempt in $(seq 1 10); do
     if printf '%s' "$value" | az keyvault secret set --vault-name "$VAULT" --name "$name" --file /dev/stdin \
-      --encoding utf-8 "${AZ_SUB[@]}" -o none --only-show-errors; then
+      --encoding utf-8 --content-type "text/plain; client secret" --tags kind=client-secret "provider=$provider" \
+      "${AZ_SUB[@]}" -o none --only-show-errors; then
       unset value
       echo "  stored $name in $VAULT"
       return 0
@@ -91,12 +93,23 @@ put_secret() {
   die "could not write $name to $VAULT"
 }
 
+# Records a provider's client id in the vault too, next to its secret, so the settings file is not
+# the only copy (scripts/lib/env.sh reads it back when the file has none). A client id is public.
+put_client_id() {
+  local provider=$1 value=$2 tag
+  tag=$provider; [ "$tag" = aad ] && tag=microsoft
+  az keyvault secret set --vault-name "$VAULT" --name "signin-$tag-client-id" --value "$value" \
+    --content-type "text/plain; public client id" --tags kind=client-id "provider=$tag" \
+    "${AZ_SUB[@]}" -o none --only-show-errors
+  echo "  recorded the client id in $VAULT"
+}
+
 # ---------- Microsoft ----------
 
 # Microsoft Graph's delegated sign-in permissions: openid, profile, email.
 GRAPH_APP=00000003-0000-0000-c000-000000000000
 register_aad() {
-  local app_id object_id body logo token secret keep
+  local app_id object_id body logo token principal fic existing
   echo "== Microsoft: $NAME"
   app_id=$(aget ATLASRELAY_MICROSOFT_CLIENT_ID)
   object_id=""
@@ -118,7 +131,7 @@ register_aad() {
     web: {
       redirectUris: [$cb],
       homePageUrl: "https://atlasrelay.org",
-      implicitGrantSettings: {enableIdTokenIssuance: false, enableAccessTokenIssuance: false}
+      implicitGrantSettings: {enableIdTokenIssuance: true, enableAccessTokenIssuance: false}
     },
     info: {
       marketingUrl: "https://atlasrelay.org/how-it-works",
@@ -134,8 +147,11 @@ register_aad() {
       ]
     }]
   }')
+  # ID tokens on: Static Web Apps asks Microsoft for "code id_token" (posted back to the callback).
+  # Without them Microsoft answers the callback with an error and the site shows "401:
+  # Unauthorized" after a successful sign-in (seen on dev, 2026-10).
   az rest --method patch --url "$GRAPH/applications/$object_id" --headers Content-Type=application/json --body "$body" -o none
-  echo "  name, accounts, redirect URI $(callback aad), links and sign-in permissions set"
+  echo "  name, accounts, redirect URI $(callback aad), ID tokens, links and sign-in permissions set"
   # The publisher domain shown on the consent screen. Microsoft Graph treats it as read-only
   # ("Property 'publisherDomain' is read-only and cannot be set", 2026-10), so it is set once in
   # the admin center, and checked here.
@@ -163,21 +179,28 @@ register_aad() {
       --body "$(jq -n --arg a "$app_id" '{appId: $a}')" -o none
     echo "  service principal created"
   fi
-  # A new secret every run. It goes straight to the vault; the previous one stays valid, so the
-  # site keeps signing people in until it reads the new one, and anything older is removed.
-  secret=$(az rest --method post --url "$GRAPH/applications/$object_id/addPassword" --headers Content-Type=application/json \
-    --body "$(jq -n --arg d "Static Web Apps sign-in $(date -u +%Y-%m-%d)" --arg e "$(date -u -v+24m +%Y-%m-%dT%H:%M:%SZ 2> /dev/null || date -u -d '+24 months' +%Y-%m-%dT%H:%M:%SZ)" \
-      '{passwordCredential: {displayName: $d, endDateTime: $e}}')" --query secretText -o tsv)
-  printf '%s' "$secret" | put_secret "$(signin_secret_name aad)"
-  unset secret
-  keep=2
-  az rest --method get --url "$GRAPH/applications/$object_id" --query 'passwordCredentials' -o json |
-    jq -r --argjson keep "$keep" 'sort_by(.startDateTime) | reverse | .[$keep:] | .[].keyId' |
-    while read -r key; do
-      az rest --method post --url "$GRAPH/applications/$object_id/removePassword" --headers Content-Type=application/json \
-        --body "$(jq -n --arg k "$key" '{keyId: $k}')" -o none
-      echo "  removed an older secret"
-    done
+  # No client secret: the app trusts the site's user-assigned identity (infra/app.bicep) through a
+  # federated identity credential, and the site signs in with that identity's token
+  # (https://learn.microsoft.com/azure/static-web-apps/authentication-custom, "Use a managed
+  # identity instead of a secret").
+  principal=$(aget SIGNIN_IDENTITY_PRINCIPAL_ID)
+  [ -n "$principal" ] || die "no SIGNIN_IDENTITY_PRINCIPAL_ID; run scripts/provision.sh $ENV_NAME first"
+  fic=$(jq -n --arg n "static-web-apps-$ENV_NAME" --arg i "https://login.microsoftonline.com/$(aget AZURE_TENANT_ID)/v2.0" --arg s "$principal" \
+    '{name: $n, issuer: $i, subject: $s, audiences: ["api://AzureADTokenExchange"], description: "Sign-in identity of the static web app (id-atlasrelay-*-signin)"}')
+  existing=$(az rest --method get --url "$GRAPH/applications/$object_id/federatedIdentityCredentials" \
+    --query "value[?name=='static-web-apps-$ENV_NAME'].id | [0]" -o tsv)
+  if [ -n "$existing" ]; then
+    az rest --method patch --url "$GRAPH/applications/$object_id/federatedIdentityCredentials/$existing" \
+      --headers Content-Type=application/json --body "$(jq 'del(.name)' <<< "$fic")" -o none
+  else
+    az rest --method post --url "$GRAPH/applications/$object_id/federatedIdentityCredentials" \
+      --headers Content-Type=application/json --body "$fic" -o none
+  fi
+  echo "  trusts the site's sign-in identity ($principal); no client secret"
+  if [ "$(az rest --method get --url "$GRAPH/applications/$object_id" --query 'length(passwordCredentials)' -o tsv)" != 0 ]; then
+    PENDING+=("Entra app \"$NAME\" ($app_id) still has a client secret. Once Microsoft sign-in works on a build that signs in with the identity, remove it (Certificates & secrets) and delete $(signin_secret_name aad) from $VAULT")
+  fi
+  put_client_id aad "$app_id"
 }
 
 # ---------- GitHub ----------
@@ -194,6 +217,7 @@ register_github() {
     echo "  On the app's page on github.com (Settings, Developer settings, GitHub Apps), choose"
     echo "  'Generate a new client secret', and paste it here. Delete the old one there afterwards."
     read_secret_into_vault "GitHub client secret" "$(signin_secret_name github)"
+    put_client_id github "$id"
     return 0
   fi
   echo "  A browser opens on github.com. Check the name (GitHub app names are unique across GitHub;"
@@ -204,6 +228,7 @@ register_github() {
   id=$(sed -n 1p <<< "$out"); page=$(sed -n 2p <<< "$out")
   [[ $id =~ ^Iv[0-9A-Za-z.]+$ ]] || die "the GitHub App was not created"
   aset ATLASRELAY_GITHUB_CLIENT_ID "$id"
+  put_client_id github "$id"
   echo "  created $page (client id $id); its secret is in $VAULT"
 }
 
@@ -247,6 +272,7 @@ register_google() {
 EOF
   read_client_id "Google client id" ATLASRELAY_GOOGLE_CLIENT_ID '^[0-9]+-[0-9a-z]+\.apps\.googleusercontent\.com$'
   read_secret_into_vault "Google client secret" "$(signin_secret_name google)"
+  put_client_id google "$(aget ATLASRELAY_GOOGLE_CLIENT_ID)"
 }
 
 register_orcid() {
@@ -267,6 +293,7 @@ register_orcid() {
 EOF
   read_client_id "ORCID client id" ATLASRELAY_ORCID_CLIENT_ID '^APP-[0-9A-Z]{16}$'
   read_secret_into_vault "ORCID client secret" "$(signin_secret_name orcid)"
+  put_client_id orcid "$(aget ATLASRELAY_ORCID_CLIENT_ID)"
 }
 
 # Steps only a person can do, listed at the end.
