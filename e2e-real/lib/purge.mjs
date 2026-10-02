@@ -89,8 +89,11 @@ export function planPurge(rows, accounts) {
     || (r.partitionKey.startsWith('cleanup-') && (gone.has(r.partitionKey.slice('cleanup-'.length)) || acct.has(s(r.ownerId))))
     // The accounts' pledge slots on projects that stay.
     || (acct.has(r.rowKey) && rows.projects.some((p) => p.partitionKey === 'project' && p.rowKey === r.partitionKey)));
-  const dirty = [...new Set(pledgeRows.map((r) => r.partitionKey).filter((id) => !gone.has(id)))].sort();
   const remaining = rows.projects.filter((r) => r.partitionKey === 'project' && !gone.has(r.rowKey));
+  // Only projects that still exist have totals to rebuild. A pledge partition with no project row
+  // (left by a cleanup that stopped part way) is deleted with the rest, and marking it would fail.
+  const kept = new Set(remaining.map((r) => r.rowKey));
+  const dirty = [...new Set(pledgeRows.map((r) => r.partitionKey).filter((id) => kept.has(id)))].sort();
   return {
     projects: projectRows,
     index: indexRows,

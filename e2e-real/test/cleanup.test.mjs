@@ -107,6 +107,12 @@ test('a server error is retried, since the API finishes a part-done cleanup on t
   assert.equal(stuck.calls.filter((c) => c === 'p1').length, SERVER_ERROR_RETRIES + 1);
 });
 
+test('waits and server errors can come in any order', async () => {
+  const { io, calls } = site({ p1: [409, 500, 409, 503, 409, 200] });
+  assert.deepEqual(await deleteRunProjects(io, RUN), ['p1', 'p2']);
+  assert.equal(calls.filter((c) => c === 'p1').length, 6);
+});
+
 test('a refusal fails the run after trying the rest', async () => {
   const { io, calls, lines } = site({ p1: [403] });
   await assert.rejects(deleteRunProjects(io, RUN), /1 project\(s\) not deleted: p1 \(HTTP 403\)/);

@@ -98,6 +98,14 @@ test('the plan removes the accounts\' projects with everything under them, and t
   assert.deepEqual(plan.remaining, { projects: 1, withCredits: 1 });
 });
 
+test('an orphan pledge with no project row is deleted, not marked for a totals rebuild', () => {
+  const r = rows();
+  r.pledges.push({ partitionKey: 'gone1', rowKey: 'p9', donorId: 'D', donorName: DELETED_ACCOUNT_NAME });
+  const plan = planPurge(r, ['R', 'D']);
+  assert.ok(keys(plan.pledges).includes('gone1/p9'));
+  assert.deepEqual(plan.dirty, ['h1']);
+});
+
 test('the plan touches nothing when no account is given', () => {
   assert.throws(() => planPurge(rows(), []), /No test accounts/);
 });
