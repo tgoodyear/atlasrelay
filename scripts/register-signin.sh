@@ -318,8 +318,8 @@ register_orcid() {
     Description: Sign-in for Atlas Relay, which connects researchers who need RIPE Atlas
                  credits with people who can donate them.
     Redirect URIs: $(callback_list orcid)
-  Use a different ORCID account for dev and prod: each account has one public API client.
-  Then copy the client id (APP-...) and the client secret.
+  Each ORCID account has one public API client, so dev and prod share it: if it already exists,
+  add the redirect URI above to it. Then copy the client id (APP-...) and the client secret.
 EOF
   read_client_id "ORCID client id" ATLASRELAY_ORCID_CLIENT_ID '^APP-[0-9A-Z]{16}$'
   read_secret_into_vault "ORCID client secret" "$(signin_secret_name orcid)"

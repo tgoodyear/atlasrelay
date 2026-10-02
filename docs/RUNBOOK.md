@@ -315,7 +315,8 @@ It goes through the providers in turn:
    It then asks for the client id and, without showing it, the client secret.
 4. **ORCID.** It prints what to register under Developer tools on orcid.org, then asks for the
    client id and, without showing it, the client secret. Each ORCID account has one public API
-   client, so dev and prod need different ORCID accounts. The site's account name for an ORCID
+   client, so dev and prod share it: add each environment's redirect URI to the same client and
+   give the script the same client id and secret. The site's account name for an ORCID
    sign-in is the ORCID iD: Static Web Apps refuses a sign-in without one ("403: We need an email
    address or a handle from your login service"), and ORCID's token has no email address.
 
