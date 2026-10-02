@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { canonicalUrl, DEFAULT_DESCRIPTION, documentTitle, type PageMeta } from './pages';
 
 function setMeta(attr: 'name' | 'property', key: string, content: string | null): void {
-  let el = document.head.querySelector<HTMLMetaElement>(`meta[${attr}="${key}"]`);
+  // A test site's own robots tag (lib/siteEnv.ts) stays on every page, whatever the page's own says.
+  let el = document.head.querySelector<HTMLMetaElement>(`meta[${attr}="${key}"]:not([data-site-env])`);
   if (content === null) {
     el?.remove();
     return;

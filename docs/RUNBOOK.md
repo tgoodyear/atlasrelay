@@ -215,7 +215,7 @@ dev, build it, publish the API to dev's Function App, then upload the site with 
 token:
 
 ```bash
-npm ci && VITE_SIGNIN_PROVIDERS="$(scripts/settings.sh dev SIGNIN_PROVIDERS)" npm run build
+npm ci && VITE_SITE_ENV=dev VITE_SIGNIN_PROVIDERS="$(scripts/settings.sh dev SIGNIN_PROVIDERS)" npm run build
 rm -rf api-deploy api.zip && mkdir -p api-deploy/dist
 cp api/dist/bundle.js api-deploy/dist/ && cp api/host.json api/package.json api-deploy/
 (cd api-deploy && zip -qr ../api.zip .)

@@ -67,7 +67,8 @@ echo "building the site and the API"
 npm ci --no-audit --no-fund
 # With the environment's own sign-in registrations, when it has them (docs/RUNBOOK.md, "Sign-in
 # registrations"); the full-flow tests sign in with Microsoft through whichever the build names.
-VITE_SIGNIN_PROVIDERS=$(aget SIGNIN_PROVIDERS) npm run build
+# VITE_SITE_ENV makes it a test site: a banner on every page, and noindex (web/src/lib/siteEnv.ts).
+VITE_SITE_ENV=$ENV_NAME VITE_SIGNIN_PROVIDERS=$(aget SIGNIN_PROVIDERS) npm run build
 e2e_stage_api
 E2E_SITE_DIR=web/dist
 E2E_API_ZIP=api.zip

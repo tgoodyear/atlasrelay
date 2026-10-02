@@ -541,6 +541,18 @@ Consumption is not on that list. The runbook's cutover checks the Function App d
 switch and the main routes through the site right after it, and its rollback puts the managed
 functions back.
 
+### How dev differs from prod
+
+dev runs the same code as prod, built with `VITE_SITE_ENV=dev` (`web/src/lib/siteEnv.ts`). That
+build puts a banner at the top of every page saying it is a test site, that its projects are fake
+and its credit transfers real, with a link to atlasrelay.org. It keeps dev out of search engines:
+`X-Robots-Tag: noindex, nofollow` on every response from the site (Static Web Apps does not add it
+to function responses), a `noindex, nofollow` robots meta tag on every page, including the
+server-rendered project pages, a `robots.txt` that disallows everything, `/sitemap.xml` answering
+404, and no IndexNow key file. `scripts/indexnow.mjs` only submits atlasrelay.org, after a prod
+deploy. Without the variable, or with `prod`, the build is the production site, so the Deploy
+workflow does not set it.
+
 ### Full-flow test harness (dev)
 
 The full-flow tests on dev (`e2e-real/`, runbook "Full-flow tests on dev") sign real Microsoft
