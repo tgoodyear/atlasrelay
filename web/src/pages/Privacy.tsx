@@ -72,7 +72,8 @@ export default function Privacy() {
           <ul className="muted">
             <li>GitHub passes on your username, and your display name starts as that username.</li>
             <li>
-              Microsoft passes on an account name that can be your email address, and your name. Your
+              Microsoft: the site asks for your name and account name, not your email address. The
+              account name it passes on can still be shaped like an email address. Your
               display name starts as your name, or as the part of the account name before any @.
             </li>
             {offers('google') && (

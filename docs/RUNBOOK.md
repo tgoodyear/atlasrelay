@@ -293,7 +293,9 @@ It goes through the providers in turn:
      (seen on dev, 2026-10);
    - the home page, privacy and support links;
    - the site's icon as the logo;
-   - the sign-in permissions `openid`, `profile` and `email`.
+   - the sign-in permissions `openid` and `profile`. The site asks for no email address
+     (`scope=openid profile` in `web/src/lib/signin.ts`), and `prompt=select_account` lets a
+     person pick another account after signing out.
 
    It then adds a federated identity credential that trusts the site's sign-in identity, and adds
    no client secret. Graph cannot set the publisher domain ("Property 'publisherDomain' is
@@ -357,6 +359,17 @@ verification is not done). Organizations that let their users consent only to ap
 publishers show those users "Need admin approval" instead of signing them in; an admin of that
 organization can consent for it. The full-flow tests stop with that message if the test tenant does
 this.
+
+### Signing out
+
+The site's "Sign out" link is `/logout`. With the site's own registrations it leads to
+`/.auth/logout/complete`, which clears the site's sign-in cookie and comes back to the home page.
+The platform's own `/.auth/logout` sent a Microsoft sign-in to Microsoft's sign-out page, which ends
+the person's whole Microsoft session in that browser, and on dev (2026-10) never came back to the
+site, so the site's cookie stayed and the person stayed signed in. The provider's own session is
+left alone, as with the built-in providers: signing in with Microsoft again asks which account to
+use (`prompt=select_account`). The full-flow tests on dev check that signing out ends the session
+(`e2e-real/specs/sign-out.spec.ts`).
 
 ### Rotating a secret
 

@@ -155,6 +155,8 @@ interface SwaConfig {
 }
 
 const LOGIN_ROUTE = /^\/\.auth\/login\/[a-z]+$/;
+/** Where /logout leads in a build with the site's own registrations (see signInConfig). */
+export const SIGN_OUT_CUSTOM = '/.auth/logout/complete';
 
 /**
  * staticwebapp.config.json for a build: the committed file (web/public), with the sign-in routes
@@ -178,8 +180,14 @@ export function signInConfig<T extends SwaConfig>(base: T, signIn: SignIn): T {
     })),
   ];
   const at = first < 0 ? 0 : first;
-  const routes = [...rest.slice(0, at), ...signInRoutes, ...rest.slice(at)] as T['routes'];
+  let routes = [...rest.slice(0, at), ...signInRoutes, ...rest.slice(at)] as T['routes'];
   if (signIn.mode === 'built-in') return { ...base, routes };
+  // Signing out with the site's own Microsoft registration sends the browser to Microsoft's sign-out
+  // page, which ends the person's whole Microsoft session in that browser and, on dev in 2026-10,
+  // never came back, so the site's own cookie was never cleared and the person stayed signed in.
+  // /logout goes straight to the step that clears the site's cookie and returns home, for every
+  // provider. It leaves the provider's own session alone, as the built-in providers do.
+  routes = routes.map((r) => (r.route === '/logout' ? { ...r, redirect: SIGN_OUT_CUSTOM } : r)) as T['routes'];
   return { ...base, routes, auth: { identityProviders: identityProviders(signIn.providers) } };
 }
 

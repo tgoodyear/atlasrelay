@@ -374,7 +374,7 @@ OAuth endpoints, which GitHub Apps also answer.
 | Provider | Kind | What the site asks for | Account name (`userDetails`) |
 | --- | --- | --- | --- |
 | GitHub | built-in, or the site's own GitHub App | the platform's default | username |
-| Microsoft | built-in, or the site's own Entra app (work, school and personal accounts; `openid`, `profile`, `email`), issuer `login.microsoftonline.com/common/v2.0` | the platform's default | can be an email address |
+| Microsoft | built-in, or the site's own Entra app (work, school and personal accounts), issuer `login.microsoftonline.com/common/v2.0` | `openid` and `profile` (`scope` login parameter; no email), and `prompt=select_account` | the account's username (`preferred_username`), which can be an email address |
 | Google | the site's own OAuth client | the platform's default (`openid`, `profile`, `email` on the built-in redirect in 2026-10; not documented) | can be an email address |
 | ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the ORCID iD (`nameClaimType: sub`) |
 

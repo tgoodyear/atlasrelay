@@ -405,8 +405,11 @@ test('a custom sign-in build opens the providers it names, and keeps GitHub and 
   for (const [route, target] of [['/login/google', 'google'], ['/login/orcid', 'orcid'], ['/login', 'github'], ['/login/microsoft', 'aad']]) {
     assert.equal(all.routes.find((r) => r.route === route)?.redirect, `/.auth/login/${target}?post_login_redirect_uri=/dashboard`, route);
   }
+  // Sign-out clears the site's cookie and comes home, without the provider's own sign-out page.
+  assert.equal(all.routes.find((r) => r.route === '/logout')?.redirect, '/.auth/logout/complete');
+  assert.equal(config.routes.find((r) => r.route === '/logout')?.redirect, '/.auth/logout?post_logout_redirect_uri=/');
   // Everything else is the committed file's, in its order.
-  const rest = (c: SwaConfig) => c.routes.filter((r) => !/^\/(\.auth\/)?login\b/.test(r.route));
+  const rest = (c: SwaConfig) => c.routes.filter((r) => !/^\/(\.auth\/)?(login|logout)\b/.test(r.route));
   assert.deepEqual(rest(all), rest(config));
 });
 

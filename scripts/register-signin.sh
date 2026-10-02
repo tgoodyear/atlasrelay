@@ -117,7 +117,8 @@ put_client_id() {
 
 # ---------- Microsoft ----------
 
-# Microsoft Graph's delegated sign-in permissions: openid, profile, email.
+# Microsoft Graph's delegated sign-in permissions: openid and profile. Not email: the site never uses
+# the address, and the sign-in asks for openid and profile only (web/src/lib/signin.ts).
 GRAPH_APP=00000003-0000-0000-c000-000000000000
 register_aad() {
   local app_id object_id body logo token principal fic existing
@@ -153,8 +154,7 @@ register_aad() {
       resourceAppId: $g,
       resourceAccess: [
         {id: "37f7f235-527c-4136-accd-4a02d197296e", type: "Scope"},
-        {id: "14dad69e-099b-42c9-810b-d002981feec1", type: "Scope"},
-        {id: "64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0", type: "Scope"}
+        {id: "14dad69e-099b-42c9-810b-d002981feec1", type: "Scope"}
       ]
     }]
   }')

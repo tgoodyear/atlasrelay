@@ -48,7 +48,7 @@ export default function Layout() {
                 <NavLink to="/dashboard" onClick={close}>Dashboard</NavLink>
                 <NavLink to="/profile" onClick={close}>{user?.displayName || principal.userDetails || 'Profile'}</NavLink>
                 <Link to="/projects/new" className="btn btn-amber btn-sm" onClick={close}>Post a project</Link>
-                <a href="/.auth/logout?post_logout_redirect_uri=/">Sign out</a>
+                <a href="/logout">Sign out</a>
               </>
             ) : (
               !loading && (

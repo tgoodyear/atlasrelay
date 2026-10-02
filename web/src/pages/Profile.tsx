@@ -162,7 +162,7 @@ export default function Profile() {
                 if (notes.length > 0) {
                   alert(`Your profile and RIPE NCC Access email have been deleted. ${notes.join(' ')}`);
                 }
-                window.location.href = '/.auth/logout?post_logout_redirect_uri=/';
+                window.location.href = '/logout';
               } catch (err) {
                 setError(err instanceof ApiError ? err.message : 'Could not delete your profile');
                 setDeleting(false);
