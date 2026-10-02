@@ -376,7 +376,7 @@ OAuth endpoints, which GitHub Apps also answer.
 | GitHub | built-in, or the site's own GitHub App | the platform's default | username |
 | Microsoft | built-in, or the site's own Entra app (work, school and personal accounts), issuer `login.microsoftonline.com/common/v2.0` | `openid` and `profile` (`scope` login parameter; no email), and `prompt=select_account` | the account's username (`preferred_username`), which can be an email address |
 | Google | the site's own OAuth client | the platform's default (`openid`, `profile`, `email` on the built-in redirect in 2026-10; not documented) | can be an email address |
-| ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the ORCID iD (`nameClaimType: sub`) |
+| ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the ORCID iD: ORCID's `sub`, which Static Web Apps renames to the `nameidentifier` claim type that `nameClaimType` names |
 
 The API reads `identityProvider`, `userId` and `userDetails` from `x-ms-client-principal`; the
 header carries no claims for any provider. Static Web Apps documents `userId` as "an Azure Static
