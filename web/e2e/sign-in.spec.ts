@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { checkAxe, checkSignInButtons, DESKTOP, MOBILE } from './signin-buttons';
 
 // A click on a sign-in link has to reach App Insights as a sign-in-clicked event before the
 // browser leaves for the identity provider, and must never keep the visitor from signing in.
@@ -96,6 +97,16 @@ test('the header leads to the sign-in page, which offers GitHub and Microsoft in
   await expect(options).toHaveText(['Sign in with GitHub', 'Sign in with Microsoft']);
   await expect(options.first()).toHaveAttribute('href', '/.auth/login/github?post_login_redirect_uri=%2Fdashboard');
 });
+
+for (const [name, viewport] of [['desktop', DESKTOP], ['mobile', MOBILE]] as const) {
+  test(`on ${name}, each sign-in button has its name, its provider's mark hidden from screen readers, AA contrast and no axe violations`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await stub(page);
+    await page.goto('/signin');
+    await checkSignInButtons(page, ['GitHub', 'Microsoft']);
+    await checkAxe(page);
+  });
+}
 
 test('the sign-in page sends people back where they came from, and only to this site', async ({ page }) => {
   await stub(page);

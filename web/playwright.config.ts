@@ -6,7 +6,7 @@ import { defineConfig, devices } from '@playwright/test';
 // dist-e2e so it never mixes with the dist that CI deploys.
 //
 // The test-site project (e2e/test-site) runs against a second build made as dev's is, with
-// VITE_SITE_ENV=dev (src/lib/siteEnv.ts), in dist-e2e-dev.
+// VITE_SITE_ENV=dev (src/lib/siteEnv.ts) and every sign-in provider, in dist-e2e-dev.
 const PORT = 4173;
 const TEST_SITE_PORT = 4174;
 
@@ -45,7 +45,8 @@ export default defineConfig({
       url: `http://localhost:${TEST_SITE_PORT}/`,
       reuseExistingServer: false,
       timeout: 120_000,
-      env: { VITE_SITE_ENV: 'dev' },
+      // Every provider, as dev offers them, so the tests see all four sign-in buttons.
+      env: { VITE_SITE_ENV: 'dev', VITE_SIGNIN_PROVIDERS: 'github,aad,google,orcid' },
     },
   ],
 });
