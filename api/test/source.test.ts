@@ -223,10 +223,15 @@ test('every API route is registered with an explicit method list, and every one 
   const seen: string[] = [];
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
     const text = readFileSync(join(dir, file), 'utf8');
-    const calls = (text.match(/\b(?:app\.http|register)\(\s*'/g) ?? []).length;
-    const matched = [...text.matchAll(/\b(?:app\.http|register)\(\s*'([^']+)',\s*\{\s*route:[^\n]*\n\s*(?:\/\/[^\n]*\n\s*)*methods:\s*\[([^\]]*)\],[\s\S]*?\n\s*handler:\s*(\S+)/g)];
+    // Every registration counts, whatever its first argument is, so one this scan can't read (a
+    // variable, a computed name) fails the shape check below instead of being skipped. The one
+    // exception is the injectable pass-through `(name, options) => app.http(name, options)`
+    // (testCleanup.ts), whose route is the registration this scan reads on the next call.
+    const PASS_THROUGH = /\(name, options\) => app\.http\(name, options\)/g;
+    const calls = (text.replace(PASS_THROUGH, '').match(/\b(?:app\.http|register)\(/g) ?? []).length;
+    const matched = [...text.matchAll(/\b(?:app\.http|register)\(\s*(['"`])([^'"`]+)\1,\s*\{\s*route:[^\n]*\n\s*(?:\/\/[^\n]*\n\s*)*methods:\s*\[([^\]]*)\],[\s\S]*?\n\s*handler:\s*(\S+)/g)];
     assert.equal(matched.length, calls, `${file}: ${calls} route registrations, ${matched.length} in the expected shape (route, methods, handler)`);
-    for (const [, name, list, handler] of matched) {
+    for (const [, , name, list, handler] of matched) {
       const methods = list.split(',').map((x) => x.trim()).filter(Boolean);
       assert.ok(methods.length > 0 && methods.every((x) => /^'(GET|HEAD|POST|PUT|PATCH|DELETE)'$/.test(x)), `${file} ${name}: methods must be quoted literals, got [${list}]`);
       seen.push(name);
