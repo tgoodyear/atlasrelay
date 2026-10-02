@@ -422,8 +422,11 @@ reads from Azure which sign-in settings the live site has, and refuses to remove
 `SIGNIN_REMOVAL_OK=1`, even when the local settings file is an older copy.
 
 1. Prod: delete the repository variable `SIGNIN_PROVIDERS` (or set it to the providers that stay,
-   GitHub and Microsoft always among them), and run the Deploy workflow. Dev: the same with
-   `DEV_SIGNIN_PROVIDERS`, then `scripts/run-e2e.sh dev`.
+   GitHub and Microsoft always among them), and run the Deploy workflow. Dev: `scripts/run-e2e.sh
+   dev` builds from the local setting, not the repository variable, so set both: the setting
+   (`scripts/settings.sh dev SIGNIN_PROVIDERS ""`, or the providers that stay) and
+   `DEV_SIGNIN_PROVIDERS`, then run `scripts/run-e2e.sh dev`. Either way, wait until the new build
+   is live (`/.auth/login/<provider>` answers 404 for each provider that goes) before step 2.
 2. Clear the client ids that go (`scripts/settings.sh prod ATLASRELAY_ORCID_CLIENT_ID ""`), then
    `SIGNIN_REMOVAL_OK=1 scripts/provision.sh prod`.
 3. Delete the registrations with the providers. The secrets can stay in the vault or be deleted

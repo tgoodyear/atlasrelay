@@ -115,13 +115,18 @@ put_client_id() {
   echo "  recorded the client id in $VAULT"
 }
 
+# Whether the vault holds the named secret (its name only; the value is never read).
+has_secret() {
+  az keyvault secret show --vault-name "$VAULT" --name "$1" "${AZ_SUB[@]}" --query name -o tsv > /dev/null 2>&1
+}
+
 # ---------- Microsoft ----------
 
 # Microsoft Graph's delegated sign-in permissions: openid and profile. Not email: the site never uses
 # the address, and the sign-in asks for openid and profile only (web/src/lib/signin.ts).
 GRAPH_APP=00000003-0000-0000-c000-000000000000
 register_aad() {
-  local app_id object_id body logo token principal fic existing
+  local app_id object_id body logo logo_dir token principal fic existing
   echo "== Microsoft: $NAME"
   app_id=$(aget ATLASRELAY_MICROSOFT_CLIENT_ID)
   object_id=""
@@ -173,7 +178,9 @@ register_aad() {
   fi
   # The logo: the site's icon at the size Entra asks for. Graph takes the image as the request
   # body; the token goes to curl on standard input, not on its command line.
-  logo=$(mktemp -t atlasrelay-logo).png
+  # A directory of our own: GNU and BSD mktemp disagree on -t, and Graph wants a .png name.
+  logo_dir=$(mktemp -d)
+  logo="$logo_dir/logo.png"
   node scripts/lib/render-logo.mjs "$logo" 215 > /dev/null
   token=$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
   if printf 'Authorization: Bearer %s\n' "$token" | curl -fsS -X PUT "$GRAPH/applications/$object_id/logo" \
@@ -183,7 +190,7 @@ register_aad() {
     echo "  warning: the logo upload failed" >&2
   fi
   unset token
-  rm -f "$logo"
+  rm -rf "$logo_dir"
   # The app's service principal in its own tenant, so the tenant's own accounts can sign in.
   if ! az rest --method get --url "$GRAPH/servicePrincipals(appId='$app_id')" -o none 2> /dev/null; then
     az rest --method post --url "$GRAPH/servicePrincipals" --headers Content-Type=application/json \
@@ -224,7 +231,9 @@ register_github() {
     # GitHub has no API for a GitHub App's callback URLs, so the list is checked by hand.
     PENDING+=("GitHub App $id (Settings, Developer settings, GitHub Apps, the app, General): Callback URLs must include $(callback_list github)")
   fi
-  if [ -n "$id" ] && [ "$ROTATE" != true ]; then
+  # Registered means the client id and its secret: an earlier run that stopped between the two left
+  # an id with no secret, and is finished here.
+  if [ -n "$id" ] && [ "$ROTATE" != true ] && has_secret "$(signin_secret_name github)"; then
     echo "  already registered ($id); use --rotate for a new secret"
     return 0
   fi
@@ -274,7 +283,7 @@ register_google() {
   echo "== Google: $NAME"
   [ -z "$(aget ATLASRELAY_GOOGLE_CLIENT_ID)" ] ||
     PENDING+=("Google client $(aget ATLASRELAY_GOOGLE_CLIENT_ID) (Google Auth Platform, Clients): Authorized redirect URIs must include $(callback_list google)")
-  if [ -n "$(aget ATLASRELAY_GOOGLE_CLIENT_ID)" ] && [ "$ROTATE" != true ]; then
+  if [ -n "$(aget ATLASRELAY_GOOGLE_CLIENT_ID)" ] && [ "$ROTATE" != true ] && has_secret "$(signin_secret_name google)"; then
     echo "  already registered; use --rotate for a new secret"
     return 0
   fi
@@ -298,7 +307,7 @@ register_orcid() {
   echo "== ORCID: $NAME"
   [ -z "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] ||
     PENDING+=("ORCID client $(aget ATLASRELAY_ORCID_CLIENT_ID) (orcid.org, Developer tools): Redirect URIs must include $(callback_list orcid)")
-  if [ -n "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] && [ "$ROTATE" != true ]; then
+  if [ -n "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] && [ "$ROTATE" != true ] && has_secret "$(signin_secret_name orcid)"; then
     echo "  already registered; use --rotate for a new secret"
     return 0
   fi

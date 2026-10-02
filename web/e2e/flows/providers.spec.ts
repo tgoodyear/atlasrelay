@@ -94,3 +94,18 @@ test('a build without its own registrations answers 404 for Google and ORCID sig
     expect((await visitor.request.get(path, { maxRedirects: 0 })).status(), path).toBe(404);
   }
 });
+
+for (const provider of ['google', 'orcid'] as const) {
+  test(`a ${provider === 'google' ? 'Google' : 'ORCID'} donor sees the actions on their own pending pledge`, async ({ person }) => {
+    const researcher = await person({ role: 'researcher' });
+    const project = await postProject(researcher);
+    const donor = await person({ role: 'donor', provider });
+    const res = await donor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 10, method: 'manual' } });
+    expect(res.status()).toBe(201);
+    await donor.page.goto(`/projects/${project.id}`);
+    await expect(donor.page.getByRole('button', { name: "I've sent the credits" })).toBeVisible();
+    await expect(donor.page.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await donor.page.getByRole('button', { name: "I've sent the credits" }).click();
+    await expect(donor.page.getByRole('button', { name: "I've sent the credits" })).toHaveCount(0);
+  });
+}

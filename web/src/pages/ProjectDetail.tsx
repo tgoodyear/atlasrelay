@@ -14,7 +14,7 @@ import { usePageMeta } from '../lib/usePageMeta';
 
 export default function ProjectDetail() {
   const { id = '' } = useParams();
-  const { principal } = useAuth();
+  const { principal, user } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<{ title: string; description: string } | null>(null);
   const [owner, setOwner] = useState<PublicUser | null>(null);
@@ -171,7 +171,9 @@ export default function ProjectDetail() {
             ) : (
               <div className="pledge-list">
                 {pledges.map((p) => {
-                  const mine = principal && p.donorId === principal.userId;
+                  // The API's account id, not the principal's userId: Google and ORCID accounts carry
+                  // their provider in front of it (api/src/lib/auth.ts).
+                  const mine = Boolean(user) && p.donorId === user!.id;
                   return (
                     <div className="pledge" key={p.id}>
                       <div className="avatar" aria-hidden="true">{(p.donorName || 'A').slice(0, 1).toUpperCase()}</div>
