@@ -3,10 +3,11 @@ import { statePath, type Role } from './accounts';
 import { deleteRunProjects } from './lib/cleanup.mjs';
 
 /**
- * The API refuses a state-changing request whose Content-Type is not application/json, body or
- * not (assertSameOriginWrite in api/src/lib/http.ts), so the body-less DELETEs here send it too.
+ * The API refuses a state-changing request whose Content-Type is not application/json
+ * (assertSameOriginWrite in api/src/lib/http.ts), and Static Web Apps drops the Content-Type of a
+ * request with no body, so the DELETEs here send an empty JSON object, as the site does.
  */
-const JSON_WRITE = { headers: { 'content-type': 'application/json' } };
+const JSON_WRITE = { headers: { 'content-type': 'application/json' }, data: '{}' };
 
 // What the specs do with the signed-in test accounts outside the page steps of web/e2e/ui.ts.
 
