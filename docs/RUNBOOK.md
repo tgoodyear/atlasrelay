@@ -383,7 +383,9 @@ scripts/register-signin.sh prod --rotate github     # GitHub, Google, ORCID: pas
 Microsoft has no secret to rotate: its credential is the site's managed identity. For GitHub,
 Google and ORCID, create the new secret with the provider, paste it when asked, and delete the old
 one there once sign-in works. ORCID replaces the secret in place, so ORCID sign-in fails from the
-reset until the new secret is stored.
+reset until the new secret is stored. Dev and prod share the ORCID client, so rotating it in either
+environment also stores the new secret in the other's vault (from the settings in `.azure/`); one
+it can't reach is listed at the end, to rotate there with the same secret.
 
 The app settings name the secret without a version, so a rotated secret needs no deployment. When
 Static Web Apps picks up the new version is not documented; sign in to check before deleting the
@@ -430,7 +432,9 @@ reads from Azure which sign-in settings the live site has, and refuses to remove
    `DEV_SIGNIN_PROVIDERS`, then run `scripts/run-e2e.sh dev`. Either way, wait until the new build
    is live (`/.auth/login/<provider>` answers 404 for each provider that goes) before step 2.
 2. Clear the client ids that go (`scripts/settings.sh prod ATLASRELAY_ORCID_CLIENT_ID ""`), then
-   `SIGNIN_REMOVAL_OK=1 scripts/provision.sh prod`.
+   `SIGNIN_REMOVAL_OK=1 scripts/provision.sh prod`. A client id set to empty stays empty; one missing
+   from the settings file altogether is taken back from the vault's `signin-<provider>-client-id`, so
+   delete that secret too if other copies of the settings should not bring the provider back.
 3. Delete the registrations with the providers. The secrets can stay in the vault or be deleted
    there.
 

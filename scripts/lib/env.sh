@@ -181,17 +181,30 @@ signin_providers() {
 # Client ids are kept in the sign-in vault as well as the settings file (signin-<provider>-client-id,
 # written by scripts/register-signin.sh), so a fresh copy of the settings, in another worktree or on
 # another machine, does not deploy the site without its registrations. A client id missing from
-# the file is taken from the vault; one that differs is reported and the file's value is kept.
+# the file is taken from the vault; one that differs is reported and the file's value is kept. One
+# set to empty in the file stays empty: that is how a provider is turned off (docs/RUNBOOK.md,
+# "Turning them off"). A vault that can't be read stops the deployment rather than deploying the
+# site without registrations it has.
 sync_client_ids() {
-  local vault p key tag file stored
+  local vault p key tag file stored err
   vault=$(aget SIGNIN_KEY_VAULT_NAME) || return 1
   [ -n "$vault" ] || return 0
   for p in $SIGNIN_PROVIDER_KEYS; do
     key="ATLASRELAY_${p%%:*}_CLIENT_ID"
     tag=$(tr 'A-Z' 'a-z' <<< "${p%%:*}")
     file=$(aget "$key") || return 1
-    stored=$(az keyvault secret show --vault-name "$vault" --name "signin-$tag-client-id" "${AZ_SUB[@]}" \
-      --query value -o tsv 2> /dev/null) || stored=""
+    if [ -z "$file" ] && [ -f "$ENV_FILE" ] && grep -q "^$key=" "$ENV_FILE"; then
+      continue
+    fi
+    err=$(mktemp)
+    if ! stored=$(az keyvault secret show --vault-name "$vault" --name "signin-$tag-client-id" "${AZ_SUB[@]}" \
+      --query value -o tsv 2> "$err"); then
+      if grep -q 'SecretNotFound' "$err"; then rm -f "$err"; continue; fi
+      echo "error: can't read signin-$tag-client-id from $vault: $(cat "$err")" >&2
+      rm -f "$err"
+      return 1
+    fi
+    rm -f "$err"
     [ -n "$stored" ] || continue
     if [ -z "$file" ]; then
       aset "$key" "$stored" || return 1
@@ -217,7 +230,10 @@ recover_signin_vault() {
   if [ "$(az group exists -n "rg-atlasrelay-$ENV_NAME" "${AZ_SUB[@]}")" != true ]; then
     az group create -n "rg-atlasrelay-$ENV_NAME" -l "$(stack_location)" "${AZ_SUB[@]}" -o none || return 1
   fi
-  az keyvault recover --name "$vault" "${AZ_SUB[@]}" -o none
+  az keyvault recover --name "$vault" "${AZ_SUB[@]}" -o none || return 1
+  # The settings of a torn-down environment are renamed away, so record the vault's name again:
+  # sync_client_ids reads the client ids from it next.
+  [ -n "$(aget SIGNIN_KEY_VAULT_NAME)" ] || aset SIGNIN_KEY_VAULT_NAME "$vault"
 }
 # The sign-in providers the deployed site has app settings for, from Azure (names only; the values
 # are dropped here). Empty when the site does not exist yet.

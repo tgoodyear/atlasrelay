@@ -49,6 +49,26 @@ test('a new Google account takes the name from the sign-in, and the dashboard sa
   await expect(visitor.page.getByText("This is how you'll appear")).toHaveCount(0);
 });
 
+test('the dashboard stops offering the sign-in name once the profile changes it', async ({ signedOut }) => {
+  const visitor = await signedOut();
+  const id = `e2e${uid()}`;
+  await signInAgain(visitor.context, {
+    identityProvider: 'google', userId: id, userDetails: `${id}@gmail.com`, userRoles: ['anonymous', 'authenticated'],
+    claims: [{ typ: 'name', val: 'Ada Lovelace' }],
+  });
+  await visitor.page.goto('/dashboard');
+  const prompt = visitor.page.getByRole('status').filter({ hasText: "This is how you'll appear on projects and pledges" });
+  await expect(prompt).toContainText('Ada Lovelace');
+  // Followed within the app, so the notice's state is still there when the dashboard comes back.
+  await prompt.getByRole('link', { name: 'change' }).click();
+  await visitor.page.getByLabel('Display name').fill('Augusta King');
+  await visitor.page.getByRole('button', { name: 'Save profile' }).click();
+  await expect.poll(async () => (await (await visitor.request.get('/api/me')).json()).user.displayName).toBe('Augusta King');
+  await visitor.page.getByRole('link', { name: 'Dashboard' }).first().click();
+  await expect(visitor.page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  await expect(visitor.page.getByText("This is how you'll appear")).toHaveCount(0);
+});
+
 test('a Google account with no name claim keeps the placeholder', async ({ signedOut }) => {
   const visitor = await signedOut();
   const id = `e2e${uid()}`;

@@ -325,6 +325,31 @@ share_orcid_from() {
   PENDING+=("ORCID client $from_id (orcid.org, Developer tools): Redirect URIs must include $(callback_list orcid), next to $from's")
 }
 
+# After a rotation, every other environment with the same ORCID client id gets the new secret too,
+# copied from this one's vault without being printed: ORCID replaced the old secret in place, so
+# theirs no longer works. One that can't be written to is listed at the end.
+copy_orcid_secret_to_sharers() {
+  local id name f other to_vault to_sub value
+  id=$(aget ATLASRELAY_ORCID_CLIENT_ID)
+  name=$(signin_secret_name orcid)
+  for f in .azure/*/.env; do
+    [ -f "$f" ] || continue
+    other=$(basename "$(dirname "$f")")
+    [ "$other" != "$ENV_NAME" ] || continue
+    [ "$(ENV_FILE=$f aget ATLASRELAY_ORCID_CLIENT_ID)" = "$id" ] || continue
+    to_vault=$(ENV_FILE=$f aget SIGNIN_KEY_VAULT_NAME)
+    to_sub=$(ENV_FILE=$f aget AZURE_SUBSCRIPTION_ID)
+    if [ -n "$to_vault" ] && [ -n "$to_sub" ] &&
+      value=$(az keyvault secret show --vault-name "$VAULT" --name "$name" "${AZ_SUB[@]}" --query value -o tsv --only-show-errors) &&
+      printf '%s' "$value" | (VAULT=$to_vault; AZ_SUB=(--subscription "$to_sub"); put_secret "$name"); then
+      echo "  $other shares this ORCID client: stored the new secret in its vault too"
+    else
+      PENDING+=("$other shares ORCID client $id but did not get the new secret: run scripts/register-signin.sh $other --rotate orcid and paste the same secret")
+    fi
+  done
+  unset value
+}
+
 register_orcid() {
   echo "== ORCID: $NAME"
   [ -z "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] ||
@@ -352,6 +377,7 @@ EOF
   read_client_id "ORCID client id" ATLASRELAY_ORCID_CLIENT_ID '^APP-[0-9A-Z]{16}$'
   read_secret_into_vault "ORCID client secret" "$(signin_secret_name orcid)"
   put_client_id orcid "$(aget ATLASRELAY_ORCID_CLIENT_ID)"
+  [ "$ROTATE" != true ] || copy_orcid_secret_to_sharers
 }
 
 # Steps only a person can do, listed at the end.

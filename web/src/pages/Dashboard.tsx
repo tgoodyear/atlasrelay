@@ -53,7 +53,8 @@ export default function Dashboard() {
       </div>
 
       {user && !user.hasAtlasEmail && <div className="alert alert-warn">You have not added a RIPE NCC Access email yet, so you cannot post projects. <Link to="/profile">Add it in your profile.</Link></div>}
-      {prefilledName && (
+      {/* Only while it is still the saved name: changed on the profile page, it no longer says how they appear. */}
+      {prefilledName && user?.displayName === prefilledName && (
         <div className="alert alert-info" role="status" style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
           <span>
             This is how you'll appear on projects and pledges: <strong>{prefilledName}</strong> (<Link to="/profile">change</Link>)
