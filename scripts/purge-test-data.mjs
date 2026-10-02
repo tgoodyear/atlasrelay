@@ -108,8 +108,18 @@ if (failed) die(`${failed} project(s) could not be marked for a totals rebuild; 
 const n = { pledges: 0, claims: 0, index: 0, projects: 0 };
 for (const r of plan.pledges) n.pledges += await remove(tables.pledges, r);
 for (const r of plan.claims) n.claims += await remove(tables.claims, r);
-for (const r of plan.projects) n.projects += await remove(tables.projects, r);
-for (const r of plan.index) n.index += await remove(tables.projects, r);
+// An owner index row goes only once its project row is confirmed gone; a project row that could not
+// be deleted keeps its index row, so it stays visible to its owner until a later run finishes it.
+const stillThere = new Set();
+for (const r of plan.projects) {
+  const before = failed;
+  n.projects += await remove(tables.projects, r);
+  if (failed > before) stillThere.add(r.rowKey);
+}
+for (const r of plan.index) {
+  if (stillThere.has(r.rowKey)) continue;
+  n.index += await remove(tables.projects, r);
+}
 log(`deleted ${n.projects} project(s), ${n.index} owner index row(s), ${n.pledges} pledge(s), ${n.claims} claim row(s)`);
 const left = [];
 for await (const e of tables.projects.listEntities({ queryOptions: { filter: odata`PartitionKey eq ${'project'}`, select: ['RowKey'] } })) left.push(e.rowKey);

@@ -607,9 +607,8 @@ async function deleteMatching(t: TableClient, filter: string): Promise<number> {
  * Nothing else holds a figure derived from a project: the home-page figures, the listing and the
  * sitemap are all computed from the project rows when they are read, so once the row is gone they
  * no longer count it. A tombstone (getCleanupTombstone) is written first and removed last, so a
- * request that fails at any step can be repeated to finish, before or after the project row went.
- * The pledges and slots are swept once more after the project row, for a pledge whose request read
- * the project just before it went.
+ * request that fails at any step can be repeated to finish. The project row goes right after it, so
+ * a deletion stopped by a changed project leaves everything under the project untouched.
  */
 /** The partition of a cleanup's tombstone in the claims table: one row, `tombstone`. */
 function cleanupPk(projectId: string): string {
@@ -653,21 +652,23 @@ export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerI
   };
   // First, so that every later step can fail and be retried: see getCleanupTombstone.
   await claimsT.upsertEntity({ partitionKey: cleanupPk(id), rowKey: 'tombstone', ownerId: project.ownerId, createdAt: now() }, 'Replace');
-  await sweepPledgesAndSlots();
-  if (await deleteRow(claimsT, `confirm-${id}`, 'lock')) claims += 1;
-  claims += await deleteMatching(claimsT, odata`PartitionKey eq ${receiptPk(project.ownerId)} and projectId eq ${id}`);
-  // The project row before its index entry: an index entry with no project row is skipped by every
-  // reader, while a project row with no index entry would be a live project its owner's dashboard,
-  // the open-project cap and profile deletion could no longer see.
-  // Conditional on the version the caller fenced, when it gave one: a write that landed after the
-  // fence (a reopen, say) fails this with 412, the project stays, and the tombstone lets the next
-  // call decide again and finish.
+  // The project row next, conditional on the version the caller fenced, when it gave one: a write
+  // that landed after the fence (a reopen, say) fails this with 412 before anything under the project
+  // is touched, and the next call decides again. Once it is gone the tombstone is what finishes the
+  // rest, so the order of what follows only has to be retryable.
   try {
     await projectsT.deleteEntity(PROJECTS_PK, id, projectEtag ? { etag: projectEtag } : undefined);
   } catch (err) {
     if (!(err instanceof RestError && err.statusCode === 404)) throw err;
   }
+  // After the project row: an index entry with no project row is skipped by every reader, while a
+  // project row with no index entry would be a live project its owner's dashboard, the open-project
+  // cap and profile deletion could no longer see.
   await deleteRow(projectsT, ownerIndexPk(project.ownerId), id);
+  await sweepPledgesAndSlots();
+  if (await deleteRow(claimsT, `confirm-${id}`, 'lock')) claims += 1;
+  claims += await deleteMatching(claimsT, odata`PartitionKey eq ${receiptPk(project.ownerId)} and projectId eq ${id}`);
+  // Once more, for a pledge whose request read the project just before it went.
   await sweepPledgesAndSlots();
   await deleteRow(claimsT, cleanupPk(id), 'tombstone');
   return { pledges, claims };

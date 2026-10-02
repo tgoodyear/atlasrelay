@@ -535,18 +535,19 @@ on and the title starts with `E2E `. It takes two calls. The first closes the pr
 `deletingSince` and answers 409, and from then on no new pledge starts. The second deletes, but
 only once the stamp is two minutes old: a pledge request that read the project as open just before
 the close may still take a slot and transfer, and two minutes is the bound on a running request
-that the pledge slots and the confirmation lock already rely on. The edit form cannot reopen a
+that the pledge slots and the confirmation lock already rely on. Pledge updates (marking sent,
+confirming, cancelling) are refused on a stamped project for the same reason. The edit form cannot reopen a
 project while it waits, and if a reopen slipped in anyway the next call starts the wait again. As a
 last guard it also refuses while a transfer is in flight or a slot taken in the last two minutes has
 no pledge row yet, and it deletes only after a conditional write on the version it checked; the
 project row itself is then deleted only at the version that write produced. It
 writes a tombstone in the claims table (`cleanup-<id>`) before deleting anything and removes it
 last, so the owner can finish a cleanup that failed part way by calling again, even once the
-project row is gone. It deletes the pledges, the donors' pledge slots, the
-confirmation lock and the owner's receipt reservations naming the project, then the project row.
-The owner index entry goes after the project row, because an entry with no project behind it is
-skipped by every reader.
-It then sweeps the pledges and slots once more, for a pledge made while it ran. Nothing else stores
+project row is gone. After the tombstone it deletes the project row, so a deletion stopped by a
+changed project touches nothing under it. Then the owner index entry (an entry with no project
+behind it is skipped by every reader), the pledges, the donors' pledge slots, the confirmation lock
+and the owner's receipt reservations naming the project, and the pledges and slots once more, for
+a pledge made while it ran. Nothing else stores
 a figure derived from a project: the home-page figures, the listing and the sitemap are computed
 from the project rows when they are read.
 

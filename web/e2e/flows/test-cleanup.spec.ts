@@ -124,13 +124,20 @@ test('nobody but the owner, and nothing the tests did not post, can be deleted',
   expect(await row('projects', 'project', real.id)).not.toBeNull();
 });
 
-test('the first call closes the project, so a donor can no longer pledge to it', async ({ person }) => {
+test('the first call closes the project, so no pledge can start or move on', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const donor = await person({ role: 'donor' });
   const project = await postProject(researcher);
+  const before = await donor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 5, method: 'manual' } });
+  expect(before.status(), await before.text()).toBe(201);
+  const pledgeId = (await before.json()).pledge.id as string;
   expect((await cleanup(researcher, project.id)).status()).toBe(409);
   const pledge = await donor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 5, method: 'manual' } });
   expect(pledge.status()).toBe(409);
+  // Nor can a pledge already on it be moved on: the deletion would remove it from under the request.
+  expect((await donor.request.patch(`/api/pledges/${project.id}/${pledgeId}`, { data: { status: 'sent' } })).status()).toBe(409);
+  expect((await researcher.request.patch(`/api/pledges/${project.id}/${pledgeId}`, { data: { status: 'confirmed' } })).status()).toBe(409);
+  expect((await row('pledges', project.id, pledgeId))?.status).toBe('pledged');
   // It cannot be reopened while the cleanup waits, so the stamp stands for an unbroken closed period.
   const reopen = await researcher.request.patch(`/api/projects/${project.id}`, { data: { status: 'open' } });
   expect(reopen.status(), await reopen.text()).toBe(409);
