@@ -32,8 +32,10 @@ test('sign in with GitHub, set up a profile and sign out', async ({ signedOut })
   const handle = `gh-${id}`;
 
   await page.goto('/');
-  await page.getByRole('link', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/\.auth\/login\/github\?post_login_redirect_uri=\/dashboard$/);
+  await page.getByRole('link', { name: 'Sign in', exact: true }).click();
+  await expect(page).toHaveURL(/\/signin$/);
+  await page.getByRole('link', { name: 'Sign in with GitHub' }).click();
+  await expect(page).toHaveURL(/\/\.auth\/login\/github\?post_login_redirect_uri=%2Fdashboard$/);
   await completeMockSignIn(page, 'github', id, handle);
 
   await expect(page).toHaveURL(/\/dashboard$/);
@@ -64,7 +66,7 @@ test('sign in with GitHub, set up a profile and sign out', async ({ signedOut })
 
   await page.getByRole('link', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/localhost:\d+\/$/);
-  await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
   expect((await (await request.get('/.auth/me')).json()).clientPrincipal).toBeNull();
   expect((await request.get('/api/me')).status()).toBe(401);
 });
@@ -77,7 +79,7 @@ test('sign in with Microsoft from the sign-in prompt', async ({ signedOut }) => 
 
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible();
-  await page.getByRole('link', { name: 'Continue with Microsoft' }).click();
+  await page.getByRole('link', { name: 'Sign in with Microsoft' }).click();
   await expect(page).toHaveURL(/\/\.auth\/login\/aad\?post_login_redirect_uri=%2Fdashboard$/);
   await completeMockSignIn(page, 'aad', id, email);
 
@@ -90,5 +92,5 @@ test('sign in with Microsoft from the sign-in prompt', async ({ signedOut }) => 
   await page.goto('/profile');
   await expect(page.getByText(`Signed in with Microsoft as ${email}`)).toBeVisible();
   await page.getByRole('link', { name: 'Sign out' }).click();
-  await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
 });

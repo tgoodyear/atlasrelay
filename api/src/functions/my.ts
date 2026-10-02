@@ -1,5 +1,5 @@
 import { app, HttpRequest } from '@azure/functions';
-import { requirePrincipal } from '../lib/auth';
+import { requireAccount } from '../lib/account';
 import { handle, json } from '../lib/http';
 import { Project, getProject, listPledges, listPledgesByDonor, listProjectsByOwner, now, patchProject, totals } from '../lib/store';
 import { privatePledge, publicProject } from '../lib/views';
@@ -13,7 +13,7 @@ app.http('my', {
   methods: ['GET'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const [projects, pledges] = await Promise.all([listProjectsByOwner(p.userId), listPledgesByDonor(p.userId)]);
 
     // Expiry is a read-time rule, so the owner's own dashboard has to apply it as well. Without

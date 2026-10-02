@@ -10,7 +10,7 @@ import { META } from '../lib/pages';
 import { usePageMeta } from '../lib/usePageMeta';
 
 export default function Dashboard() {
-  const { loading, principal, user } = useAuth();
+  const { loading, principal, user, prefilledName, dismissPrefilledName } = useAuth();
   usePageMeta(META.dashboard);
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [pledges, setPledges] = useState<Pledge[]>([]);
@@ -53,6 +53,15 @@ export default function Dashboard() {
       </div>
 
       {user && !user.hasAtlasEmail && <div className="alert alert-warn">You have not added a RIPE NCC Access email yet, so you cannot post projects. <Link to="/profile">Add it in your profile.</Link></div>}
+      {/* Only while it is still the saved name: changed on the profile page, it no longer says how they appear. */}
+      {prefilledName && user?.displayName === prefilledName && (
+        <div className="alert alert-info" role="status" style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+          <span>
+            This is how you'll appear on projects and pledges: <strong>{prefilledName}</strong> (<Link to="/profile">change</Link>)
+          </span>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={dismissPrefilledName}>Dismiss</button>
+        </div>
+      )}
       {awaiting > 0 && <div className="alert alert-info">{awaiting} of your projects {awaiting === 1 ? 'has' : 'have'} pending pledges. Check <a href="https://atlas.ripe.net/credits/" target="_blank" rel="noreferrer">your Atlas credits</a> and confirm them on the project page.</div>}
       {error && <div className="alert alert-error">{error}</div>}
 

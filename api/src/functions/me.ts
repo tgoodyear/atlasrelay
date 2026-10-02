@@ -1,9 +1,9 @@
 import { app, HttpRequest } from '@azure/functions';
-import { requirePrincipal } from '../lib/auth';
-import { handle, json, readJson } from '../lib/http';
+import { requireAccount } from '../lib/account';
+import { handle, HttpError, json, readJson } from '../lib/http';
 import { Project, anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listPledges, listProjectsByOwner, patchProject, pledgeRacedDeletion, projectMayHaveRacedDeletion, updateUser } from '../lib/store';
-import { email, httpsUrl, str } from '../lib/validate';
-import { privateUser } from '../lib/views';
+import { bool, email, httpsUrl, str } from '../lib/validate';
+import { initialDisplayName, privateUser } from '../lib/views';
 import { logError } from '../lib/telemetry';
 
 app.http('me-get', {
@@ -11,7 +11,7 @@ app.http('me-get', {
   methods: ['GET'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const user = await ensureUser(p.userId, p.identityProvider, p.userDetails);
     return json({ user: privateUser(user), principal: { provider: p.identityProvider, roles: p.userRoles } });
   }),
@@ -22,19 +22,22 @@ app.http('me-put', {
   methods: ['PUT'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     await ensureUser(p.userId, p.identityProvider, p.userDetails);
     const body = await readJson(req);
     const patch: Record<string, string> = {};
     const displayName = str(body, 'displayName', { max: 80 });
-    if (displayName !== undefined) patch.displayName = displayName || p.userDetails;
+    // Shown to everyone, and the app may fill it from the sign-in's claims: no control characters.
+    if (displayName && /[\x00-\x1f\x7f]/.test(displayName)) throw new HttpError(400, 'Display name must not contain control characters');
+    if (displayName !== undefined) patch.displayName = displayName || initialDisplayName(p.userDetails, p.userId, p.identityProvider);
     const atlasEmail = email(body, 'atlasEmail');
     if (atlasEmail !== undefined) patch.atlasEmail = atlasEmail;
     const affiliation = str(body, 'affiliation', { max: 120 });
     if (affiliation !== undefined) patch.affiliation = affiliation;
     const url = httpsUrl(body, 'url');
     if (url !== undefined) patch.url = url;
-    const user = await updateUser(p.userId, patch);
+    // The app's automatic name from the sign-in sends this: it applies only to a profile never saved.
+    const user = await updateUser(p.userId, patch, { onlyIfUntouched: bool(body, 'ifUntouched') });
     return json({ user: privateUser(user) });
   }),
 });
@@ -44,7 +47,7 @@ app.http('me-delete', {
   methods: ['DELETE'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     // Pledging to a project whose owner is gone cannot work: the handler needs the owner's RIPE
     // address to name a recipient. Leaving them open would advertise projects that fail at the
     // moment a donor tries to give to them.

@@ -21,3 +21,12 @@ az account show "${AZ_SUB[@]}" -o none 2> /dev/null ||
   die "run: az login (the environment is in subscription $(aget AZURE_SUBSCRIPTION_ID))"
 provision
 echo "deployed stack $STACK"
+# The site offers what its build names, not what the settings hold (docs/RUNBOOK.md, "Google and
+# ORCID sign-in"), so a change here is followed by a build.
+signin=$(aget SIGNIN_PROVIDERS)
+echo "sign-in providers these settings cover: ${signin:-built-in GitHub and Microsoft}"
+if [ "$ENV_NAME" = prod ]; then
+  echo "the Deploy workflow builds with the repository variable SIGNIN_PROVIDERS; see docs/RUNBOOK.md before changing it"
+else
+  echo "build for $ENV_NAME with: VITE_SIGNIN_PROVIDERS=\"$signin\" npm run build"
+fi

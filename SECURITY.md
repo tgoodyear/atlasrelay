@@ -19,9 +19,9 @@ credits, projects or email addresses to demonstrate a finding.
 
 ## Reporting abuse or asking for a takedown
 
-Nobody vets the projects posted here. Posting needs a GitHub or Microsoft sign-in and a
-self-declared RIPE NCC Access email, and the site cannot tell a real research project from an
-invented one. The transfer page tells donors this.
+Nobody vets the projects posted here. Posting needs a sign-in (GitHub or Microsoft, and Google or
+ORCID once the site offers them) and a self-declared RIPE NCC Access email, and the site cannot
+tell a real research project from an invented one. The transfer page tells donors this.
 
 If a project is fraudulent, misrepresents who is behind it, or should come down for another
 reason, open an issue labelled `abuse` with the project's URL and what is wrong with it. If
@@ -88,6 +88,12 @@ form, making a pledge, posting a project, following a sign-in or atlas.ripe.net 
 route, public project ids, the pledge method and the amount as a power-of-ten range. The
 [privacy page](https://atlasrelay.org/privacy) lists everything collected.
 
+**Accounts from different sign-in providers are never merged.** The site keys each account by the
+id Azure Static Web Apps issues for that sign-in, never by email address, so a Google account and a
+Microsoft account with the same email are two accounts. Google and ORCID account ids also carry the
+provider's name. The API accepts GitHub and Microsoft, and Google and ORCID only in an environment
+that has its own registrations for them; it treats a sign-in from any other provider as signed out.
+
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.
 
@@ -103,6 +109,37 @@ its own federation, read or change app settings, change DNS, read or change stor
 anything. Infrastructure is
 deployed by a subscription Owner as a deployment stack whose deny settings block deleting its
 resources outside the stack.
+
+Sign-in uses the site's own app registrations at GitHub (a GitHub App), Microsoft (an Entra app
+registration), Google and ORCID, separate for dev and prod. Static Web Apps turns its built-in
+providers off once a site has any registration of its own, so GitHub and Microsoft need the site's
+own registrations too. GitHub, Google and ORCID each have a client secret, kept in the
+environment's sign-in Key Vault and nowhere else: not in the repository, the owner's settings
+file, the deployment parameters or history, or a log. `scripts/register-signin.sh` moves each
+secret from the provider into the vault on standard input, without printing it. The static web app
+reads the secrets with its system-assigned identity through Key Vault references in its app
+settings. Microsoft has no secret: the site signs in to Entra with a user-assigned identity that
+only it holds and that the app registration trusts through a federated identity credential; that
+identity has no Azure role. The vault accepts Azure RBAC only: the site's identity can read
+secrets and the operator can write them; the CI identity has no role on it and cannot read app
+settings. It keeps public network access, because Static Web Apps
+reads it from outside any virtual network. Purge protection is on, and every read and write is in
+the vault's audit log in the environment's Log Analytics workspace.
+
+`staticwebapp.config.json`, which ships with the site, names the app settings and holds no values.
+But that file decides which settings the site sends where. Whoever can deploy the site (the CI
+identity with the deployment token, or anyone who gets code onto `main`) could therefore ship a
+config that sends a secret to a server of their choosing, or declare a provider that answers for
+any ORCID iD. Deploying the site already gives full control of it; the secrets do not change who
+has that. The config asks for no scopes beyond the ones Static Web Apps uses to sign people in (for
+ORCID, only `openid`), and the API never receives a provider's token.
+
+A leaked secret lets someone act as the site's registration with that provider, within the
+redirect URIs registered there; for GitHub that includes checking, resetting or revoking the tokens
+people granted the app. On its own it does not let anyone sign in to this site as another person,
+since sign-in codes go only to the registered redirect URIs. It reaches no Azure resource or data,
+because the Entra registration is given no application permissions or Azure role assignments. If a
+secret leaks, rotate it at once; the runbook ("Sign-in registrations") has the steps.
 
 The API runs on an Azure Function App that only the static web app can call: linking the two puts
 an identity provider in front of the Function App that refuses requests the site did not send, and

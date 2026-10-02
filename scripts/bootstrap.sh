@@ -178,6 +178,21 @@ if [ "$ENV_NAME" = prod ]; then
   # Compiled into the browser bundle (web/src/lib/telemetry.ts). A variable, not a secret: the
   # connection string is public once the site ships it.
   gh variable set APPINSIGHTS_CONNECTION_STRING --repo "$REPO" --body "$(aget APPLICATIONINSIGHTS_CONNECTION_STRING)"
+  # The sign-in providers the site's build offers (web/src/lib/signin.ts), matching the settings
+  # this deployment just wrote. Unset means the built-in GitHub and Microsoft sign-in.
+  signin=$(aget SIGNIN_PROVIDERS)
+  # Read from the list, so an absent variable is empty output while an API error stops here: a
+  # stale value left behind would make the next deploy build sign-in the settings no longer have.
+  current=$(gh variable list --repo "$REPO" --json name,value --jq '.[] | select(.name == "SIGNIN_PROVIDERS") | .value') ||
+    die "can't read the repository variables"
+  if [ "$signin" != "$current" ]; then
+    if [ -n "$signin" ]; then
+      gh variable set SIGNIN_PROVIDERS --repo "$REPO" --body "$signin"
+    else
+      gh variable delete SIGNIN_PROVIDERS --repo "$REPO"
+    fi
+    echo "  SIGNIN_PROVIDERS is now '${signin}'; the live site changes with the next Deploy run"
+  fi
 else
   if [ -n "$(aget E2E_JOB_NAME)" ]; then
     step "GitHub Environment variables for the full-flow tests"
@@ -192,6 +207,9 @@ else
     # e2e-dev.yml tests dev only, and skips while this is unset (scripts/teardown.sh dev clears it).
     if [ "$ENV_NAME" = dev ]; then
       gh variable set DEV_ENABLED --repo "$REPO" --body true
+      # The sign-in providers e2e-dev.yml builds dev with. A repository variable, because the build
+      # job runs in no GitHub Environment. It names providers, nothing secret.
+      gh variable set DEV_SIGNIN_PROVIDERS --repo "$REPO" --body "$(aget SIGNIN_PROVIDERS)"
     fi
   fi
   echo

@@ -108,7 +108,11 @@ img { max-width: 100%; }
 .btn-danger:hover { background: #f8d6d6; }
 .btn-github { background: #24292f; color: #fff; }
 .btn-github:hover { background: #1b1f23; }
-.btn-ms { background: #fff; color: var(--ink); border-color: var(--line); }
+.btn-aad, .btn-google { background: #fff; color: var(--ink); border-color: var(--line); }
+.btn-orcid { background: #a6ce39; color: #1b1f23; }
+.btn-orcid:hover { background: #95bb2f; }
+.sign-in-options { list-style: none; padding: 0; margin: 1rem auto 0; display: grid; gap: 0.6rem; max-width: 18rem; }
+.sign-in-options .btn { width: 100%; }
 
 /* Hero */
 .hero { background: linear-gradient(160deg, var(--navy) 0%, #123a5c 60%, #0f6f68 130%); color: #fff; padding: 4.5rem 0 4rem; position: relative; overflow: hidden; }

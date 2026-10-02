@@ -140,4 +140,20 @@ test('public API answers, and private routes need a sign-in', async ({ request }
   const login = await request.get('/login', { maxRedirects: 0 });
   expect(login.status()).toBe(302);
   expect(login.headers()['location']).toContain('/.auth/login/github');
+  // Providers the site never offers (web/src/lib/signin.ts).
+  for (const provider of ['facebook', 'twitter', 'apple']) {
+    expect((await request.get(`/.auth/login/${provider}`, { maxRedirects: 0 })).status(), provider).toBe(404);
+  }
+  // GitHub and Microsoft sign-in start, whichever kind of sign-in the build has (a custom build
+  // with a missing app setting would fail here rather than redirect). The local emulator answers
+  // with its own sign-in page instead.
+  for (const provider of ['github', 'aad']) {
+    const start = await request.get(`/.auth/login/${provider}`, { maxRedirects: 0 });
+    if (!start.url().startsWith('https:')) {
+      expect(start.status(), provider).toBe(200);
+      continue;
+    }
+    expect(start.status(), provider).toBe(302);
+    expect(start.headers()['location'] ?? '', provider).not.toBe('');
+  }
 });

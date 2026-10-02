@@ -1,6 +1,6 @@
 import { app, HttpRequest } from '@azure/functions';
 import { RestError } from '@azure/data-tables';
-import { requirePrincipal } from '../lib/auth';
+import { requireAccount } from '../lib/account';
 import { assertKeyFormat, AtlasRefused, AtlasUnreachable, getCredits, transferCredits } from '../lib/atlas';
 import { handle, HttpError, json, markNotSent, NOT_SENT, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
@@ -8,7 +8,7 @@ import { Pledge, Project, acquirePledgeClaim, activePledgesBy, createPledge, don
 import { checkReceipt, contestedOnRecheck, stillUncontested, type CheckedConfirmation, type VerificationDetails } from '../lib/receipts';
 import { bool, int, MAX_CREDITS, oneOf, str } from '../lib/validate';
 import { OVERFUND_MULTIPLIER, PENDING_RESERVATION_DAYS, acceptsMorePledges, capacity, maxCredits, maxSinglePledge } from '../lib/pledging';
-import { privatePledge, publicProject } from '../lib/views';
+import { privatePledge, publicName, publicProject } from '../lib/views';
 import { logError, logEvent } from '../lib/telemetry';
 
 app.http('pledges-list', {
@@ -16,7 +16,7 @@ app.http('pledges-list', {
   methods: ['GET'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const id = req.params.id;
     if (!isId(id)) throw new HttpError(404, 'Not found');
     const project = await getProject(id);
@@ -44,7 +44,7 @@ app.http('pledges-create', {
     // or connection failure there is genuinely unknown.
     let transferIssued = false;
     try {
-      const principal = requirePrincipal(req);
+      const principal = await requireAccount(req);
       const id = req.params.id;
       if (!isId(id)) throw new HttpError(404, 'Not found');
       const project = await getProject(id);
@@ -89,7 +89,7 @@ app.http('pledges-create', {
         id: newId(),
         projectId: id,
         donorId: donor.id,
-        donorName: donor.displayName || donor.handle,
+        donorName: publicName(donor.displayName, donor.handle, donor.id),
         anonymous,
         amount,
         method,
@@ -638,7 +638,7 @@ app.http('pledges-update', {
   methods: ['PATCH'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const principal = requirePrincipal(req);
+    const principal = await requireAccount(req);
     const { projectId, id } = req.params;
     if (!isId(projectId) || !isId(id)) throw new HttpError(404, 'Not found');
     const [project, pledge] = await Promise.all([getProject(projectId), getPledge(projectId, id)]);

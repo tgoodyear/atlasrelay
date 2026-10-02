@@ -5,6 +5,7 @@ import { PENDING_RESERVATION_DAYS, projectPostAllowed } from './pledging';
 import { Tag } from './validate';
 import { logError, tableDependencyPolicy } from './telemetry';
 import { createTableClient, tableAccess } from './tables';
+import { initialDisplayName } from './views';
 
 export type ProjectStatus = 'open' | 'closed';
 export type PledgeMethod = 'api' | 'manual';
@@ -267,11 +268,14 @@ export async function getUser(id: string): Promise<User | null> {
 
 export async function ensureUser(id: string, provider: string, handle: string): Promise<User> {
   const existing = await getUser(id);
-  if (existing) return existing;
+  if (existing) {
+    // Accounts are never shared between providers (api/src/lib/auth.ts). Static Web Apps should
+    // never hand two providers the same id; if it did, the second is refused rather than let in.
+    if (existing.provider && existing.provider !== provider) throw new HttpError(403, 'This account was created with another sign-in provider');
+    return existing;
+  }
   const ts = now();
-  // Some identity providers put the email address in the handle, and the display name is shown
-  // to anonymous visitors, so seed it with a non-address form of the handle.
-  const displayName = handle.includes('@') ? handle.split('@')[0] : handle;
+  const displayName = initialDisplayName(handle, id, provider);
   const user: User = { id, provider, handle, displayName, atlasEmail: '', affiliation: '', url: '', createdAt: ts, updatedAt: ts };
   await (await table('users')).upsertEntity({ partitionKey: USERS_PK, rowKey: id, ...user }, 'Merge');
   return user;
@@ -285,9 +289,25 @@ export async function deleteUser(id: string): Promise<void> {
   }
 }
 
-export async function updateUser(id: string, patch: Partial<Pick<User, 'displayName' | 'atlasEmail' | 'affiliation' | 'url'>>): Promise<User> {
+/** Never saved since it was created: the app may still fill in the name from the sign-in. */
+function untouched(u: User): boolean {
+  return Boolean(u.createdAt) && u.createdAt === u.updatedAt;
+}
+
+/**
+ * `onlyIfUntouched` applies the patch only to a profile never saved since it was created, decided
+ * on the version this write is conditional on: the app's automatic name from the sign-in must not
+ * overwrite a name the person chose meanwhile (in another tab, say). Otherwise the profile is
+ * returned as it is.
+ */
+export async function updateUser(
+  id: string,
+  patch: Partial<Pick<User, 'displayName' | 'atlasEmail' | 'affiliation' | 'url'>>,
+  opts: { onlyIfUntouched?: boolean } = {},
+): Promise<User> {
   const existing = await getUser(id);
   if (!existing) notFound();
+  if (opts.onlyIfUntouched && !untouched(existing)) return existing;
   const updated: User = { ...existing, ...patch, updatedAt: now() };
   // updateEntity, not upsertEntity, and conditional on the version we read. An unconditional
   // upsert here would recreate a profile that was deleted between the read above and this write,
@@ -300,6 +320,11 @@ export async function updateUser(id: string, patch: Partial<Pick<User, 'displayN
       existing.etag ? { etag: existing.etag } : undefined,
     );
   } catch (err) {
+    // Saved by someone else between the read and this write: an automatic update yields to it.
+    if (opts.onlyIfUntouched && err instanceof RestError && err.statusCode === 412) {
+      const current = await getUser(id);
+      if (current) return current;
+    }
     if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) notFound();
     throw err;
   }

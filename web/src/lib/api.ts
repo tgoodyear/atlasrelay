@@ -76,6 +76,8 @@ export interface User {
   affiliation: string;
   url: string;
   hasAtlasEmail: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // Mirrors publicUser() in api/src/lib/views.ts. The sign-in handle is deliberately absent:

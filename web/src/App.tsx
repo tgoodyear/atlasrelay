@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard';
 import HowItWorks from './pages/HowItWorks';
 import Privacy from './pages/Privacy';
 import NotFound from './pages/NotFound';
+import SignIn from './pages/SignIn';
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="projects/:id/edit" element={<ProjectForm />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="profile" element={<Profile />} />
+        <Route path="signin" element={<SignIn />} />
         <Route path="how-it-works" element={<HowItWorks />} />
         <Route path="privacy" element={<Privacy />} />
         <Route path="*" element={<NotFound />} />

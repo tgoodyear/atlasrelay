@@ -17,7 +17,7 @@ test('signed-out pages have no axe violations', async ({ signedOut, person }) =>
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher);
   const { page } = await signedOut();
-  for (const path of ['/', '/projects', `/projects/${project.id}`, '/how-it-works', '/privacy', '/dashboard', '/no-such-page']) {
+  for (const path of ['/', '/projects', `/projects/${project.id}`, '/how-it-works', '/privacy', '/dashboard', '/signin', '/no-such-page']) {
     await page.goto(path);
     await checkPage(page, path);
   }

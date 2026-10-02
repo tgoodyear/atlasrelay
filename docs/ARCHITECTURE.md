@@ -12,14 +12,14 @@ the project, the pledge and its confirmation.
 | Simple UI | Single-page React app with a handful of screens. |
 | Serverless | Azure Static Web Apps (Standard) + an Azure Function App on the Flex Consumption plan, linked to the site as its API + Azure Table Storage + App Insights. |
 | CI/CD from GitHub | GitHub Actions workflows for the app deploy (build and test on PRs, deploy on push to `main`, logging in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub), infra checks (Bicep lint on PRs and `main`), and the full-flow tests on dev, which run in Azure. The infrastructure itself is one deployment stack per environment, deployed by a subscription Owner. |
-| Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth. RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); the design leaves a slot for it. |
+| Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth, or, once the owner registers the apps, GitHub, Microsoft, Google and ORCID through the site's own registrations ([Sign-in providers](#sign-in-providers)). RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); custom providers are where it would go. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
 
 ## System diagram
 
 ```
  Browser (React SPA)
-   │  /.auth/login/github | /.auth/login/aad      (SWA built-in auth, free)
+   │  /.auth/login/github | aad | google | orcid   (SWA auth; see Sign-in providers)
    │  /api/*  (x-ms-client-principal injected by SWA edge)
    ▼
  Azure Static Web Apps (Standard) ── linked backend: Function App (Flex Consumption,
@@ -36,11 +36,11 @@ the project, the pledge and its confirmation.
 
 ## Domain model
 
-### User (`users` table, PK `user`, RK `<swa userId>`)
+### User (`users` table, PK `user`, RK `<account id>`)
 
 | Field | Notes |
 | --- | --- |
-| `provider`, `handle` | From the SWA client principal (`github`/`aad`, username or email). |
+| `provider`, `handle` | From the SWA client principal: `provider` is `github`, `aad`, `google` or `orcid`, and `handle` is the account name it passes on, which can be an email address. |
 | `displayName` | Shown publicly next to projects and pledges. |
 | `atlasEmail` | RIPE NCC Access email. **Private.** Required to publish a project. Only revealed to a donor who has created a pledge for that project. |
 | `affiliation`, `url` | Optional public profile fields. |
@@ -106,7 +106,7 @@ the partition after each change, so the project row never drifts.
 ## Flows
 
 ### Requester
-1. Sign in (GitHub or Microsoft).
+1. Sign in (GitHub or Microsoft, and Google or ORCID where the site offers them).
 2. Complete profile: display name + RIPE NCC Access email (validated, private).
 3. Create project: title, one-paragraph summary, description, credits needed, tags,
    optional links and deadline. Publish.
@@ -266,6 +266,8 @@ remain, carrying only the chosen display name, because other people rely on that
 Sign-in handles are never returned publicly. Static Web Apps fills `userDetails` with the email
 address for some identity providers, and that value seeds both the handle and the initial display
 name, so `publicName()` reduces anything email-shaped to its local part before it leaves the API.
+An account name shaped like an ORCID iD never becomes the initial display name either
+(`initialDisplayName()`).
 
 Browser telemetry (page views, load times, errors, the page's API calls and five named actions)
 goes to App Insights with no cookies, nothing stored in the browser, and no user id. Query strings,
@@ -280,7 +282,9 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 [Monitoring](RUNBOOK.md#monitoring) and [Traffic](RUNBOOK.md#traffic).
 
 ### Trust model
-- Requester identity is a GitHub/Microsoft account plus a self-declared RIPE email.
+- Requester identity is a GitHub, Microsoft, Google or ORCID account plus a self-declared RIPE email.
+  Accounts from different providers are never merged, even when they share an email address:
+  the site keys accounts by the id Static Web Apps issues, never by email.
   We cannot verify the email against RIPE without federation. Mitigations: the email is
   only shown to committed donors; API transfers fail loudly if the email is not a RIPE
   NCC Access account (RIPE returns 4xx); projects display the owner's display name and
@@ -320,6 +324,87 @@ sets `IGNORE_CLIENT_PRINCIPAL=1` and the API treats every request as anonymous. 
 at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code only
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
 the SPA shows its own sign-in prompt.
+
+## Sign-in providers
+
+Static Web Apps offers two kinds of sign-in, and a site uses one or the other
+([authentication and authorization](https://learn.microsoft.com/azure/static-web-apps/authentication-authorization),
+[custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)):
+
+- **Built-in**: GitHub and Microsoft Entra ID through Azure's own app registrations, with nothing
+  to configure. A build that names no registrations uses this.
+- **Custom**: the site's own registrations, declared under `auth.identityProviders` in
+  `staticwebapp.config.json`, with each client id and secret in an app setting. Google and ORCID
+  are only available this way. Microsoft's page says: "Using any custom registrations disables all
+  preconfigured providers." So a site that offers Google or ORCID needs its own GitHub and
+  Microsoft registrations as well, or those sign-ins stop working.
+
+The build picks the kind. `web/src/lib/signin.ts` turns `VITE_SIGNIN_PROVIDERS` into the
+`staticwebapp.config.json` that ships: empty gives the committed file (built-in GitHub and
+Microsoft); a list such as `github,aad,google,orcid` adds the `auth` section, the `/login/<provider>`
+shortcuts and the sign-in buttons for those providers, and refuses to build without `github` and
+`aad`. Facebook, Twitter, Apple and any of the four providers the build does not offer answer 404
+at `/.auth/login/<provider>`, because the platform still answered some of them on its own
+(`/.auth/login/google` and `/.auth/login/facebook` went on to the provider in 2026-10). The shipped
+config names app settings and holds no values.
+
+Each environment (dev, prod) has its own four registrations, made by `scripts/register-signin.sh`.
+The client ids are in the settings file and the vault, and become plain app settings. The client
+secrets of GitHub, Google and ORCID are in the environment's sign-in vault (`infra/signin.bicep`),
+and the app settings hold Key Vault references to them by name, without a version, which the site
+resolves with its system-assigned managed identity
+([Key Vault secrets](https://learn.microsoft.com/azure/static-web-apps/key-vault-secrets)). So no
+secret passes through a Bicep parameter or the deployment history, and a rotated secret needs no
+deployment. Microsoft has no secret at all: the site holds a user-assigned identity
+(`id-atlasrelay-<env>-signin`) that the Entra app registration trusts through a federated identity
+credential, and signs in with that identity's token
+(`OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID`, "Use a managed identity instead of a secret" in
+[custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)).
+The registration is set to accept work, school and personal accounts, the site uses the
+`common/v2.0` issuer, and the registration has ID tokens on, because Static Web Apps asks for
+`code id_token`. The vault uses RBAC only (the site's identity reads, the operator writes), keeps
+public network access because Static Web Apps reads it from outside any virtual network, has purge
+protection, and sends its audit log to the environment's workspace. The Deploy workflow builds prod
+with the repository variable `SIGNIN_PROVIDERS`, and `e2e-dev.yml` builds dev with
+`DEV_SIGNIN_PROVIDERS`. The runbook has the steps
+([Sign-in registrations](RUNBOOK.md#sign-in-registrations)).
+
+Why a GitHub App rather than an OAuth app: GitHub's app manifest flow lets the script create it
+with one click on github.com and receive its client secret directly, and a GitHub App asks for no
+access beyond identifying the person. Static Web Apps' GitHub provider uses GitHub's standard
+OAuth endpoints, which GitHub Apps also answer.
+
+| Provider | Kind | What the site asks for | Account name (`userDetails`) |
+| --- | --- | --- | --- |
+| GitHub | built-in, or the site's own GitHub App | the platform's default | username |
+| Microsoft | built-in, or the site's own Entra app (work, school and personal accounts), issuer `login.microsoftonline.com/common/v2.0` | `openid` and `profile` (`scope` login parameter; no email), and `prompt=select_account` | the account's username (`preferred_username`), which can be an email address |
+| Google | the site's own OAuth client | the platform's default (`openid`, `profile`, `email` on the built-in redirect in 2026-10; not documented) | can be an email address |
+| ORCID | custom OpenID Connect, `https://orcid.org/.well-known/openid-configuration` | `openid`, the only scope ORCID lists | the ORCID iD: ORCID's `sub`, which Static Web Apps renames to the `nameidentifier` claim type that `nameClaimType` names |
+
+The API reads `identityProvider`, `userId` and `userDetails` from `x-ms-client-principal`; the
+header carries no claims for any provider. Static Web Apps documents `userId` as "an Azure Static
+Web Apps-specific unique identifier for the user", unique per site. `api/src/lib/auth.ts` accepts
+GitHub and Microsoft, plus Google and ORCID only where the Function App setting `SIGNIN_PROVIDERS`
+names them (Bicep sets it from the same settings as the registrations), and stores Google and ORCID accounts under `google:<userId>` and
+`orcid:<userId>`, so that no Google or ORCID sign-in can reach an account made with another
+provider even if the platform ever handed out the same id twice. GitHub and Microsoft accounts
+keep the bare ids they were created with, and an existing account is refused to a sign-in from a
+different provider on every handler that acts as the signed-in person (`api/src/lib/account.ts`).
+
+The account name for an ORCID sign-in is the ORCID iD. Static Web Apps refuses a sign-in that has
+no account name ("403: We need an email address or a handle from your login service"), ORCID's
+token has no email address or `preferred_username`, and its `name` is there only for a record that
+makes it public. ORCID iDs are public by design, but the site does not publish one on its own: an
+account name shaped like an iD never becomes a display name.
+
+A new GitHub account's display name is the GitHub username. For Google, ORCID and Microsoft
+the app reads the person's name from the provider's claims at `/.auth/me` (`name`, else given and
+family names; never anything with an @ or shaped like an ORCID iD) and saves it through the
+ordinary profile update, once, for a profile that has never been saved
+(`web/src/lib/displayName.ts`). The dashboard then says so once, with a link to change it. Without a
+usable name the account keeps the server's starting value: the part of a Microsoft account name
+before the @, or a placeholder such as `user-1a2b3c`. Display names are the person's to edit, so
+the server checks this one like any other edit and trusts nothing more from the browser.
 
 ## Pages and routing
 
@@ -377,7 +462,8 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Resource | Bicep | SKU |
 | --- | --- | --- |
 | Resource group `rg-atlasrelay-prod` (westus2) | `infra/main.bicep` | |
-| Static Web App `swa-atlasrelay-prod` (staging environments disabled), no app settings | `infra/app.bicep` | Standard |
+| Static Web App `swa-atlasrelay-prod` (staging environments disabled); system-assigned managed identity and the user-assigned sign-in identity below; its only app settings are the sign-in registrations (`SIGNIN_*`: client ids, and Key Vault references for the secrets; for Microsoft, `OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID` in place of a secret) | `infra/app.bicep` | Standard |
+| Sign-in vault `kvs-atlasrelay-prod-<4 characters>` (RBAC only, purge protection, audit log to the workspace): the sign-in client secrets and copies of the client ids; Key Vault Secrets User for the site, Secrets Officer for the operator | `infra/signin.bicep` | Standard vault |
 | Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims`; shared keys refused | `infra/app.bicep` | Standard LRS |
 | Function App `func-atlasrelay-prod-<6 characters>` (Node 24) on plan `plan-atlasrelay-prod-api`, linked to the site as its backend, with its app settings | `infra/api.bicep` | Flex Consumption, on demand only |
 | User-assigned managed identity `id-atlasrelay-prod-api`, the Function App's identity for storage | `infra/api.bicep` | |
@@ -385,6 +471,7 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Log Analytics `log-atlasrelay-prod` (0.1 GB/day cap; App Insights tables kept 90 days, other tables 30) + App Insights `appi-atlasrelay-prod` | `infra/platform.bicep` | Pay-as-you-go |
 | Action group `ag-atlasrelay-prod`, five log search alerts, availability test `webtest-atlasrelay-prod-home` and its alert, workbook "Atlas Relay" | `infra/monitoring.bicep` | |
 | User-assigned managed identity `id-atlasrelay-prod-ci` + federated credential for the GitHub Environment `prod` | `infra/identity.bicep` | |
+| User-assigned managed identity `id-atlasrelay-prod-signin`, held by the site only; the Entra app registration trusts it (federated credential added by `scripts/register-signin.sh`). No Azure role | `infra/app.bicep` | |
 | Custom role "Atlas Relay CI Deployer (prod)": read the resource group, the static site and its linked backend, and list the site's deployment token; assigned to the CI identity on the group | `infra/rbac.bicep` | |
 | Custom role "Atlas Relay CI API Deployer (prod)": read the Function App and publish a package to it; assigned to the CI identity on the Function App only | `infra/rbac.bicep` | |
 | Public DNS zone `atlasrelay.org` with the apex A record, a `www` CNAME to the site, the apex TXT set and mail-rejection records (prod only) | `infra/dns.bicep` | Azure DNS |
@@ -443,7 +530,8 @@ a backend to a preview environment either, so a preview would have no API.
 
 Why the Standard plan: only Standard can link a Function App, and a linked Function App is what
 lets the API sign in to storage with a managed identity (managed functions have none). Standard
-also allows custom OIDC providers, which RIPE NCC Access sign-in would need.
+also allows custom sign-in providers, which Google and ORCID sign-in use and RIPE NCC Access
+sign-in would need.
 
 Why Flex Consumption: it takes identity-based host storage with no Azure Files share (on the
 Consumption and Premium plans the share's connection needs a key), runs Node 24, scales to zero

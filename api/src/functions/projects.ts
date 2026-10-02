@@ -1,11 +1,11 @@
 import { app, HttpRequest } from '@azure/functions';
-import { getPrincipal, requirePrincipal } from '../lib/auth';
+import { optionalAccount, requireAccount } from '../lib/account';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { isId, newId } from '../lib/ids';
 import { Project, acquireConfirmLock, acquireProjectPostWindow, createProject, ensureUser, getProject, getUser, listOpenProjectsByOwner, listPledges, listProjects, nextResultsPostedAt, now, patchProject, releaseConfirmLock, totals } from '../lib/store';
 import { MAX_OPEN_PROJECTS_PER_USER, PROJECT_POST_INTERVAL_MS, SurplusClose, capSettlement, surplusOpenProjects } from '../lib/pledging';
 import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/validate';
-import { isPublicProject, publicPledge, publicProject, publicUser } from '../lib/views';
+import { isPublicProject, publicName, publicPledge, publicProject, publicUser } from '../lib/views';
 import { projectHead } from '../lib/projectHtml';
 import { logError } from '../lib/telemetry';
 import { marksTestProject } from '../lib/testCleanup';
@@ -121,7 +121,7 @@ app.http('projects-get', {
     const id = req.params.id;
     if (!isId(id)) throw new HttpError(404, 'Not found');
     const project = await getProject(id);
-    const principal = getPrincipal(req);
+    const principal = await optionalAccount(req);
     // A project an operator took down answers 404 like its page does, except to its owner, who can
     // still open it and settle its pledges.
     if (!project || (!isPublicProject(project) && principal?.userId !== project.ownerId)) throw new HttpError(404, 'Not found');
@@ -212,7 +212,7 @@ app.http('projects-create', {
   methods: ['POST'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const user = await ensureUser(p.userId, p.identityProvider, p.userDetails);
     if (!user.atlasEmail) throw new HttpError(409, 'Add your RIPE NCC Access email to your profile before posting a project');
 
@@ -247,7 +247,7 @@ app.http('projects-create', {
     const project: Project = {
       id: newId(),
       ownerId: user.id,
-      ownerName: user.displayName || user.handle,
+      ownerName: publicName(user.displayName, user.handle, user.id),
       title: fields.title!,
       summary: fields.summary!,
       description: fields.description!,
@@ -314,7 +314,7 @@ app.http('projects-update', {
   methods: ['PATCH'],
   authLevel: 'anonymous',
   handler: handle(async (req: HttpRequest) => {
-    const p = requirePrincipal(req);
+    const p = await requireAccount(req);
     const id = req.params.id;
     if (!isId(id)) throw new HttpError(404, 'Not found');
     const project = await getProject(id);

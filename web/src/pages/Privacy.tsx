@@ -1,5 +1,7 @@
 import { Link } from 'react-router-dom';
 import { META, PRIVACY_TEXT } from '../lib/pages';
+import { OFFERED } from '../lib/offered';
+import { providerList } from '../lib/signin';
 import { usePageMeta } from '../lib/usePageMeta';
 
 // Every statement here has to stay true of the code and the Azure resources. SECURITY.md,
@@ -7,6 +9,8 @@ import { usePageMeta } from '../lib/usePageMeta';
 // things in more detail; change them together.
 export default function Privacy() {
   usePageMeta(META.privacy);
+  const providers = OFFERED;
+  const offers = (id: string) => providers.some((p) => p.id === id);
   return (
     <div className="narrow">
       <div className="page-head">
@@ -32,8 +36,8 @@ export default function Privacy() {
             <li>
               a few actions, each with the page it happened on: opening the Send credits form, making a
               pledge (the method, and the amount as a range such as 1,000 to 9,999) and posting a
-              project, each with the project's public id; following a sign-in link (GitHub or
-              Microsoft); and following a link to atlas.ripe.net (which page there);
+              project, each with the project's public id; following a sign-in link (which
+              provider); and following a link to atlas.ripe.net (which page there);
             </li>
             <li>your browser, operating system and device model, as your browser reports them.</li>
           </ul>
@@ -59,12 +63,40 @@ export default function Privacy() {
         <div className="card"><div className="card-body">
           <h2>Accounts, projects and pledges</h2>
           <p className="muted">
-            You sign in with GitHub or Microsoft through Azure Static Web Apps, which sets its
+            You sign in with {providerList(providers)} through Azure Static Web Apps, which sets its
             sign-in cookies to keep you signed in. The site sets no other cookies. Your profile stores
-            which of the two you used, the account name it passes on (for Microsoft this can be your
-            email address), and an internal account id. Your display name starts as that account
-            name, without anything after an @, and is shown next to your projects and pledges. You can
-            change it on your profile page, and add an affiliation and a link, which are public too.
+            which provider you used, the account name it passes on, and an internal account id. Your
+            display name is shown next to your projects and pledges. You can change it on your
+            profile page, and add an affiliation and a link, which are public too.
+          </p>
+          <ul className="muted">
+            <li>GitHub passes on your username, and your display name starts as that username.</li>
+            <li>
+              Microsoft: the site asks for your name and account name, not your email address. The
+              account name it passes on can still be shaped like an email address. Your
+              display name starts as your name, or as the part of the account name before any @.
+            </li>
+            {offers('google') && (
+              <li>
+                Google: the site uses Azure's default request to Google, which asked for your name and
+                email address (the openid, email and profile scopes) when this page was written. The
+                account name it passes on can be your email address. Your display name starts as your
+                name from Google, or as a placeholder such as user-1a2b3c, never as your email address.
+              </li>
+            )}
+            {offers('orcid') && (
+              <li>
+                ORCID: the site asks only for the openid scope, which gives your ORCID iD and, if your
+                ORCID record makes it public, your name. The account name is your ORCID iD. Your
+                display name starts as your public ORCID name, or as a placeholder such as
+                user-1a2b3c. The site never shows your ORCID iD to other people unless you type it into
+                your profile.
+              </li>
+            )}
+          </ul>
+          <p className="muted">
+            When the display name comes from your name at the provider, the dashboard says so once,
+            with a link to change it.
           </p>
           <p className="muted">
             Researchers add the email of their RIPE NCC Access account so donors can send them
@@ -113,7 +145,7 @@ export default function Privacy() {
         <div className="card"><div className="card-body">
           <h2>Other services</h2>
           <p className="muted">
-            The site serves its own fonts, so no font service sees your visit. Signing in takes you to GitHub or Microsoft, and
+            The site serves its own fonts, so no font service sees your visit. Signing in takes you to {providerList(providers)}, and
             links to RIPE Atlas take you to atlas.ripe.net; their own privacy terms apply there.
           </p>
         </div></div>

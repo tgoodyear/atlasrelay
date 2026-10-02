@@ -2,7 +2,7 @@ import type { Locator, Page } from '@playwright/test';
 import type { Credentials } from './accounts';
 import { totp } from './lib/totp.mjs';
 
-// Signs one account in through the site's "Continue with Microsoft" link and the real Microsoft
+// Signs one account in through the site's Microsoft sign-in link (/.auth/login/aad) and the real Microsoft
 // sign-in pages. The pages come in a different order depending on the account and the tenant, so
 // this looks at what is on screen and answers it, until the browser is back on the site:
 //
@@ -13,6 +13,7 @@ import { totp } from './lib/totp.mjs';
 //   Enter code           a TOTP code, when the account has a seed (see lib/totp.mjs)
 //   Stay signed in?      No
 //   Permissions requested  Accept (a test tenant that lets users consent to apps)
+//   Need admin approval  stops: the tenant's admin has to consent to the app first
 //   Static Web Apps consent  Grant Consent
 //
 // Anything else that asks for input (register MFA, change the password, an error) stops the
@@ -39,6 +40,9 @@ const SCREENS: Screen[] = [
   { name: 'password', locator: (p) => p.locator('input[name="passwd"], input[type="password"]') },
   { name: 'stay-signed-in', locator: (p) => p.locator('#KmsiCheckboxField, #KmsiDescription, [data-testid="kmsiVideo"]').or(p.getByText(/^Stay signed in\?$/)) },
   { name: 'permissions', locator: (p) => p.getByText(/^Permissions requested$/) },
+  // The test tenant lets only admins consent to an app from an unverified publisher, such as the
+  // site's own Entra registration (docs/RUNBOOK.md, "Sign-in registrations").
+  { name: 'admin-approval', locator: (p) => p.getByText(/^(Need admin approval|Approval required)$/) },
   { name: 'swa-consent', locator: (p) => p.getByRole('button', { name: /Grant Consent/i }) },
 ];
 
@@ -185,6 +189,8 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
       case 'permissions':
         await submit(page);
         break;
+      case 'admin-approval':
+        throw new Error('The test tenant needs an admin to consent to the site\'s Entra app before its users can sign in (docs/RUNBOOK.md, "Sign-in registrations").');
       case 'swa-consent':
         await page.getByRole('button', { name: /Grant Consent/i }).first().click();
         break;

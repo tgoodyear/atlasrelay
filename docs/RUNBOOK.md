@@ -10,6 +10,8 @@ deployed from the same template. Environment names are 1 to 6 lowercase letters 
 | --- | --- | --- |
 | Resource group | `rg-atlasrelay-prod` | `infra/main.bicep` |
 | Static Web App (Standard) | `swa-atlasrelay-prod` | `infra/app.bicep` |
+| Sign-in vault (client secrets and ids) | `kvs-atlasrelay-prod-<4 characters>` | `infra/signin.bicep` |
+| The site's identity for signing in to Microsoft Entra | `id-atlasrelay-prod-signin` | `infra/app.bicep` |
 | Storage account with tables `users`, `projects`, `pledges`, `claims` | `statlasrelayprod<6 characters>` | `infra/app.bicep` |
 | Function App (Flex Consumption), linked to the site as its API, with its app settings and plan | `func-atlasrelay-prod-<6 characters>`, `plan-atlasrelay-prod-api` | `infra/api.bicep` |
 | The Function App's managed identity | `id-atlasrelay-prod-api` | `infra/api.bicep` |
@@ -71,9 +73,10 @@ scripts/settings.sh prod ATLASRELAY_DNS_TTL 300   # change one
 scripts/provision.sh prod                         # deploy the stack with the new settings
 ```
 
-The settings file holds two values the repository does not: the apex validation token and the
-subscription the environment lives in. Keep it; `scripts/teardown.sh` renames it rather than
-deleting it.
+The settings file holds values the repository does not: the apex validation token, the
+subscription the environment lives in, and the sign-in client ids. Keep it; `scripts/teardown.sh`
+renames it rather than deleting it. It holds no secrets: the sign-in client secrets are in a vault
+([Sign-in registrations](#sign-in-registrations)).
 
 ## First deployment
 
@@ -212,7 +215,7 @@ dev, build it, publish the API to dev's Function App, then upload the site with 
 token:
 
 ```bash
-npm ci && npm run build
+npm ci && VITE_SIGNIN_PROVIDERS="$(scripts/settings.sh dev SIGNIN_PROVIDERS)" npm run build
 rm -rf api-deploy api.zip && mkdir -p api-deploy/dist
 cp api/dist/bundle.js api-deploy/dist/ && cp api/host.json api/package.json api-deploy/
 (cd api-deploy && zip -qr ../api.zip .)
@@ -232,6 +235,211 @@ E2E_RESULTS_ACCOUNT)" -c locks -n full-flow --query properties.lease.state -o ts
 `leased` while one is.
 
 `scripts/teardown.sh dev` removes it again, the CNAME and the test harness included.
+
+## Sign-in registrations
+
+The site signs people in with its own app registrations at GitHub, Microsoft, Google and ORCID,
+one set for dev and another for prod. Static Web Apps also has built-in GitHub and Microsoft
+providers that need no registration, and a build without registrations uses those. Google and ORCID
+need registrations, and Microsoft's documentation says that "using any custom registrations
+disables all preconfigured providers"
+([custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)),
+so GitHub and Microsoft need their own too. [Sign-in providers](ARCHITECTURE.md#sign-in-providers)
+explains the design.
+
+Where things live:
+
+- **Client ids**: in the settings file (`ATLASRELAY_<PROVIDER>_CLIENT_ID`), in the sign-in vault
+  (`signin-<provider>-client-id`, with `microsoft` for Microsoft), and in the site's app settings.
+  They are not secret. `scripts/provision.sh` takes a client id missing from the settings file
+  from the vault, and warns when the two differ.
+- **Client secrets** for GitHub, Google and ORCID: in the environment's sign-in vault,
+  `SIGNIN_KEY_VAULT_NAME` (`kvs-atlasrelay-<env>-...`, `infra/signin.bicep`). The site's app
+  settings hold Key Vault references to them, without a version, and the site reads them with its
+  system-assigned identity
+  ([Key Vault secrets](https://learn.microsoft.com/azure/static-web-apps/key-vault-secrets)). No
+  secret is in the settings file, the Bicep parameters, the deployment history or a log.
+- **Microsoft has no secret.** The site signs in to Entra with its user-assigned identity
+  `id-atlasrelay-<env>-signin`, which the app registration trusts through a federated identity
+  credential (`OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID`, "Use a managed identity instead of a
+  secret" in [custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)).
+- **Which providers a build offers**: `SIGNIN_PROVIDERS`, worked out from the client ids by
+  `scripts/provision.sh`, and copied to the repository variable the workflow that builds the
+  environment reads (`SIGNIN_PROVIDERS` for prod, `DEV_SIGNIN_PROVIDERS` for dev).
+
+Every redirect URI has the form `https://<host>/.auth/login/<provider>/callback`, with the
+providers `github`, `aad`, `google` and `orcid`. For prod the host is `atlasrelay.org`; make the
+apex the default domain first ([Canonical host](#canonical-host)) so that `www` and the
+`azurestaticapps.net` name redirect to it; `scripts/register-signin.sh prod` checks both. For dev
+there are two hosts, and each needs its redirect URI, because Static Web Apps sends the provider
+the callback on the hostname the sign-in started from: the site's own hostname
+(`scripts/settings.sh dev SWA_HOSTNAME`), which the full-flow tests use, and `dev.atlasrelay.org`.
+
+### Registering
+
+Run it in a terminal, signed in to Azure as an Owner of the subscription who may create app
+registrations in its tenant, and to GitHub with `gh`:
+
+```bash
+scripts/register-signin.sh dev
+```
+
+It goes through the providers in turn:
+
+1. **Microsoft.** It creates or updates the Entra app registration "Atlas Relay (dev)" ("Atlas
+   Relay" for prod) with Microsoft Graph. It sets:
+   - accounts in any organization and personal Microsoft accounts;
+   - the redirect URI, and ID tokens on: Static Web Apps asks for `code id_token`, and with ID
+     tokens off, Microsoft's answer made the site show "401: Unauthorized" after a good sign-in
+     (seen on dev, 2026-10);
+   - the home page, privacy and support links;
+   - the site's icon as the logo;
+   - the sign-in permissions `openid` and `profile`. The site asks for no email address
+     (`scope=openid profile` in `web/src/lib/signin.ts`), and `prompt=select_account` lets a
+     person pick another account after signing out.
+
+   It then adds a federated identity credential that trusts the site's sign-in identity, and adds
+   no client secret. Graph cannot set the publisher domain ("Property 'publisherDomain' is
+   read-only"), so the script lists that as a step for the admin center: open the app's
+   **Branding & properties** and set **Publisher domain** to `atlasrelay.org`, a verified domain of
+   the tenant.
+2. **GitHub.** It opens a page that sends a GitHub App manifest to github.com. Check the name there
+   (GitHub App names are unique across GitHub), then choose **Create GitHub App**. GitHub sends the
+   browser back to the script, which stores the client id and writes the client secret to the
+   vault. The app asks for no permissions and has no webhook.
+3. **Google.** It prints what to set up in the Google Cloud console:
+   - **Branding:** the app name, a support email, the home page and the privacy page;
+   - **Audience:** External, then **Publish app**;
+   - **Clients:** a Web application client with the redirect URI.
+
+   It then asks for the client id and, without showing it, the client secret.
+4. **ORCID.** It prints what to register under Developer tools on orcid.org, then asks for the
+   client id and, without showing it, the client secret. Each ORCID account has one public API
+   client, so dev and prod share it. Outside dev, the script takes dev's client id from dev's
+   settings and copies its secret from dev's sign-in vault, without asking; add the environment's
+   redirect URI to the client on orcid.org, which it lists at the end. The site's account name for an ORCID
+   sign-in is the ORCID iD: Static Web Apps refuses a sign-in without one ("403: We need an email
+   address or a handle from your login service"), and ORCID's token has no email address.
+
+It also writes each client id it records to the vault.
+
+Once GitHub and Microsoft are both registered, it deploys the stack (`scripts/provision.sh`) with
+the client ids. That writes the app settings that point into the vault, and it also tells the API
+which providers to accept. It records `SIGNIN_PROVIDERS` and sets the repository variable. Then it
+prints where each `/.auth/login/<provider>` leads on the live site.
+
+`scripts/register-signin.sh dev google` registers one provider. The settings and the vault keep the
+others.
+
+### Putting it live
+
+App settings alone change nothing a visitor sees. The site keeps its built-in providers until a
+build that names the new ones is deployed. The order matters the other way too: while the live
+build names an app setting that does not exist, Static Web Apps answers 404 for every
+`/.auth/login/<provider>`, not only the one that lacks it (seen on dev, 2026-10).
+
+- Dev: `scripts/run-e2e.sh dev` builds with `SIGNIN_PROVIDERS`, deploys to dev and runs the
+  full-flow tests, which sign in with Microsoft through the new registration. The `e2e-dev.yml`
+  workflow builds with `DEV_SIGNIN_PROVIDERS`.
+- Prod: run the Deploy workflow (`gh workflow run deploy.yml --repo tgoodyear/atlasrelay --ref
+  main`), which builds with `SIGNIN_PROVIDERS`.
+
+Afterwards each provider's sign-in leads to it, and `/.auth/me` shows the provider once signed in:
+
+```bash
+for p in github aad google orcid; do
+  curl -s -o /dev/null -w "$p %{http_code} %{redirect_url}\n" "https://<host>/.auth/login/$p" | cut -c1-90
+done
+```
+
+Before prod has users, switching changes nothing for anyone. After that, check on dev first that an
+existing GitHub and Microsoft account keeps its `userId` (in `/.auth/me`) across the switch. If it
+changes, people would get a new, empty account, and their projects and pledges would stay with the
+old one.
+
+The Microsoft registration's publisher is not verified (Microsoft Partner Network publisher
+verification is not done). Organizations that let their users consent only to apps from verified
+publishers show those users "Need admin approval" instead of signing them in; an admin of that
+organization can consent for it. The full-flow tests stop with that message if the test tenant does
+this.
+
+### Signing out
+
+The site's "Sign out" link is `/logout`. With the site's own registrations it leads to
+`/.auth/logout/complete`, which clears the site's sign-in cookie and comes back to the home page.
+The platform's own `/.auth/logout` sent a Microsoft sign-in to Microsoft's sign-out page, which ends
+the person's whole Microsoft session in that browser, and on dev (2026-10) never came back to the
+site, so the site's cookie stayed and the person stayed signed in. The provider's own session is
+left alone, as with the built-in providers: signing in with Microsoft again asks which account to
+use (`prompt=select_account`). The full-flow tests on dev check that signing out ends the session
+(`e2e-real/specs/sign-out.spec.ts`).
+
+### Rotating a secret
+
+```bash
+scripts/register-signin.sh prod --rotate github     # GitHub, Google, ORCID: paste a new secret
+```
+
+Microsoft has no secret to rotate: its credential is the site's managed identity. For GitHub,
+Google and ORCID, create the new secret with the provider, paste it when asked, and delete the old
+one there once sign-in works. ORCID replaces the secret in place, so ORCID sign-in fails from the
+reset until the new secret is stored. Dev and prod share the ORCID client, so rotating it in either
+environment also stores the new secret in the other's vault (from the settings in `.azure/`); one
+it can't reach is listed at the end, to rotate there with the same secret.
+
+The app settings name the secret without a version, so a rotated secret needs no deployment. When
+Static Web Apps picks up the new version is not documented; sign in to check before deleting the
+old secret with the provider.
+
+If a secret leaks, rotate it at once and delete the old one with the provider. A client secret
+lets someone act as the site's registration with that provider: for GitHub, for example, it can
+check, reset or revoke the tokens people granted the app. On its own it does not let anyone sign in
+to this site as somebody else, because the provider sends sign-in codes only to the registered
+redirect URIs. None of these secrets reaches an Azure resource or data.
+
+The identity the site signs in to Microsoft with can get tokens as the Entra app registration, and
+nothing else: it has no Azure role, and only the site holds it. The registration has no
+application permissions and no Azure role assignments, and should get none.
+
+### The vault
+
+`kvs-atlasrelay-<env>-...` uses Azure RBAC only. The site's system-assigned identity has Key Vault Secrets
+User and the operator (`ATLASRELAY_OPERATOR_PRINCIPAL_ID`) has Key Vault Secrets Officer. Public
+network access stays on because Static Web Apps reads the secrets from outside any virtual
+network. Its audit log (`AuditEvent`) goes to the environment's Log Analytics workspace:
+
+```kusto
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.KEYVAULT" and Resource startswith "KVS-"
+| project TimeGenerated, OperationName, CallerIPAddress, identity_claim_oid_g, ResultSignature
+```
+
+Purge protection is on, so nobody can purge the vault or its secrets during the 7-day retention
+period. `scripts/teardown.sh` leaves the deleted vault recoverable, and the next deployment of the
+environment recovers it, secrets included, but not its role assignments: see "Rebuilding a torn-down
+environment".
+
+### Turning them off
+
+The build has to change first, then the settings. Taking settings away while the live site still
+names them breaks sign-in with those providers, GitHub and Microsoft included. `scripts/provision.sh`
+reads from Azure which sign-in settings the live site has, and refuses to remove any of them without
+`SIGNIN_REMOVAL_OK=1`, even when the local settings file is an older copy.
+
+1. Prod: delete the repository variable `SIGNIN_PROVIDERS` (or set it to the providers that stay,
+   GitHub and Microsoft always among them), and run the Deploy workflow. Dev: `scripts/run-e2e.sh
+   dev` builds from the local setting, not the repository variable, so set both: the setting
+   (`scripts/settings.sh dev SIGNIN_PROVIDERS ""`, or the providers that stay) and
+   `DEV_SIGNIN_PROVIDERS`, then run `scripts/run-e2e.sh dev`. Either way, wait until the new build
+   is live (`/.auth/login/<provider>` answers 404 for each provider that goes) before step 2.
+2. Clear the client ids that go (`scripts/settings.sh prod ATLASRELAY_ORCID_CLIENT_ID ""`), then
+   `SIGNIN_REMOVAL_OK=1 scripts/provision.sh prod`. A client id set to empty stays empty; one missing
+   from the settings file altogether is taken back from the vault's `signin-<provider>-client-id`, so
+   delete that secret too if other copies of the settings should not bring the provider back.
+3. Delete the registrations with the providers. The secrets can stay in the vault or be deleted
+   there.
+
+Going back to the built-in providers can change people's `userId` just as switching away can.
 
 ## Testing a deployed site
 
@@ -653,6 +861,30 @@ GitHub Environment, and purges the test vault of a non-prod environment. For pro
 Deploy workflow builds without deploying until prod is bootstrapped again. A new zone gets new
 name servers, and the registrar has to be updated.
 
+### Rebuilding a torn-down environment
+
+Within the sign-in vault's 7-day retention, bootstrapping or provisioning the environment again
+recovers the vault with its secrets and client ids, and records its name. Two things don't come
+back, so a rebuild with sign-in registrations takes these steps by hand:
+
+1. **Your access to the vault.** Its role assignments went with the resource group, so the run stops
+   with `can't read signin-…-client-id` (or `can't list the secrets`). Grant yourself the role at
+   the resource group, not the vault: the stack creates the vault's own assignment, and one made by
+   hand at the same scope would collide with it.
+   ```bash
+   az role assignment create --role "Key Vault Secrets Officer" \
+     --assignee "$(scripts/settings.sh <env> ATLASRELAY_OPERATOR_PRINCIPAL_ID)" \
+     --scope "/subscriptions/$(scripts/settings.sh <env> AZURE_SUBSCRIPTION_ID)/resourceGroups/rg-atlasrelay-<env>"
+   ```
+   Wait a minute or two for it to apply, then run `scripts/provision.sh <env>` again.
+2. **Microsoft's trust in the site.** The sign-in identity is new, and the Entra app's federated
+   credential still names the old one, so Microsoft sign-in fails until
+   `scripts/register-signin.sh <env> aad` points it at the new identity. Run it right after the
+   provision.
+
+Then remove the assignment from step 1 (`az role assignment delete` with the same arguments): the
+stack's own assignment on the vault is in place by then. Automating both steps is a follow-up.
+
 ## History
 
 Until #54 the project ran in a resource group named `internetresearch`, deployed with
@@ -746,8 +978,8 @@ The Traffic tab, `scripts/logs.sh traffic` and `scripts/logs.sh actions` read `A
   origin of the page that linked here. `direct` means the browser sent no referrer: a typed or
   bookmarked address, a link in an email or chat app, or a site that withholds referrers.
   `internal` marks later page views, and page loads that started from another page of this site.
-  Someone coming back from a first-time GitHub or Microsoft sign-in may show up with github.com or
-  a Microsoft login host as the referrer. Page views from before this was recorded show
+  Someone coming back from a first-time sign-in may show up with the provider (github.com, a
+  Microsoft login host, accounts.google.com or orcid.org) as the referrer. Page views from before this was recorded show
   `(not recorded)`.
 - **Campaign** (`Properties.utm_source`, `utm_medium`, `utm_campaign`): copied from the landing URL
   onto every page view of that page load. Tag the links you post, for example
@@ -888,7 +1120,7 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
   projects advertised as pledgeable that nobody can pledge to, because the handler needs
   the owner's address to name a recipient. Their projects and pledges stay, carrying only a display
   name, because other people's records point at them. The internal account id stays on those rows,
-  so the same GitHub or Microsoft account signing in again is reconnected to that history; deletion
+  so the same account signing in again with the same provider is reconnected to that history; deletion
   is not a ban. Record what you did and why in the abuse issue, since there is no other audit
   trail.
 - **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and got no usable

@@ -134,6 +134,125 @@ sync_budget_start() {
     return 1
   fi
 }
+# The sign-in providers' setting names and vault secret names (infra/signin.bicep).
+SIGNIN_PROVIDER_KEYS="GITHUB:github MICROSOFT:aad GOOGLE:google ORCID:orcid"
+signin_secret_name() {
+  case $1 in
+    github) echo signin-github-client-secret ;;
+    aad) echo signin-microsoft-client-secret ;;
+    google) echo signin-google-client-secret ;;
+    orcid) echo signin-orcid-client-secret ;;
+    *) return 1 ;;
+  esac
+}
+# The sign-in providers the environment's own registrations cover, as the site's build takes them
+# (VITE_SIGNIN_PROVIDERS, web/src/lib/signin.ts): empty for the built-in GitHub and Microsoft
+# sign-in, else a list such as github,aad,google,orcid. A registration is a client id in the
+# settings (ATLASRELAY_<PROVIDER>_CLIENT_ID) and its secret in the environment's sign-in vault,
+# which scripts/register-signin.sh writes. Any registration of the site's own turns Static Web
+# Apps' built-in providers off, so Google or ORCID needs GitHub and Microsoft registrations too; a
+# set that would lose them is refused here, before anything is deployed. When the vault exists,
+# each client id needs its secret there (names are listed, never values).
+signin_providers() {
+  local p name id providers="" vault secrets=""
+  vault=$(aget SIGNIN_KEY_VAULT_NAME) || return 1
+  for p in $SIGNIN_PROVIDER_KEYS; do
+    name=${p#*:}; p=${p%%:*}
+    id=$(aget "ATLASRELAY_${p}_CLIENT_ID") || return 1
+    [ -n "$id" ] && providers="${providers:+$providers,}$name"
+  done
+  if [ -n "$providers" ] && [[ ",$providers," != *,github,aad,* ]]; then
+    echo "error: sign-in through the site's own registrations ($providers) turns the built-in GitHub and Microsoft sign-in off; register GitHub and Microsoft too (scripts/register-signin.sh, docs/RUNBOOK.md \"Sign-in registrations\")" >&2
+    return 1
+  fi
+  if [ -n "$providers" ]; then
+    [ -n "$vault" ] || { echo "error: no sign-in vault yet; run scripts/register-signin.sh $ENV_NAME" >&2; return 1; }
+    secrets=$(az keyvault secret list --vault-name "$vault" "${AZ_SUB[@]}" --query '[].name' -o tsv) ||
+      { echo "error: can't list the secrets in $vault" >&2; return 1; }
+    for name in ${providers//,/ }; do
+      # Microsoft has no secret: the site signs in with its managed identity.
+      [ "$name" = aad ] && continue
+      grep -qx "$(signin_secret_name "$name")" <<< "$secrets" ||
+        { echo "error: $name has a client id but no secret in $vault; run scripts/register-signin.sh $ENV_NAME $name" >&2; return 1; }
+    done
+  fi
+  echo "$providers"
+}
+# Client ids are kept in the sign-in vault as well as the settings file (signin-<provider>-client-id,
+# written by scripts/register-signin.sh), so a fresh copy of the settings, in another worktree or on
+# another machine, does not deploy the site without its registrations. A client id missing from
+# the file is taken from the vault; one that differs is reported and the file's value is kept. One
+# set to empty in the file stays empty: that is how a provider is turned off (docs/RUNBOOK.md,
+# "Turning them off"). A vault that can't be read stops the deployment rather than deploying the
+# site without registrations it has.
+sync_client_ids() {
+  local vault p key tag file stored err
+  vault=$(aget SIGNIN_KEY_VAULT_NAME) || return 1
+  [ -n "$vault" ] || return 0
+  for p in $SIGNIN_PROVIDER_KEYS; do
+    key="ATLASRELAY_${p%%:*}_CLIENT_ID"
+    tag=$(tr 'A-Z' 'a-z' <<< "${p%%:*}")
+    file=$(aget "$key") || return 1
+    if [ -z "$file" ] && [ -f "$ENV_FILE" ] && grep -q "^$key=" "$ENV_FILE"; then
+      continue
+    fi
+    err=$(mktemp)
+    if ! stored=$(az keyvault secret show --vault-name "$vault" --name "signin-$tag-client-id" "${AZ_SUB[@]}" \
+      --query value -o tsv 2> "$err"); then
+      if grep -q 'SecretNotFound' "$err"; then rm -f "$err"; continue; fi
+      echo "error: can't read signin-$tag-client-id from $vault: $(cat "$err")" >&2
+      rm -f "$err"
+      return 1
+    fi
+    rm -f "$err"
+    [ -n "$stored" ] || continue
+    if [ -z "$file" ]; then
+      aset "$key" "$stored" || return 1
+      echo "took $key from $vault"
+    elif [ "$file" != "$stored" ]; then
+      echo "warning: $key is $file here but $stored in $vault; keeping $file. Run scripts/register-signin.sh $ENV_NAME to settle it." >&2
+    fi
+  done
+}
+# A sign-in vault deleted with its environment stays recoverable, with its secrets, for its
+# retention period, and its name cannot be reused until then (purge protection, signin.bicep).
+# Recover it before a deployment that would create it again.
+recover_signin_vault() {
+  local vault
+  # By its name's prefix: the settings file of a torn-down environment is renamed, so it may not
+  # have the name any more. Only one sign-in vault per environment can exist, deleted or not.
+  vault=$(az keyvault list-deleted "${AZ_SUB[@]}" --resource-type vault \
+    --query "[?starts_with(name, 'kvs-atlasrelay-$ENV_NAME-')].name | [0]" -o tsv) || return 1
+  [ -n "$vault" ] || return 0
+  echo "recovering the deleted sign-in vault $vault"
+  # A vault comes back into the group it was deleted from, which a teardown removed too. The
+  # deployment that follows takes the group over and tags it.
+  if [ "$(az group exists -n "rg-atlasrelay-$ENV_NAME" "${AZ_SUB[@]}")" != true ]; then
+    az group create -n "rg-atlasrelay-$ENV_NAME" -l "$(stack_location)" "${AZ_SUB[@]}" -o none || return 1
+  fi
+  az keyvault recover --name "$vault" "${AZ_SUB[@]}" -o none || return 1
+  # The settings of a torn-down environment are renamed away, so record the vault's name again:
+  # sync_client_ids reads the client ids from it next.
+  [ -n "$(aget SIGNIN_KEY_VAULT_NAME)" ] || aset SIGNIN_KEY_VAULT_NAME "$vault"
+  echo "note: a recovered vault comes back without its role assignments; if reading it fails below, see docs/RUNBOOK.md, \"Rebuilding a torn-down environment\""
+}
+# The sign-in providers the deployed site has app settings for, from Azure (names only; the values
+# are dropped here). Empty when the site does not exist yet.
+live_signin_providers() {
+  local site names
+  site="/subscriptions/$(aget AZURE_SUBSCRIPTION_ID)/resourceGroups/rg-atlasrelay-$ENV_NAME/providers/Microsoft.Web/staticSites/swa-atlasrelay-$ENV_NAME" || return 1
+  # Only "not found" means there is nothing to protect; any other error stops the deployment.
+  if ! names=$(az rest --method post --url "$site/listAppSettings?api-version=2024-04-01" --query 'keys(properties)' -o tsv 2>&1); then
+    grep -qiE 'ResourceNotFound|ResourceGroupNotFound|"code": *"NotFound"|could not be found' <<< "$names" && return 0
+    echo "error: can't list the app settings of swa-atlasrelay-$ENV_NAME: $names" >&2
+    return 1
+  fi
+  grep -q '^SIGNIN_GITHUB_CLIENT_ID$' <<< "$names" && echo -n github,
+  grep -q '^SIGNIN_MICROSOFT_CLIENT_ID$' <<< "$names" && echo -n aad,
+  grep -q '^SIGNIN_GOOGLE_CLIENT_ID$' <<< "$names" && echo -n google,
+  grep -q '^SIGNIN_ORCID_CLIENT_ID$' <<< "$names" && echo -n orcid,
+  echo
+}
 # A new custom role can take a minute or two to replicate before it can be assigned
 # (RoleDefinitionDoesNotExist). The deployment is idempotent, so retry.
 provision() {
@@ -143,8 +262,27 @@ provision() {
     *) die "ACTION_ON_UNMANAGE must be deleteResources or detachAll" ;;
   esac
   sync_budget_start || die "could not work out the budget's start date"
+  recover_signin_vault || die "could not recover the deleted sign-in vault"
+  sync_client_ids || die "could not read the client ids from the sign-in vault"
+  local providers previous p
+  providers=$(signin_providers) || die "the sign-in settings are incomplete"
+  # Removing a registration's settings breaks sign-in with it, and with GitHub and Microsoft too
+  # when it is one of theirs, for as long as the live site's build still names it. The site has to
+  # go first (docs/RUNBOOK.md, "Turning them off"); SIGNIN_REMOVAL_OK=1 says it has. What counts
+  # is what the site has now, read from Azure, not this settings file, which may be an old copy.
+  previous=$(live_signin_providers) || die "could not read the site's sign-in settings from Azure"
+  for p in ${previous//,/ }; do
+    if [[ ",$providers," != *",$p,"* ]] && [ "${SIGNIN_REMOVAL_OK:-}" != 1 ]; then
+      die "this removes the $p sign-in settings, which the last deployment had. First deploy a site build whose VITE_SIGNIN_PROVIDERS leaves $p out (empty, for github or aad) (docs/RUNBOOK.md, \"Turning them off\"), then run again with SIGNIN_REMOVAL_OK=1"
+    fi
+  done
   for attempt in 1 2 3; do
-    deploy_stack && save_outputs && return 0
+    if deploy_stack && save_outputs; then
+      # What the site's build needs to offer exactly these providers. It changes nothing on its
+      # own: the Deploy workflow reads it from the repository variable SIGNIN_PROVIDERS.
+      aset SIGNIN_PROVIDERS "$providers" || die "could not save SIGNIN_PROVIDERS"
+      return 0
+    fi
     [ "$attempt" = 3 ] && die "provisioning failed three times"
     echo "retrying in 60s"
     sleep 60

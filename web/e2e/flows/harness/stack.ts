@@ -154,7 +154,9 @@ async function main(): Promise<void> {
 
   start('func', process.env.FUNC || 'func', ['start', '--port', String(PORTS.func)], {
     cwd: apiDir,
-    env: { FUNCTIONS_CORE_TOOLS_TELEMETRY_OPTOUT: '1' },
+    // The API accepts all four providers here, as it does on a site with its own registrations
+    // (api/src/lib/auth.ts), so the tests can sign in as Google and ORCID accounts.
+    env: { FUNCTIONS_CORE_TOOLS_TELEMETRY_OPTOUT: '1', SIGNIN_PROVIDERS: 'github,aad,google,orcid' },
   });
   await waitFor('Functions host', `${FUNC_URL}/api/stats`, 90_000);
 
