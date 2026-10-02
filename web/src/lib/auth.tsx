@@ -32,7 +32,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch('/.auth/me', { credentials: 'same-origin' });
+      // Never from the HTTP cache: Static Web Apps sends /.auth/me without cache headers, and a
+      // stored answer could show a signed-out visitor as signed in.
+      const res = await fetch('/.auth/me', { credentials: 'same-origin', cache: 'no-store' });
       const payload = (await res.json()) as { clientPrincipal: ClientPrincipal | null };
       const p = payload.clientPrincipal;
       setPrincipal(p);

@@ -49,18 +49,26 @@ az account show "${AZ_SUB[@]}" -o none 2> /dev/null ||
 REPO=$(aget ATLASRELAY_GITHUB_REPO); REPO=${REPO:-tgoodyear/atlasrelay}
 GRAPH=https://graph.microsoft.com/v1.0
 
-# The hostname people sign in on, and the one every redirect URI names. Prod: the domain, which the
-# site redirects every other hostname to once it is the default domain (docs/RUNBOOK.md,
-# "Canonical host"). Any other environment: the site's own hostname, which the full-flow tests use.
+# The hostnames people sign in on. Static Web Apps sends each provider the callback on the hostname
+# the sign-in started from, so every one of them needs its redirect URI registered (seen on dev,
+# 2026-10: a sign-in from dev.atlasrelay.org failed at GitHub and Microsoft with only the site's own
+# hostname registered). Prod: the domain alone, because the site redirects every other hostname to
+# it once it is the default domain (docs/RUNBOOK.md, "Canonical host"), which is checked below. Any
+# other environment: the site's own hostname, which the full-flow tests use, and <env>.<domain>.
+ZONE=$(aget ATLASRELAY_DNS_ZONE)
 if [ "$ENV_NAME" = prod ]; then
-  HOST=$(aget ATLASRELAY_DNS_ZONE)
+  HOSTS=("$ZONE")
   NAME="Atlas Relay"
 else
-  HOST=$(aget SWA_HOSTNAME)
+  HOSTS=("$(aget SWA_HOSTNAME)")
+  [ -z "$ZONE" ] || HOSTS+=("$ENV_NAME.$ZONE")
   NAME="Atlas Relay ($ENV_NAME)"
 fi
-[ -n "$HOST" ] || die "no hostname for $ENV_NAME (ATLASRELAY_DNS_ZONE or SWA_HOSTNAME); provision it first"
-callback() { echo "https://$HOST/.auth/login/$1/callback"; }
+[ -n "${HOSTS[0]}" ] || die "no hostname for $ENV_NAME (ATLASRELAY_DNS_ZONE or SWA_HOSTNAME); provision it first"
+HOST=${HOSTS[0]}
+# Every redirect URI for one provider, one per line.
+callbacks() { local h; for h in "${HOSTS[@]}"; do echo "https://$h/.auth/login/$1/callback"; done; }
+callback_list() { callbacks "$1" | paste -sd ' ' -; }
 
 # The vault comes with the stack. An environment provisioned before it existed gets it now.
 VAULT=$(aget SIGNIN_KEY_VAULT_NAME)
@@ -127,12 +135,12 @@ register_aad() {
     aset ATLASRELAY_MICROSOFT_CLIENT_ID "$app_id"
     echo "  created app $app_id"
   fi
-  body=$(jq -n --arg n "$NAME" --arg cb "$(callback aad)" --arg g "$GRAPH_APP" '{
+  body=$(jq -n --arg n "$NAME" --argjson cb "$(callbacks aad | jq -R . | jq -s .)" --arg g "$GRAPH_APP" '{
     displayName: $n,
     signInAudience: "AzureADandPersonalMicrosoftAccount",
     api: {requestedAccessTokenVersion: 2},
     web: {
-      redirectUris: [$cb],
+      redirectUris: $cb,
       homePageUrl: "https://atlasrelay.org",
       implicitGrantSettings: {enableIdTokenIssuance: true, enableAccessTokenIssuance: false}
     },
@@ -154,7 +162,7 @@ register_aad() {
   # Without them Microsoft answers the callback with an error and the site shows "401:
   # Unauthorized" after a successful sign-in (seen on dev, 2026-10).
   az rest --method patch --url "$GRAPH/applications/$object_id" --headers Content-Type=application/json --body "$body" -o none
-  echo "  name, accounts, redirect URI $(callback aad), ID tokens, links and sign-in permissions set"
+  echo "  name, accounts, redirect URIs $(callback_list aad), ID tokens, links and sign-in permissions set"
   # The publisher domain shown on the consent screen. Microsoft Graph treats it as read-only
   # ("Property 'publisherDomain' is read-only and cannot be set", 2026-10), so it is set once in
   # the admin center, and checked here.
@@ -212,6 +220,10 @@ register_github() {
   local id out page
   echo "== GitHub: $NAME"
   id=$(aget ATLASRELAY_GITHUB_CLIENT_ID)
+  if [ -n "$id" ]; then
+    # GitHub has no API for a GitHub App's callback URLs, so the list is checked by hand.
+    PENDING+=("GitHub App $id (Settings, Developer settings, GitHub Apps, the app, General): Callback URLs must include $(callback_list github)")
+  fi
   if [ -n "$id" ] && [ "$ROTATE" != true ]; then
     echo "  already registered ($id); use --rotate for a new secret"
     return 0
@@ -225,8 +237,10 @@ register_github() {
   fi
   echo "  A browser opens on github.com. Check the name (GitHub app names are unique across GitHub;"
   echo "  change it there if '$NAME' is taken), then choose 'Create GitHub App'."
+  local args=() cb
+  while read -r cb; do args+=(--callback "$cb"); done < <(callbacks github)
   out=$(node scripts/lib/github-app.mjs --name "$NAME" --homepage https://atlasrelay.org \
-    --callback "$(callback github)" --vault "$VAULT" --secret-name "$(signin_secret_name github)" \
+    "${args[@]}" --vault "$VAULT" --secret-name "$(signin_secret_name github)" \
     --subscription "$(aget AZURE_SUBSCRIPTION_ID)")
   id=$(sed -n 1p <<< "$out"); page=$(sed -n 2p <<< "$out")
   [[ $id =~ ^Iv[0-9A-Za-z.]+$ ]] || die "the GitHub App was not created"
@@ -258,6 +272,8 @@ read_client_id() {
 
 register_google() {
   echo "== Google: $NAME"
+  [ -z "$(aget ATLASRELAY_GOOGLE_CLIENT_ID)" ] ||
+    PENDING+=("Google client $(aget ATLASRELAY_GOOGLE_CLIENT_ID) (Google Auth Platform, Clients): Authorized redirect URIs must include $(callback_list google)")
   if [ -n "$(aget ATLASRELAY_GOOGLE_CLIENT_ID)" ] && [ "$ROTATE" != true ]; then
     echo "  already registered; use --rotate for a new secret"
     return 0
@@ -270,7 +286,7 @@ register_google() {
               (and azurestaticapps.net for a site on its own hostname)
     Audience: External, then Publish app
     Clients:  Create client, type Web application, name "$NAME",
-              authorized redirect URI $(callback google)
+              authorized redirect URIs $(callback_list google)
   Then copy the client id and the client secret.
 EOF
   read_client_id "Google client id" ATLASRELAY_GOOGLE_CLIENT_ID '^[0-9]+-[0-9a-z]+\.apps\.googleusercontent\.com$'
@@ -280,6 +296,8 @@ EOF
 
 register_orcid() {
   echo "== ORCID: $NAME"
+  [ -z "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] ||
+    PENDING+=("ORCID client $(aget ATLASRELAY_ORCID_CLIENT_ID) (orcid.org, Developer tools): Redirect URIs must include $(callback_list orcid)")
   if [ -n "$(aget ATLASRELAY_ORCID_CLIENT_ID)" ] && [ "$ROTATE" != true ]; then
     echo "  already registered; use --rotate for a new secret"
     return 0
@@ -290,7 +308,7 @@ register_orcid() {
     Name: $NAME    Website: https://atlasrelay.org
     Description: Sign-in for Atlas Relay, which connects researchers who need RIPE Atlas
                  credits with people who can donate them.
-    Redirect URI: $(callback orcid)
+    Redirect URIs: $(callback_list orcid)
   Use a different ORCID account for dev and prod: each account has one public API client.
   Then copy the client id (APP-...) and the client secret.
 EOF
@@ -311,6 +329,19 @@ trap show_pending EXIT
 for p in "${PROVIDERS[@]}"; do
   "register_$p"
 done
+
+# Prod registers the domain alone, so every other hostname of the site must redirect to it before
+# anyone signs in there.
+if [ "$ENV_NAME" = prod ]; then
+  for h in "www.$ZONE" "$(aget SWA_HOSTNAME)"; do
+    [ -n "$h" ] || continue
+    to=$(curl -s -o /dev/null -w '%{redirect_url}' "https://$h/" || true)
+    case "$to" in
+      "https://$ZONE/"*) ;;
+      *) PENDING+=("https://$h/ does not redirect to https://$ZONE/, so sign-in there would fail: make $ZONE the site's default domain (docs/RUNBOOK.md, \"Canonical host\")") ;;
+    esac
+  done
+fi
 
 # ---------- deploy and check ----------
 
@@ -338,9 +369,17 @@ fi
 # answer 404.
 echo "== sign-in redirects on https://$HOST"
 for p in github aad google orcid; do
-  read -r code location < <(curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "https://$HOST/.auth/login/$p") || true
-  host=$(sed -E 's#^https?://([^/]+).*#\1#' <<< "${location:-}")
-  echo "  $p: $code ${host:-}"
+  # The first answer is the site redirecting to itself with a nonce; follow it to the provider.
+  url="https://$HOST/.auth/login/$p" code="" jar=$(mktemp)
+  for _ in 1 2 3; do
+    read -r code location < <(curl -s -b "$jar" -c "$jar" -o /dev/null -w '%{http_code} %{redirect_url}\n' "$url") || true
+    [ -n "${location:-}" ] || break
+    url=$location
+    [[ $url == "https://$HOST/"* ]] || break
+  done
+  rm -f "$jar"
+  host=$(sed -E 's#^https?://([^/?]+).*#\1#' <<< "$url")
+  echo "  $p: $code -> ${host:-nothing}"
 done
 echo "expected once a build with these providers is live: github -> github.com, aad -> login.microsoftonline.com,"
 echo "google -> accounts.google.com, orcid -> orcid.org. Build and deploy: docs/RUNBOOK.md, \"Sign-in registrations\"."

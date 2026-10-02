@@ -11,7 +11,7 @@
 // The app asks for no permissions and has no webhook: it only signs people in. GitHub also
 // returns a private key for the app; it is not kept, since nothing here acts as the app.
 //
-//   node scripts/lib/github-app.mjs --name NAME --homepage URL --callback URL \
+//   node scripts/lib/github-app.mjs --name NAME --homepage URL --callback URL [--callback URL ...] \
 //     --vault VAULT --secret-name NAME --subscription ID
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -22,7 +22,7 @@ const { values: args } = parseArgs({
   options: {
     name: { type: 'string' },
     homepage: { type: 'string' },
-    callback: { type: 'string' },
+    callback: { type: 'string', multiple: true },
     vault: { type: 'string' },
     'secret-name': { type: 'string' },
     subscription: { type: 'string' },
@@ -72,7 +72,7 @@ const server = createServer(async (req, res) => {
     const manifest = {
       name: args.name,
       url: args.homepage,
-      callback_urls: [args.callback],
+      callback_urls: args.callback,
       redirect_url: `http://127.0.0.1:${port}/done`,
       public: true,
       default_permissions: {},

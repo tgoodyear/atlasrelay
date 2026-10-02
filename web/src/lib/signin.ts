@@ -66,7 +66,15 @@ export const APP_SETTINGS: Record<ProviderId, { clientId: string; clientSecret: 
  * (docs/RUNBOOK.md).
  */
 export const MICROSOFT_ISSUER = 'https://login.microsoftonline.com/common/v2.0';
+/** What the site asks Microsoft for: sign-in and the person's name and account name, no email. */
+export const MICROSOFT_SCOPES = 'openid profile';
 export const ORCID_DISCOVERY = 'https://orcid.org/.well-known/openid-configuration';
+/**
+ * The claim Static Web Apps takes ORCID's account name from: the token's "sub", the ORCID iD, under
+ * the name it gives that claim. It renames sub to this type (the claims it lists for a sign-in carry
+ * nameidentifier and no sub), and "sub" itself matched nothing on dev (2026-10).
+ */
+export const ORCID_NAME_CLAIM = 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier';
 
 export type SignIn = { mode: 'built-in'; providers: ProviderId[] } | { mode: 'custom'; providers: ProviderId[] };
 
@@ -186,6 +194,14 @@ function identityProviders(on: ProviderId[]) {
         clientIdSettingName: APP_SETTINGS.aad.clientId,
         clientSecretSettingName: APP_SETTINGS.aad.clientSecret,
       },
+      // Static Web Apps asks Microsoft for "openid profile email" by default. The site never uses
+      // the email address, and the consent screen lists it ("View your email address"), so it asks
+      // for openid and profile only; profile gives the account name (preferred_username) and name.
+      // select_account: after signing out of the site, Microsoft's own session would otherwise sign
+      // the same account straight back in, with no way to pick another.
+      login: {
+        loginParameters: [`scope=${MICROSOFT_SCOPES}`, 'prompt=select_account'],
+      },
     },
   };
   if (on.includes('google')) {
@@ -211,7 +227,7 @@ function identityProviders(on: ProviderId[]) {
           // email or preferred_username; its "name" is there only when the record makes it public.
           // The iD is public by design. It never becomes the public display name (api views.ts);
           // the app offers the person's name from the token instead (web lib/displayName.ts).
-          nameClaimType: 'sub',
+          nameClaimType: ORCID_NAME_CLAIM,
           // The only scope ORCID's OpenID Connect discovery lists.
           scopes: ['openid'],
           loginParameterNames: [],

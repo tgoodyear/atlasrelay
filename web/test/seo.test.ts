@@ -396,7 +396,10 @@ test('a custom sign-in build opens the providers it names, and keeps GitHub and 
   assert.deepEqual(orcid.login.scopes, ['openid']);
   // The account name is the iD ("sub"): Static Web Apps refuses a sign-in without one, and ORCID's
   // token carries no email or preferred_username, and "name" only for a public record.
-  assert.equal(orcid.login.nameClaimType, 'sub');
+  // Static Web Apps renames "sub" to the nameidentifier claim type; plain "sub" matched nothing on dev.
+  assert.equal(orcid.login.nameClaimType, 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier');
+  // Microsoft: no email scope; the site never uses the address.
+  assert.deepEqual(idp.azureActiveDirectory.login, { loginParameters: ['scope=openid profile', 'prompt=select_account'] });
   // Only setting names, never values, are in the file that ships with the site.
   assert.doesNotMatch(JSON.stringify(all.auth), /"(clientSecret|clientId)"\s*:/);
   for (const [route, target] of [['/login/google', 'google'], ['/login/orcid', 'orcid'], ['/login', 'github'], ['/login/microsoft', 'aad']]) {
