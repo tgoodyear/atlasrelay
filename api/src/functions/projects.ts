@@ -8,6 +8,7 @@ import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/va
 import { isPublicProject, publicName, publicPledge, publicProject, publicUser } from '../lib/views';
 import { projectHead } from '../lib/projectHtml';
 import { logError } from '../lib/telemetry';
+import { marksTestProject } from '../lib/testCleanup';
 
 /**
  * How many projects one listing will re-read pledges for. Anything above this keeps its cached
@@ -269,6 +270,9 @@ app.http('projects-create', {
       moderationClosed: false,
       createdAt: ts,
       updatedAt: ts,
+      // Only on a test environment, and only for a title the full-flow tests use: the one thing that
+      // lets DELETE /api/test/projects/{id} remove this project later (lib/testCleanup.ts).
+      ...(marksTestProject(fields.title!) ? { createdByTests: true } : {}),
     };
     await createProject(project);
 
@@ -327,6 +331,9 @@ app.http('projects-update', {
       if (project.moderationClosed) {
         throw new HttpError(403, 'This project was closed by the site and cannot be reopened. Contact the maintainer if you think that was a mistake.');
       }
+      // The test cleanup route (lib/testCleanup.ts) waits for the project to have been closed for a
+      // while before deleting it, so a project it has started on stays closed.
+      if (project.deletingSince) throw new HttpError(409, 'This project is being deleted and cannot be reopened.');
       // Deleting a profile closes its projects but leaves them on the site, and signing in again
       // recreates the profile with no RIPE address. Without this an owner could reopen a project
       // that lists publicly and fails every pledge, because there would be no recipient to name.
@@ -372,8 +379,9 @@ app.http('projects-update', {
     }
 
     // The flag can be set between the read above and this write, so re-check what actually landed
-    // and put the project back if a takedown arrived while the edit was in flight.
-    if (updated.moderationClosed && updated.status === 'open') {
+    // and put the project back if a takedown, or the test cleanup's close, arrived while the edit was
+    // in flight.
+    if ((updated.moderationClosed || updated.deletingSince) && updated.status === 'open') {
       const restored = await patchProject(id, { status: 'closed' });
       return json({ project: publicProject(restored) });
     }

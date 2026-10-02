@@ -183,3 +183,21 @@ branch; and the job that gets an Azure token runs in the GitHub Environment `dev
 can turn it off with `scripts/bootstrap.sh dev --no-approval`, which leaves the other checks in
 place. The tests run in Azure rather than on a self-hosted runner, because a self-hosted runner in
 a public repository can be given work by a pull request from a fork.
+
+The tests delete the projects they post on dev through `DELETE /api/test/projects/{id}`. The site
+itself cannot delete a project, and this route is not part of it: no page calls it, and prod does
+not have it. A project and its pledges are the public record of who gave credits to whom, and the
+site keeps that record (deleting a profile keeps them too, under the name Anonymous). The projects
+the tests post on dev are test data, and the tests remove them. The route exists only where the
+Function App has the app setting `E2E_PROJECT_CLEANUP=1`. Bicep sets it only through the test
+harness flag, which is false whenever the environment is prod, and drops the same key from any extra
+app settings passed in. Without the setting the function is never registered, and its handler also
+answers 404 before it reads anything, so prod answers as it would for any route that does not exist.
+`scripts/check-params.sh` checks the compiled templates for this on every infrastructure change.
+
+Where the route exists, it deletes a project only for a signed-in caller who owns it, and only if
+the project was marked as a test project when it was created. The API stores that marker only when
+the setting is on and the title starts with `E2E `, and no edit can add it later. On dev, anyone
+signed in can post a project titled that way and later delete it, with any pledges made to it; the
+marker allows nothing else. `scripts/purge-test-data.sh`, which removes what earlier runs left,
+works on a test environment's tables directly with the operator's own access, and refuses prod.

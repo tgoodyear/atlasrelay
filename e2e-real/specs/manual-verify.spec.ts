@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { markSent, pledgeByHand, pledgeRow, postProjectInForm, saveProfile } from '../../web/e2e/ui';
 import { ripeAccounts, ripeTransferCredits, type RipeSide } from '../accounts';
-import { deleteBothProfiles, signedIn } from '../site';
+import { cleanUpRun, deleteBothProfiles, signedIn } from '../site';
 import { pollUntil, ripeClient, RipeError, type RipeClient } from '../lib/ripe.mjs';
 
 // A manual pledge checked against what really arrived, between the two real RIPE Atlas accounts
@@ -73,7 +73,14 @@ test.afterEach(async ({}, testInfo) => {
 });
 
 test.beforeEach(deleteBothProfiles);
+// After the credit return above (hooks run in the order they are declared, and a failing one does
+// not stop the next), then the profiles: the test's project is closed for deletion, passed or failed.
+// The API deletes a project two minutes after closing it, so the deletion itself is waited for once,
+// in afterAll, which also covers an afterEach hook that timed out and skipped the ones after it.
+test.afterEach(async ({}, testInfo) => cleanUpRun(run, testInfo, { wait: false }));
 test.afterEach(deleteBothProfiles);
+test.afterAll(async ({}, testInfo) => cleanUpRun(run, testInfo));
+test.afterAll(deleteBothProfiles);
 
 /**
  * Sends `amount` back from `from` to `to`. The same rules as ripe-transfer.spec.ts: trusts

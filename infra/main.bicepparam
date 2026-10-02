@@ -26,10 +26,15 @@ param budgetAmount = 120
 param budgetStartDate = readEnvironmentVariable('ATLASRELAY_BUDGET_START', '')
 param dnsZoneName = readEnvironmentVariable('ATLASRELAY_DNS_ZONE', '')
 param dnsTtl = int(readEnvironmentVariable('ATLASRELAY_DNS_TTL', '3600'))
-// Google Search Console domain verification, published at the apex next to SPF. Public, so it
-// lives in git. The Static Web Apps apex token is per site and lives in the settings instead.
+// Domain verification records, published at the apex next to SPF: Google Search Console, and
+// Microsoft Entra ID (atlasrelay.org verified on the tenant that holds the site's sign-in app
+// registration, so the consent screen can name atlasrelay.org as the publisher domain). Public, so
+// they live in git. The Static Web Apps apex token is per site and lives in the settings instead.
 param dnsApexTxtValues = {
-  'atlasrelay.org': ['google-site-verification=PmPeiS951f6LV0yLSeciOw2VCg8GoDdKAQTllGN6fkQ']
+  'atlasrelay.org': [
+    'google-site-verification=PmPeiS951f6LV0yLSeciOw2VCg8GoDdKAQTllGN6fkQ'
+    'MS=ms50104534'
+  ]
 }
 param swaApexToken = readEnvironmentVariable('ATLASRELAY_SWA_APEX_TOKEN', '')
 // The full-flow test harness goes with every environment but prod, and there is no setting to turn it

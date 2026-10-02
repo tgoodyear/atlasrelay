@@ -49,6 +49,11 @@ param additionalAppSettings object = {}
 own registrations for, else the built-in GitHub and Microsoft.''')
 param signinProviders string = 'github,aad'
 
+@description('''Turn on DELETE /api/test/projects/{id}, which the full-flow tests use to remove the
+projects they post (api/src/lib/testCleanup.ts, SECURITY.md). main.bicep passes true outside prod
+only; without it the route does not exist.''')
+param testCleanup bool = false
+
 param tags object = {}
 
 // Built-in roles. https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage
@@ -283,6 +288,11 @@ var monitoringAppSettings = empty(appInsightsConnectionString)
       APPLICATIONINSIGHTS_CONNECTION_STRING: appInsightsConnectionString
     }
 var unlinkedAppSettings = linkApi ? {} : { IGNORE_CLIENT_PRINCIPAL: '1' }
+// The test cleanup route (api/src/lib/testCleanup.ts) exists only where this is set. The parameter
+// is the only way to set it: the same key is dropped from additionalAppSettings, so a stray extra
+// setting cannot turn it on in prod.
+var testCleanupAppSettings = testCleanup ? { E2E_PROJECT_CLEANUP: '1' } : {}
+var extraAppSettings = toObject(filter(items(additionalAppSettings), s => toUpper(s.key) != 'E2E_PROJECT_CLEANUP'), s => s.key, s => s.value)
 
 // This resource REPLACES the whole settings map, so every setting is declared here (or passed in
 // additionalAppSettings). It waits for the link: on the deployment that links the app, the header
@@ -290,7 +300,7 @@ var unlinkedAppSettings = linkApi ? {} : { IGNORE_CLIENT_PRINCIPAL: '1' }
 resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
   parent: functionApp
   name: 'appsettings'
-  properties: union(baseAppSettings, monitoringAppSettings, unlinkedAppSettings, additionalAppSettings)
+  properties: union(baseAppSettings, monitoringAppSettings, unlinkedAppSettings, extraAppSettings, testCleanupAppSettings)
   dependsOn: [
     link
     apiTables

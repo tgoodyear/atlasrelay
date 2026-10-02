@@ -94,6 +94,17 @@ export interface Project {
    * updatedAt. Read only by profile deletion, to tell whether a project changed recently. Never published.
    */
   storedAt?: string;
+  /**
+   * Posted by the full-flow tests on a test environment, so DELETE /api/test/projects/{id} may remove
+   * it (lib/testCleanup.ts). Written only at creation, and only where E2E_PROJECT_CLEANUP is on, so
+   * no prod row ever has it and no edit can add it. Never published.
+   */
+  createdByTests?: boolean;
+  /**
+   * When the test cleanup route closed the project to delete it (lib/testCleanup.ts). It deletes only
+   * once this is older than any pledge request could still be running. Never published.
+   */
+  deletingSince?: string;
 }
 
 export interface Pledge {
@@ -362,6 +373,9 @@ function toProject(e: Entity): Project {
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
     totalsDirty: e.totalsDirty === true,
     storedAt: storageTimestamp(e.timestamp),
+    // Only when set, so a row without the column reads back exactly as it did before it existed.
+    ...(e.createdByTests === true ? { createdByTests: true } : {}),
+    ...(typeof e.deletingSince === 'string' && e.deletingSince ? { deletingSince: e.deletingSince } : {}),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -580,6 +594,138 @@ export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
     for (const p of batch) if (p && p.ownerId === ownerId) out.push(p);
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/** Delete one row; false when it was already gone. */
+async function deleteRow(t: TableClient, partitionKey: string, rowKey: string): Promise<boolean> {
+  try {
+    await t.deleteEntity(partitionKey, rowKey);
+    return true;
+  } catch (err) {
+    if (err instanceof RestError && err.statusCode === 404) return false;
+    throw err;
+  }
+}
+
+/** Delete every row a query returns; how many it deleted. */
+async function deleteMatching(t: TableClient, filter: string): Promise<number> {
+  const keys: { partitionKey: string; rowKey: string }[] = [];
+  for await (const e of t.listEntities<Entity>({ queryOptions: { filter, select: ['PartitionKey', 'RowKey'] } })) {
+    keys.push({ partitionKey: e.partitionKey, rowKey: e.rowKey });
+  }
+  let n = 0;
+  for (const k of keys) if (await deleteRow(t, k.partitionKey, k.rowKey)) n += 1;
+  return n;
+}
+
+/**
+ * Remove a project and every row that exists because of it. Used only by the test cleanup route
+ * (lib/testCleanup.ts), which decides whether the caller may; this does no checking of its own.
+ *
+ * What a project leaves in storage, and so what goes:
+ *   pledges  every pledge, partitioned by project id
+ *   claims   donors' pledge slots (partition = project id), the confirmation lock
+ *            (confirm-<project id>), and the owner's receipt reservations naming this project
+ *            (receipt-<owner id>, filtered on projectId)
+ *   projects the project row and its owner index entry (owner-<owner id>)
+ *
+ * Nothing else holds a figure derived from a project: the home-page figures, the listing and the
+ * sitemap are all computed from the project rows when they are read, so once the row is gone they
+ * no longer count it. A tombstone (getCleanupTombstone) is written first and removed last, so a
+ * request that fails at any step can be repeated to finish. The project row goes right after it, so
+ * a deletion stopped by a changed project leaves everything under the project untouched.
+ */
+/** The partition of a cleanup's tombstone in the claims table: one row, `tombstone`. */
+function cleanupPk(projectId: string): string {
+  return `cleanup-${projectId}`;
+}
+
+/**
+ * The owner of a project whose cleanup started and has not finished, or null. Written before
+ * anything is deleted and removed last, so a cleanup that failed after the project row went can
+ * still be found and finished: the project row is gone by then, and with it the owner and the marker
+ * the route checks.
+ */
+export async function getCleanupTombstone(projectId: string): Promise<{ ownerId: string } | null> {
+  const e = await getEntity(CLAIMS_TABLE, cleanupPk(projectId), 'tombstone');
+  return e ? { ownerId: String(e.ownerId ?? '') } : null;
+}
+
+/**
+ * A conditional write that keeps the project closed and changes nothing else (updatedAt is written
+ * back as it was). Rejects with 412 when the row changed since `etag`; returns the new version, which
+ * the deletion then requires of the project row.
+ */
+export async function fenceProject(id: string, etag: string, updatedAt: string): Promise<string> {
+  const res = await (await table('projects')).updateEntity(
+    { partitionKey: PROJECTS_PK, rowKey: id, status: 'closed', updatedAt } as TableEntity,
+    'Merge',
+    { etag },
+  );
+  if (!res.etag) throw new HttpError(409, 'The project could not be checked. Try again.');
+  return res.etag;
+}
+
+export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>, projectEtag?: string): Promise<{ pledges: number; claims: number }> {
+  const [pledgesT, claimsT, projectsT] = await Promise.all([table('pledges'), table(CLAIMS_TABLE), table('projects')]);
+  const id = project.id;
+  let pledges = 0;
+  let claims = 0;
+  const sweepPledgesAndSlots = async () => {
+    pledges += await deleteMatching(pledgesT, odata`PartitionKey eq ${id}`);
+    claims += await deleteMatching(claimsT, odata`PartitionKey eq ${id}`);
+  };
+  // First, so that every later step can fail and be retried: see getCleanupTombstone.
+  await claimsT.upsertEntity({ partitionKey: cleanupPk(id), rowKey: 'tombstone', ownerId: project.ownerId, createdAt: now() }, 'Replace');
+  // The project row next, conditional on the version the caller fenced, when it gave one: a write
+  // that landed after the fence (a reopen, say) fails this with 412 before anything under the project
+  // is touched, and the next call decides again. Once it is gone the tombstone is what finishes the
+  // rest, so the order of what follows only has to be retryable.
+  try {
+    await projectsT.deleteEntity(PROJECTS_PK, id, projectEtag ? { etag: projectEtag } : undefined);
+  } catch (err) {
+    if (!(err instanceof RestError && err.statusCode === 404)) throw err;
+  }
+  // After the project row: an index entry with no project row is skipped by every reader, while a
+  // project row with no index entry would be a live project its owner's dashboard, the open-project
+  // cap and profile deletion could no longer see.
+  await deleteRow(projectsT, ownerIndexPk(project.ownerId), id);
+  await sweepPledgesAndSlots();
+  if (await deleteRow(claimsT, `confirm-${id}`, 'lock')) claims += 1;
+  claims += await deleteMatching(claimsT, odata`PartitionKey eq ${receiptPk(project.ownerId)} and projectId eq ${id}`);
+  // Once more, for a pledge whose request read the project just before it went.
+  await sweepPledgesAndSlots();
+  await deleteRow(claimsT, cleanupPk(id), 'tombstone');
+  return { pledges, claims };
+}
+
+/** The donors' pledge slots on a project: which pledge holds each, and since when. */
+export async function listPledgeSlots(projectId: string): Promise<{ donorId: string; pledgeId: string; createdAt: string }[]> {
+  const out: { donorId: string; pledgeId: string; createdAt: string }[] = [];
+  for await (const e of (await table(CLAIMS_TABLE)).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${projectId}` } })) {
+    out.push({ donorId: e.rowKey, pledgeId: String(e.pledgeId ?? ''), createdAt: String(e.createdAt ?? '') });
+  }
+  return out;
+}
+
+/**
+ * Whether a pledge request may still be running on a project, from its slots and pledge rows. A slot
+ * is taken before the pledge row is written, so a recent slot with no row behind it, or one whose
+ * row is still in flight, is a request in progress. Bounded by the same grace as everything else
+ * here, so a request that died does not block for ever.
+ */
+export function pledgeRequestRunning(
+  slots: { pledgeId: string; createdAt: string }[],
+  pledges: Pledge[],
+  asOf: number = Date.now(),
+): boolean {
+  if (pledges.some((p) => pledgeInFlight(p, asOf))) return true;
+  const rows = new Map(pledges.map((p) => [p.id, p]));
+  return slots.some((s) => {
+    const since = Date.parse(s.createdAt);
+    if (!Number.isFinite(since) || asOf - since > CLAIM_ORPHAN_GRACE_MS) return false;
+    return !rows.has(s.pledgeId);
+  });
 }
 
 // ---------- pledges ----------
@@ -1001,7 +1147,7 @@ const CLAIMS_TABLE = 'claims' as const;
  * direction is only that a donor whose request died at exactly the wrong moment waits a little
  * before retrying, against a double transfer in the other.
  */
-const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
+export const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
 
 /**
  * Take the slot. Returns false when another live pledge already holds it.

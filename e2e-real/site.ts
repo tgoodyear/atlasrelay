@@ -1,5 +1,6 @@
-import { request as playwrightRequest, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { request as playwrightRequest, expect, type Browser, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
 import { statePath, type Role } from './accounts';
+import { deleteRunProjects } from './lib/cleanup.mjs';
 
 // What the specs do with the signed-in test accounts outside the page steps of web/e2e/ui.ts.
 
@@ -13,6 +14,34 @@ export async function deleteProfile(role: Role): Promise<void> {
   try {
     const res = await ctx.delete('/api/me');
     expect(res.status(), `DELETE /api/me as the ${role}: ${await res.text()}`).toBe(200);
+  } finally {
+    await ctx.dispose();
+  }
+}
+
+/**
+ * Deletes the projects this run posted, as the researcher who posted them, through the test-only
+ * route (lib/cleanup.mjs). Declared after a spec's credit-return hook and before its profile
+ * deletion, so it runs after the credits are back, and runs whether or not the test passed. Logs
+ * the ids it deleted; fails when one is left.
+ */
+export async function cleanUpRun(run: string, testInfo: TestInfo, options: { wait?: boolean } = {}): Promise<void> {
+  // Its own time on top of the test's: the API deletes a project only two minutes after closing it,
+  // and the deletion waits that out (lib/cleanup.mjs).
+  testInfo.setTimeout(testInfo.timeout + 4 * 60_000);
+  const ctx = await playwrightRequest.newContext({ baseURL: process.env.BASE_URL, storageState: statePath('researcher') });
+  try {
+    await deleteRunProjects({
+      list: async () => {
+        // /api/my reads the account's own projects and never creates a profile, unlike /api/me.
+        const res = await ctx.get('/api/my');
+        expect(res.status(), `GET /api/my as the researcher: ${await res.text()}`).toBe(200);
+        return ((await res.json()) as { projects: { id: string; title: string }[] }).projects;
+      },
+      remove: async (id) => (await ctx.delete(`/api/test/projects/${id}`)).status(),
+      read: async (id) => (await ctx.get(`/api/projects/${id}`)).status(),
+      log: (line) => console.log(line),
+    }, run, options);
   } finally {
     await ctx.dispose();
   }

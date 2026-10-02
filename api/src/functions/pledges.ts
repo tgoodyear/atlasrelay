@@ -646,6 +646,10 @@ app.http('pledges-update', {
     const isOwner = project.ownerId === principal.userId;
     const isDonor = pledge.donorId === principal.userId;
     if (!isOwner && !isDonor) throw new HttpError(403, 'Not allowed');
+    // The test cleanup route (lib/testCleanup.ts) deletes a stamped project once the stamp is older
+    // than any request runs, so a pledge update must not start on it: one that read the project
+    // before the stamp has finished by then.
+    if (project.deletingSince) throw new HttpError(409, 'This project is being deleted.');
 
     const body = await readJson(req);
     const status = oneOf(body, 'status', ['sent', 'confirmed', 'cancelled'] as const, true)!;

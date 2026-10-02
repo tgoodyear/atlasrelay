@@ -120,6 +120,8 @@ function stageApi(): string {
           FUNCTIONS_WORKER_RUNTIME: 'node',
           TABLES_CONNECTION_STRING,
           ATLAS_API_BASE: `${RIPE_STUB_URL}/api/v2`,
+          // As on dev: the route the tests use to delete the projects they post (test-cleanup.spec.ts).
+          E2E_PROJECT_CLEANUP: '1',
         },
       },
       null,
