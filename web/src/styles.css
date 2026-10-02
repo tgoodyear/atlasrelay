@@ -115,9 +115,24 @@ img { max-width: 100%; }
 .btn-danger:hover { background: #f8d6d6; }
 .btn-github { background: #24292f; color: #fff; }
 .btn-github:hover { background: #1b1f23; }
-.btn-aad, .btn-google { background: #fff; color: var(--ink); border-color: var(--line); }
+/* Microsoft's and Google's white buttons keep their text dark on hover (it was #0c8a7e from .btn:hover,
+   3.85:1). Text contrast in every state: GitHub white on #24292f 14.6:1, on #1b1f23 16.6:1;
+   Microsoft and Google #16212b on #fff 16.3:1, on #f1f4f8 14.8:1; ORCID #1b1f23 on #a6ce39 9.1:1,
+   on #95bb2f 7.4:1. The border colours are the ones Microsoft's and Google's button guidelines
+   give (src/lib/providerLogos.ts links them). */
+.btn-aad, .btn-google { background: #fff; color: var(--ink); }
+.btn-aad { border-color: #8c8c8c; }
+.btn-google { border-color: #747775; }
+.btn-aad:hover, .btn-google:hover { background: #f1f4f8; }
 .btn-orcid { background: #a6ce39; color: #1b1f23; }
 .btn-orcid:hover { background: #95bb2f; }
+/* Focus leaves the colours as they are and adds a ring: teal is 5.2:1 on the white card. */
+.btn-signin:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+/* The provider's mark, then the text: 12px apart, as Microsoft's button layout has it, and 10px
+   on Google's, as Google's has it. */
+.btn-signin { gap: 0.75rem; }
+.btn-signin.btn-google { gap: 0.625rem; }
+.signin-logo { flex: none; display: block; }
 .sign-in-options { list-style: none; padding: 0; margin: 1rem auto 0; display: grid; gap: 0.6rem; max-width: 18rem; }
 .sign-in-options .btn { width: 100%; }
 

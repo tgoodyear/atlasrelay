@@ -1,5 +1,6 @@
 import { OFFERED } from '../lib/offered';
 import { loginUrl } from '../lib/signin';
+import ProviderLogo from './ProviderLogo';
 
 export default function SignInPrompt({ reason, returnTo, heading = 'Sign in to continue' }: { reason: string; returnTo?: string; heading?: string }) {
   const back = returnTo ?? (typeof window !== 'undefined' ? window.location.pathname : '/dashboard');
@@ -12,7 +13,10 @@ export default function SignInPrompt({ reason, returnTo, heading = 'Sign in to c
         <ul className="sign-in-options" aria-label="Sign-in options">
           {OFFERED.map((p) => (
             <li key={p.id}>
-              <a className={`btn btn-signin btn-${p.id}`} href={loginUrl(p.id, back)}>Sign in with {p.label}</a>
+              <a className={`btn btn-signin btn-${p.id}`} href={loginUrl(p.id, back)}>
+                <ProviderLogo provider={p.id} />
+                <span>Sign in with {p.label}</span>
+              </a>
             </li>
           ))}
         </ul>

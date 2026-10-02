@@ -3,6 +3,8 @@
 // There is no browser test setup in this repository, so these read the files rather than a
 // rendered page; the checks mirror the ones the owner's other sites run in Playwright.
 import { test } from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -10,7 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { canonicalUrl, DEFAULT_DESCRIPTION, documentTitle, HOME_TITLE, META, renderShell, ROOT_END, ROOT_START, SHELLS, SITE_ORIGIN, type Shell } from '../src/lib/pages.ts';
 import * as server from '../../api/src/lib/projectHtml.ts';
 import { nameFromClaims, shouldPrefill, usableName } from '../src/lib/displayName.ts';
-import { loginUrl, offeredProviders, parseSignIn, providerLabel, providerList, safeReturnPath, signInConfig } from '../src/lib/signin.ts';
+import { loginUrl, offeredProviders, parseSignIn, PROVIDERS, providerLabel, providerList, safeReturnPath, signInConfig } from '../src/lib/signin.ts';
+import { LOGOS } from '../src/lib/providerLogos.ts';
+import ProviderLogo from '../src/components/ProviderLogo.tsx';
 import { extractLocs, findKey } from '../../scripts/indexnow.mjs';
 import { BANNER_ID, BANNER_TEXT_BEFORE, bannerHtml, parseSiteEnv, PROD, ROBOTS_META, siteEnvConfig, siteEnvHtml, TEST_ROBOTS_TXT } from '../src/lib/siteEnv.ts';
 
@@ -446,6 +450,31 @@ test('sign-in buttons match the build, and return paths stay on the site', () =>
     assert.equal(safeReturnPath(bad), '/dashboard', String(bad));
   }
   assert.equal(loginUrl('orcid', '/projects/abc'), '/.auth/login/orcid?post_login_redirect_uri=%2Fprojects%2Fabc');
+});
+
+test('every sign-in button has its provider\'s mark, in the provider\'s own colours, hidden from screen readers', () => {
+  // The colours the providers' artwork uses (src/lib/providerLogos.ts says where each comes from).
+  const colours: Record<string, string[]> = {
+    github: ['#FFFFFF'],
+    aad: ['#F25022', '#00A4EF', '#7FBA00', '#FFB900'],
+    google: ['#EA4335', '#4285F4', '#FBBC05', '#34A853'],
+    orcid: ['#000000', '#FFFFFF', '#FFFFFF', '#FFFFFF'],
+  };
+  assert.deepEqual(Object.keys(LOGOS).sort(), PROVIDERS.map((p) => p.id).sort());
+  for (const p of PROVIDERS) {
+    const logo = LOGOS[p.id];
+    assert.deepEqual(logo.shapes.map((s) => s.fill), colours[p.id], p.id);
+    // 18 to 20 px: Google's guidelines set its G at 18.
+    assert.ok(logo.size >= 18 && logo.size <= 20, p.id);
+    for (const shape of logo.shapes) assert.match(shape.d, /^M[-\d., a-zA-Z]+$/, p.id);
+    const svg = renderToStaticMarkup(createElement(ProviderLogo, { provider: p.id }));
+    assert.match(svg, /^<svg [^>]*aria-hidden="true"/, p.id);
+    assert.match(svg, /focusable="false"/, p.id);
+    assert.match(svg, new RegExp(`width="${logo.size}" height="${logo.size}"`), p.id);
+    // No text, title or external reference that would add to the button's name or fetch anything.
+    assert.doesNotMatch(svg, /<(title|text|desc|image|use)\b|href=/, p.id);
+    assert.equal(svg.match(/<path /g)?.length, logo.shapes.length, p.id);
+  }
 });
 
 // ---------- display name from the sign-in ----------
