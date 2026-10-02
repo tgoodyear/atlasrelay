@@ -12,11 +12,11 @@ import { totp } from './lib/totp.mjs';
 //   Verify your identity the authenticator app's code, when the account has a seed
 //   Enter code           a TOTP code, when the account has a seed (see lib/totp.mjs)
 //   Stay signed in?      No
-//   Permissions requested  Accept (a test tenant that lets users consent to apps)
-//   Need admin approval  stops: the tenant's admin has to consent to the app first
+//   Permissions requested  Accept
+//   Need admin approval  stops with a message naming the page
 //   Static Web Apps consent  Grant Consent
 //
-// Anything else that asks for input (register MFA, change the password, an error) stops the
+// Anything else that asks for input (add a sign-in method, change the password, an error) stops the
 // sign-in with a message naming the page. Nothing here writes a password to a log or a message.
 
 const PRIMARY = '#idSIButton9, [data-testid="primaryButton"], input[type="submit"], button[type="submit"]';
@@ -40,8 +40,8 @@ const SCREENS: Screen[] = [
   { name: 'password', locator: (p) => p.locator('input[name="passwd"], input[type="password"]') },
   { name: 'stay-signed-in', locator: (p) => p.locator('#KmsiCheckboxField, #KmsiDescription, [data-testid="kmsiVideo"]').or(p.getByText(/^Stay signed in\?$/)) },
   { name: 'permissions', locator: (p) => p.getByText(/^Permissions requested$/) },
-  // The test tenant lets only admins consent to an app from an unverified publisher, such as the
-  // site's own Entra registration (docs/RUNBOOK.md, "Sign-in registrations").
+  // Shown when an organization requires an admin to approve the app first (docs/RUNBOOK.md,
+  // "Sign-in registrations").
   { name: 'admin-approval', locator: (p) => p.getByText(/^(Need admin approval|Approval required)$/) },
   { name: 'swa-consent', locator: (p) => p.getByRole('button', { name: /Grant Consent/i }) },
 ];
@@ -139,11 +139,11 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
       }
       case 'mfa-method':
         // "Verify your identity" with more than one method: pick the code from an authenticator app.
-        if (!account.totp) throw new Error('Microsoft asks this account to verify with MFA, and it has no TOTP seed in the vault (docs/RUNBOOK.md).');
+        if (!account.totp) throw new Error('Microsoft asks this account for a verification code, and it has no TOTP seed in the vault (docs/RUNBOOK.md).');
         await page.locator('[data-value="PhoneAppOTP"]').first().click();
         break;
       case 'mfa-registration':
-        throw new Error('Microsoft asks this account to register for MFA. Check the test tenant\'s sign-in policy for this account, or give it a TOTP seed (docs/RUNBOOK.md).');
+        throw new Error('Microsoft asks this account to register a sign-in method: it has no authenticator app enrolled with Microsoft. Enroll one and store its seed (docs/RUNBOOK.md, "Test account TOTP seeds").');
       case 'password-change':
         throw new Error('Microsoft asks this account to change its password. Sign in once by hand, set a new one, and run scripts/set-test-users.sh again.');
       case 'pick-account': {
@@ -190,7 +190,7 @@ export async function signInWithMicrosoft(page: Page, account: Credentials, site
         await submit(page);
         break;
       case 'admin-approval':
-        throw new Error('The test tenant needs an admin to consent to the site\'s Entra app before its users can sign in (docs/RUNBOOK.md, "Sign-in registrations").');
+        throw new Error('Microsoft asks for an admin\'s approval of the site\'s Entra app before this account can sign in (docs/RUNBOOK.md, "Sign-in registrations").');
       case 'swa-consent':
         await page.getByRole('button', { name: /Grant Consent/i }).first().click();
         break;

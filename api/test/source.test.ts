@@ -212,3 +212,36 @@ test('the ceiling is decided on a project row read under the lock, and a change 
   const patchCall = edit.slice(write, edit.indexOf('});', write));
   assert.ok(patchCall.includes('...writeFields') && !/\.\.\.fields\b/.test(patchCall), 'the edit writes writeFields, never the raw fields');
 });
+
+test('every API route is registered with an explicit method list, and every one but the two HTML/XML pages goes through handle()', () => {
+  // assertSameOriginWrite runs inside handle(). A route registered with a bare handler would skip
+  // it, and with it the Sec-Fetch-Site and Content-Type rules that stop cross-site requests. The
+  // scan counts registrations independently of the pattern that reads them, so a registration
+  // written in a shape the pattern does not recognize fails instead of being skipped.
+  const BARE = new Map([['sitemap', ['GET']], ['project-page', ['GET', 'HEAD']]]);
+  const dir = join(repoRoot, 'api/src/functions');
+  const seen: string[] = [];
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
+    const text = readFileSync(join(dir, file), 'utf8');
+    // Every registration counts, whatever its first argument is, so one this scan can't read (a
+    // variable, a computed name) fails the shape check below instead of being skipped. The one
+    // exception is the injectable pass-through `(name, options) => app.http(name, options)`
+    // (testCleanup.ts), whose route is the registration this scan reads on the next call.
+    const PASS_THROUGH = /\(name, options\) => app\.http\(name, options\)/g;
+    const calls = (text.replace(PASS_THROUGH, '').match(/\b(?:app\.http|register)\(/g) ?? []).length;
+    const matched = [...text.matchAll(/\b(?:app\.http|register)\(\s*(['"`])([^'"`]+)\1,\s*\{\s*route:[^\n]*\n\s*(?:\/\/[^\n]*\n\s*)*methods:\s*\[([^\]]*)\],[\s\S]*?\n\s*handler:\s*(\S+)/g)];
+    assert.equal(matched.length, calls, `${file}: ${calls} route registrations, ${matched.length} in the expected shape (route, methods, handler)`);
+    for (const [, , name, list, handler] of matched) {
+      const methods = list.split(',').map((x) => x.trim()).filter(Boolean);
+      assert.ok(methods.length > 0 && methods.every((x) => /^'(GET|HEAD|POST|PUT|PATCH|DELETE)'$/.test(x)), `${file} ${name}: methods must be quoted literals, got [${list}]`);
+      seen.push(name);
+      const bare = BARE.get(name);
+      if (bare) {
+        assert.deepEqual(methods.map((x) => x.slice(1, -1)), bare, `${file} ${name}: an unwrapped route may only read`);
+        continue;
+      }
+      assert.ok(handler.startsWith('handle('), `${file} ${name}: handler is not wrapped in handle()`);
+    }
+  }
+  assert.ok(seen.length >= 15, `expected every route registration, found ${seen.length}`);
+});

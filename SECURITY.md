@@ -94,6 +94,13 @@ Microsoft account with the same email are two accounts. Google and ORCID account
 provider's name. The API accepts GitHub and Microsoft, and Google and ORCID only in an environment
 that has its own registrations for them; it treats a sign-in from any other provider as signed out.
 
+**Other sites cannot act in a signed-in user's name.** The API refuses every request, reads
+included, when the browser reports that it came from another site (the `Sec-Fetch-Site` header).
+It also refuses any request that changes something unless it is sent as `application/json`, which
+a form or script on another page cannot do without the browser first asking the API for
+permission, and the API never gives it.
+API responses also carry `X-Content-Type-Options: nosniff`.
+
 **The site never holds credits.** Every transfer happens inside RIPE Atlas between the two
 accounts. The site records the project, the pledge and its confirmation.
 

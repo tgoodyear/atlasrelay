@@ -81,7 +81,7 @@ renames it rather than deleting it. It holds no secrets: the sign-in client secr
 ## First deployment
 
 Prerequisites: `az` 2.61 or later, signed in as an Owner of the subscription
-(`az login --tenant <tenant-id>` if the tenant enforces MFA); `gh`, signed in as an admin of the
+(`az login --tenant <tenant-id>`); `gh`, signed in as an admin of the
 repository; `jq`, `dig` and Node 24.11+.
 
 ```bash
@@ -360,8 +360,8 @@ old one.
 The Microsoft registration's publisher is not verified (Microsoft Partner Network publisher
 verification is not done). Organizations that let their users consent only to apps from verified
 publishers show those users "Need admin approval" instead of signing them in; an admin of that
-organization can consent for it. The full-flow tests stop with that message if the test tenant does
-this.
+organization can consent for it. The full-flow tests stop with that message when Microsoft shows
+it.
 
 ### Signing out
 
@@ -603,9 +603,8 @@ Once per dev environment, as the Owner:
    - **Users**, **New user**: a researcher and a donor, for example
      `researcher@<tenant>.onmicrosoft.com` and `donor@<tenant>.onmicrosoft.com`, each with a long
      random password.
-   - Set the tenant's sign-in policy so the two test accounts can complete sign-in, while every
-     other account keeps MFA. If they are asked for MFA, give each a TOTP seed instead
-     ([Accounts with MFA](#accounts-with-mfa)).
+   - The test accounts sign in with a password and a TOTP code. Give each a TOTP seed
+     ([Test account TOTP seeds](#test-account-totp-seeds)).
    - Sign in once with each test user at `https://<SWA_HOSTNAME>/login/microsoft` in a private
      window. Microsoft may ask for a new password (set one, and use that below) and whether the
      site may read the profile (accept).
@@ -789,15 +788,18 @@ When the execution did not succeed, the workflow prints the platform's events fo
 pulled, container started, exit code) from Log Analytics in its log, which covers a container that
 never started. The events take a few minutes to arrive.
 
-Microsoft sign-in errors name the page they stopped on: "register for MFA" means the test tenant's
-sign-in policy asks this account for MFA, so check the policy or give the account a TOTP seed;
+Microsoft sign-in errors name the page they stopped on: "register a sign-in method" means
+Microsoft has no authenticator app enrolled for the account, so enroll one and store its seed;
+"no TOTP seed in the vault" means Microsoft asked for a code and the vault has no seed for that
+account, so store the seed it was enrolled with (both in
+[Test account TOTP seeds](#test-account-totp-seeds));
 "change its password"
 means the password expired or was reset, so sign in by hand, set a new one and run
 `scripts/set-test-users.sh dev` again.
 
-#### Accounts with MFA
+#### Test account TOTP seeds
 
-If the test accounts have to use MFA, give each an
+Give each test account an
 authenticator app with a TOTP seed (**Security info**, **Add sign-in method**, **Authenticator
 app**, **I want to use a different authenticator app**, **Can't scan image?** shows the secret
 key), then store the seed with the account:
