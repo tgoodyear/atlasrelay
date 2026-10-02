@@ -12,6 +12,7 @@ api/local.settings.json
 api-deploy/
 api.zip
 web/dist-e2e/
+web/dist-e2e-dev/
 web/test-results/
 web/playwright-report/
 web/e2e-stack/

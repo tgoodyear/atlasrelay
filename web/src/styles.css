@@ -49,6 +49,13 @@ img { max-width: 100%; }
 .container { width: min(1120px, calc(100% - 2rem)); margin: 0 auto; }
 .narrow { width: min(760px, calc(100% - 2rem)); margin: 0 auto; }
 
+/* Test site banner (lib/siteEnv.ts). Only a test environment's build has it. White on #7c2d12 is
+   about 9:1. */
+.site-env-banner { background: #7c2d12; color: #fff; text-align: center; padding: 0.5rem 1rem; font-weight: 600; font-size: 0.95rem; }
+.site-env-banner p { margin: 0; }
+.site-env-banner a { color: #fff; }
+.site-env-banner a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
 /* Header */
 .site-header {
   background: var(--navy);

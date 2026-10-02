@@ -28,5 +28,5 @@ echo "sign-in providers these settings cover: ${signin:-built-in GitHub and Micr
 if [ "$ENV_NAME" = prod ]; then
   echo "the Deploy workflow builds with the repository variable SIGNIN_PROVIDERS; see docs/RUNBOOK.md before changing it"
 else
-  echo "build for $ENV_NAME with: VITE_SIGNIN_PROVIDERS=\"$signin\" npm run build"
+  echo "build for $ENV_NAME with: VITE_SITE_ENV=$ENV_NAME VITE_SIGNIN_PROVIDERS=\"$signin\" npm run build"
 fi

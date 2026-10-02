@@ -12,6 +12,7 @@ import * as server from '../../api/src/lib/projectHtml.ts';
 import { nameFromClaims, shouldPrefill, usableName } from '../src/lib/displayName.ts';
 import { loginUrl, offeredProviders, parseSignIn, providerLabel, providerList, safeReturnPath, signInConfig } from '../src/lib/signin.ts';
 import { extractLocs, findKey } from '../../scripts/indexnow.mjs';
+import { BANNER_ID, BANNER_TEXT_BEFORE, bannerHtml, parseSiteEnv, PROD, ROBOTS_META, siteEnvConfig, siteEnvHtml, TEST_ROBOTS_TXT } from '../src/lib/siteEnv.ts';
 
 const web = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (path: string): string => readFileSync(join(web, path), 'utf8');
@@ -481,4 +482,73 @@ test('the name is offered once, to a profile that has never been saved', () => {
   assert.equal(shouldPrefill({ ...fresh, displayName: 'Ada Lovelace' }, 'Ada Lovelace'), false);
   assert.equal(shouldPrefill(fresh, ''), false);
   assert.equal(shouldPrefill({ displayName: 'x' }, 'Ada Lovelace'), false);
+});
+
+// ---------- test sites (VITE_SITE_ENV) ----------
+
+const envRobots = (html: string): number => html.split(ROBOTS_META).length - 1;
+const bannerCount = (html: string): number => html.split(`id="${BANNER_ID}"`).length - 1;
+
+test('a build without VITE_SITE_ENV, or with prod, is the production site', () => {
+  for (const value of [undefined, '', '  ', 'prod', 'PROD']) assert.deepEqual(parseSiteEnv(value), PROD, String(value));
+  assert.deepEqual(parseSiteEnv('dev'), { prod: false, name: 'dev' });
+  for (const bad of ['production', 'dev site', 'd-v', '1dev', 'dev/../x']) assert.throws(() => parseSiteEnv(bad), /VITE_SITE_ENV/, bad);
+});
+
+test('the production build has no X-Robots-Tag, no banner and its own robots.txt and sitemap', () => {
+  const built = siteEnvConfig(signInConfig(config, parseSignIn(undefined)), parseSiteEnv(undefined));
+  assert.deepEqual(built, config);
+  const headers = (built as { globalHeaders?: Record<string, string> }).globalHeaders ?? {};
+  assert.ok(!Object.keys(headers).some((h) => h.toLowerCase() === 'x-robots-tag'));
+  assert.equal(siteEnvHtml(indexHtml, PROD), indexHtml);
+  assert.equal(bannerCount(indexHtml), 0);
+  assert.equal(envRobots(indexHtml), 0);
+  for (const { html } of rendered) assert.equal(bannerCount(html) + envRobots(html), 0);
+});
+
+test('a test site build sends noindex on every response and keeps the other headers', () => {
+  const dev = parseSiteEnv('dev');
+  const base = config as unknown as { globalHeaders: Record<string, string> };
+  for (const signIn of [parseSignIn(undefined), parseSignIn('github,aad,google,orcid')]) {
+    const built = siteEnvConfig(signInConfig(config, signIn), dev) as unknown as SwaConfig & { globalHeaders: Record<string, string>; auth?: unknown };
+    assert.equal(built.globalHeaders['x-robots-tag'], 'noindex, nofollow');
+    for (const [k, v] of Object.entries(base.globalHeaders)) assert.equal(built.globalHeaders[k], v, k);
+    assert.deepEqual(built.routes.find((r) => r.route === '/sitemap.xml'), { route: '/sitemap.xml', statusCode: 404 });
+    // Everything else is the sign-in build's config, unchanged.
+    const signedIn = signInConfig(config, signIn) as unknown as SwaConfig;
+    assert.deepEqual(built.routes.filter((r) => r.route !== '/sitemap.xml'), signedIn.routes.filter((r) => r.route !== '/sitemap.xml'));
+  }
+  // Pages stay crawlable, so a search engine can see their noindex; only the API is disallowed.
+  assert.match(TEST_ROBOTS_TXT, /^User-agent: \*$/m);
+  assert.match(TEST_ROBOTS_TXT, /^Disallow: \/api\/$/m);
+  assert.doesNotMatch(TEST_ROBOTS_TXT, /^Disallow: \/$/m);
+  assert.ok(!TEST_ROBOTS_TXT.includes('Sitemap'));
+});
+
+test('every page of a test site build has the banner and a noindex robots tag the page heads leave alone', () => {
+  const devIndex = siteEnvHtml(indexHtml, parseSiteEnv('dev'));
+  const pages = [devIndex, ...SHELLS.map((s) => renderShell(devIndex, s))];
+  const devProjectShell = renderShell(devIndex, SHELLS.find((s) => s.file === 'shell/project.html')!);
+  pages.push(
+    server.renderProjectPage(devProjectShell, hostile),
+    server.renderEditPage(devProjectShell),
+    server.renderFallbackPage(devProjectShell),
+  );
+  for (const html of pages) {
+    assert.equal(bannerCount(html), 1);
+    assert.equal(envRobots(html), 1);
+    const head = html.slice(0, html.indexOf('</head>'));
+    assert.ok(head.includes(ROBOTS_META), 'the robots tag is in the head');
+    const banner = html.indexOf(`id="${BANNER_ID}"`);
+    assert.ok(banner > html.indexOf('<body>') && banner < html.indexOf('<div id="root">'), 'the banner is the first thing in the body, outside #root');
+  }
+  // The page's own robots tag still follows the page: the server-rendered project page has none.
+  assert.equal(attr(server.renderProjectPage(devProjectShell, hostile), 'name', 'robots'), undefined);
+  assert.equal(attr(server.renderEditPage(devProjectShell), 'name', 'robots'), 'noindex');
+  assert.equal(h1Count(devIndex), 1);
+  const html = bannerHtml();
+  assert.match(html, /role="region" aria-label="Test site notice"/);
+  assert.ok(html.includes(`<a href="${SITE_ORIGIN}/">atlasrelay.org</a>`));
+  assert.ok(html.includes(BANNER_TEXT_BEFORE));
+  assert.ok(!/marketplace|exchange|—/i.test(html));
 });
