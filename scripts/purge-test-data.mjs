@@ -115,15 +115,18 @@ async function markDirty() {
 }
 await markDirty();
 if (failed) die(`${failed} project(s) could not be marked for a totals rebuild; nothing was deleted. Run again to retry.`);
+// From here on, pledges are going: a donor known only by its pledges would not be found again, so a
+// run that stops names every account it was purging, to run again with.
+const rerun = `scripts/purge-test-data.sh ${env} --apply ${accounts.map((a) => `--account ${a}`).join(' ')}`;
 const n = { pledges: 0, claims: 0, index: 0, projects: 0 };
 for (const r of plan.pledges) n.pledges += await remove(tables.pledges, r);
 for (const r of plan.claims) n.claims += await remove(tables.claims, r);
 const unmarked = await markDirty();
 if (unmarked.length) {
   // Their pledges are gone, so a later run would not find these again: name them for the operator.
-  die(`${unmarked.length} project(s) lost a pledge but could not be marked again for a totals rebuild: ${unmarked.join(', ')}. Set totalsDirty on them by hand; no project rows were deleted, so a later run finishes the rest.`);
+  die(`${unmarked.length} project(s) lost a pledge but could not be marked again for a totals rebuild: ${unmarked.join(', ')}. Set totalsDirty on them by hand, then finish with: ${rerun}`);
 }
-if (failed) die(`${failed} pledge or claim row(s) could not be deleted; no project rows were deleted, so the test accounts can still be found. Run again to retry.`);
+if (failed) die(`${failed} pledge or claim row(s) could not be deleted; no project rows were deleted. Run again with: ${rerun}`);
 // An owner index row goes only once its project row is confirmed gone; a project row that could not
 // be deleted keeps its index row, so it stays visible to its owner until a later run finishes it.
 const stillThere = new Set();
@@ -140,4 +143,4 @@ log(`deleted ${n.projects} project(s), ${n.index} owner index row(s), ${n.pledge
 const left = [];
 for await (const e of tables.projects.listEntities({ queryOptions: { filter: odata`PartitionKey eq ${'project'}`, select: ['RowKey'] } })) left.push(e.rowKey);
 log(`projects now in ${env}: ${left.length}`);
-if (failed) die(`${failed} row(s) could not be changed; run again to retry`);
+if (failed) die(`${failed} row(s) could not be changed; run again with: ${rerun}`);

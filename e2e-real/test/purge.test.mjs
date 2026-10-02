@@ -163,6 +163,11 @@ test('the runner refuses prod before it reads anything', () => {
     'n.projects += await remove(tables.projects, r)', 'if (stillThere.has(r.rowKey)) continue',
   ].map((x) => mjs.indexOf(x));
   assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `steps out of order: ${order}`);
+  // Once pledges go, a donor known only by them would not be found again: every failure from there
+  // names the accounts to run again with.
+  const rerunAt = mjs.indexOf('const rerun = ');
+  assert.ok(rerunAt > mjs.indexOf("die(`${failed} project(s) could not be marked") && rerunAt < mjs.indexOf('plan.pledges) n.pledges'));
+  assert.equal(mjs.slice(rerunAt).match(/die\(`[^`]*`\)/g)?.filter((d) => !d.includes('${rerun}')).length, 0, 'a failure after the pledges go that does not name the accounts');
   // A dry run unless asked.
   assert.match(mjs, /if \(!apply\) \{\n\s+log\('dry run: nothing deleted/);
 });
