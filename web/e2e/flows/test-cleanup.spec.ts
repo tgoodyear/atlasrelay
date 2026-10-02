@@ -100,7 +100,7 @@ test('nobody but the owner, and nothing the tests did not post, can be deleted',
   expect(await row('projects', 'project', real.id)).not.toBeNull();
 });
 
-test('a project whose transfer is still in flight is not deleted', async ({ person }) => {
+test('a project whose transfer is still in flight is closed but not deleted', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher);
   const now = new Date().toISOString();
@@ -109,5 +109,20 @@ test('a project whose transfer is still in flight is not deleted', async ({ pers
     status: 'pledged', inFlight: true, inFlightSince: now, createdAt: now, updatedAt: now,
   });
   expect((await cleanup(researcher, project.id)).status()).toBe(409);
-  expect(await row('projects', 'project', project.id)).not.toBeNull();
+  // Closed, so no new pledge starts, and still there for the next attempt.
+  expect((await row('projects', 'project', project.id))?.status).toBe('closed');
+});
+
+test('a slot taken moments ago whose pledge row is not written yet holds the deletion off', async ({ person }) => {
+  const researcher = await person({ role: 'researcher' });
+  const project = await postProject(researcher);
+  await putRow('claims', { partitionKey: project.id, rowKey: 'someone', pledgeId: 'notwrittenyet01', createdAt: new Date().toISOString() });
+  expect((await cleanup(researcher, project.id)).status()).toBe(409);
+  // Once the slot is older than any request could still be running, it is an orphan and goes too.
+  await putRow('claims', { partitionKey: project.id, rowKey: 'someone', pledgeId: 'notwrittenyet01', createdAt: '2026-01-01T00:00:00.000Z' });
+  const res = await cleanup(researcher, project.id);
+  expect(res.status(), await res.text()).toBe(200);
+  expect(await row('claims', project.id, 'someone')).toBeNull();
+  // The index entry went after the project row.
+  expect(await row('projects', `owner-${researcher.id}`, project.id)).toBeNull();
 });

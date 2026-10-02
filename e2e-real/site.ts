@@ -39,7 +39,7 @@ export async function cleanUpRun(run: string, testInfo: TestInfo): Promise<void>
         return ((await res.json()) as { projects: { id: string; title: string }[] }).projects;
       },
       remove: async (id) => (await ctx.delete(`/api/test/projects/${id}`)).status(),
-      exists: async (id) => (await ctx.get(`/api/projects/${id}`)).status() === 200,
+      read: async (id) => (await ctx.get(`/api/projects/${id}`)).status(),
       log: (line) => console.log(line),
     }, run);
   } finally {

@@ -278,12 +278,14 @@ tests use (`web/e2e/ui.ts`). It has three spec files:
 
 Each spec file deletes both profiles before and after its tests (`ripe-transfer.spec.ts` and
 `manual-verify.spec.ts` around each test). Before the profiles go, it deletes the projects the run
-posted through the test-only route `DELETE /api/test/projects/{id}`, after the credit return and
-whether or not the test passed, and prints `[cleanup] deleted N project(s): <ids>`. A run that
-could not delete one fails and names it. The route exists only where `E2E_PROJECT_CLEANUP=1`, which
-`scripts/provision.sh` sets on every environment except prod
-([Test cleanup](ARCHITECTURE.md#test-cleanup)); a run against an environment provisioned before
-that fails its cleanup with HTTP 404 until the environment is provisioned again.
+posted through the test-only route `DELETE /api/test/projects/{id}`, after the credit return in the
+two specs that move real credits, and whether or not the test passed, and prints `[cleanup] deleted N project(s): <ids>`. A run that
+could not delete one fails and names it. The two specs that move real credits run the cleanup and
+the profile deletion again once all their tests are done, because a hook that times out (the credit
+return, at worst) skips the hooks declared after it. The route exists only where `E2E_PROJECT_CLEANUP=1`,
+which the environment's stack sets on every environment except prod
+([Test cleanup](ARCHITECTURE.md#test-cleanup)). A run against an environment last deployed before
+that fails its cleanup with HTTP 404 until `scripts/provision.sh` deploys it again.
 
 Projects left by runs from before the tests cleaned up after themselves are removed with
 `scripts/purge-test-data.sh`, signed in as the operator (Storage Table Data Contributor on the data
@@ -295,9 +297,12 @@ scripts/purge-test-data.sh dev            # dry run: accounts, counts, what is l
 scripts/purge-test-data.sh dev --apply    # delete
 ```
 
-An account that owns any project not titled like a test is left out and named in the output; pass
-`--account <id>` to include it. The home-page figures are cached for up to five minutes, so
-`/api/stats` can take that long to show the change.
+An account that owns any project the tests did not post is left out and named in the output, and so
+is a donor that pledged to a test project as Anonymous and also pledged elsewhere. Pass
+`--account <id>` (repeatable) to purge only the accounts you name instead of the ones it finds, so
+name every account you want purged. `/api/stats` is sent with `max-age=300`, so a browser can show
+the old home-page figures for up to five minutes, and once more after that while it fetches new
+ones.
 
 Each run tests the build it deploys. `.github/workflows/e2e-dev.yml`:
 

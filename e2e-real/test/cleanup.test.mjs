@@ -14,11 +14,11 @@ const projects = [
 
 /**
  * A site whose DELETE answers from `answers` (one status per call, per id, the last repeating) and
- * which still has every id in `present` for the existence check.
+ * which still has every id in `present` for the read-back (or answers `reads[id]` to it).
  * @param {Record<string, number[]>} answers
  * @param {Set<string>} [present]
  */
-function site(answers, present = new Set()) {
+function site(answers, present = new Set(), /** @type {Record<string, number>} */ reads = {}) {
   /** @type {string[]} */
   const calls = [];
   /** @type {string[]} */
@@ -32,7 +32,7 @@ function site(answers, present = new Set()) {
       const q = answers[id] ?? [200];
       return q.length > 1 ? /** @type {number} */ (q.shift()) : q[0];
     },
-    exists: async (/** @type {string} */ id) => present.has(id),
+    read: async (/** @type {string} */ id) => (reads[id] ?? (present.has(id) ? 200 : 404)),
     log: (/** @type {string} */ line) => lines.push(line),
     wait: async (/** @type {number} */ ms) => { waits.push(ms); },
   };
@@ -59,7 +59,11 @@ test('every spec titles its projects so the run can find them, and cleans up aft
     const profiles = text.search(/test\.after(Each|All)\(deleteBothProfiles\);/);
     assert.ok(cleanup > 0 && profiles > cleanup, `${spec}: cleanup must be declared before the profile deletion`);
     const creditReturn = text.indexOf('await sendBack(');
-    if (creditReturn >= 0) assert.ok(creditReturn < cleanup, `${spec}: cleanup must be declared after the credit return`);
+    if (creditReturn >= 0) {
+      assert.ok(creditReturn < cleanup, `${spec}: cleanup must be declared after the credit return`);
+      // A timed-out afterEach skips the hooks after it, so the same cleanup runs again in afterAll.
+      assert.match(text, /test\.afterAll\(async \(\{\}, testInfo\) => cleanUpRun\(run, testInfo\)\);\ntest\.afterAll\(deleteBothProfiles\);/, `${spec}: no afterAll safety net`);
+    }
   }
 });
 
@@ -87,6 +91,11 @@ test('an environment without the route fails the run and says why', async () => 
   const { io, calls } = site({ p1: [404], p2: [404] }, new Set(['p1', 'p2']));
   await assert.rejects(deleteRunProjects(io, RUN), /2 project\(s\) not deleted: p1 \(HTTP 404: this environment has no cleanup route.*p2/);
   assert.deepEqual(calls, ['p1', 'p2'], 'it still tries every project');
+});
+
+test('a 404 followed by a failed read is not taken as gone', async () => {
+  const { io } = site({ p1: [404] }, new Set(), { p1: 503 });
+  await assert.rejects(deleteRunProjects(io, RUN), /p1 \(HTTP 404, then HTTP 503 reading it back\)/);
 });
 
 test('a refusal fails the run after trying the rest', async () => {

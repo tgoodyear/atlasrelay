@@ -6,7 +6,8 @@
 // A run's projects are found by title, not by remembering ids as they are posted: a test that
 // fails between posting a project and reading its address has still posted it. Every spec titles
 // its projects "E2E <what> <run>", so the researcher's own list, filtered on that, is exactly what
-// this run left. The output names project ids only.
+// this run left. The output names project ids only. Calling it again once everything is gone deletes
+// nothing and passes, which is what lets a spec call it from afterAll as well as afterEach.
 
 /** The title prefix the API marks test projects by (TEST_TITLE_PREFIX in api/src/lib/testCleanup.ts). */
 export const TEST_TITLE_PREFIX = 'E2E ';
@@ -27,7 +28,7 @@ export function runProjects(projects, run) {
  * @typedef {object} CleanupIo
  * @property {() => Promise<{ id: string, title: string }[]>} list the researcher's projects (GET /api/my)
  * @property {(id: string) => Promise<number>} remove DELETE /api/test/projects/{id}; the HTTP status
- * @property {(id: string) => Promise<boolean>} exists whether the researcher can still read the project
+ * @property {(id: string) => Promise<number>} read GET /api/projects/{id} as the researcher; the HTTP status
  * @property {(line: string) => void} log
  * @property {(ms: number) => Promise<void>} [wait] defaults to a timer; tests pass their own
  */
@@ -65,11 +66,17 @@ export async function deleteRunProjects(io, run) {
       deleted.push(id);
       continue;
     }
-    // 404 is either a project already gone or an environment without the route; only a read tells.
-    if (status === 404 && !(await io.exists(id))) continue;
-    left.push(status === 404
+    if (status !== 404) {
+      left.push(`${id} (HTTP ${status})`);
+      continue;
+    }
+    // 404 is either a project already gone or an environment without the route; only a read tells,
+    // and only its own 404 means gone.
+    const read = await io.read(id);
+    if (read === 404) continue;
+    left.push(read === 200
       ? `${id} (HTTP 404: this environment has no cleanup route; provision it so E2E_PROJECT_CLEANUP is set)`
-      : `${id} (HTTP ${status})`);
+      : `${id} (HTTP 404, then HTTP ${read} reading it back)`);
   }
   io.log(`[cleanup] deleted ${deleted.length} project(s)${deleted.length ? `: ${deleted.join(', ')}` : ''}`);
   if (left.length) throw new Error(`[cleanup] ${left.length} project(s) not deleted: ${left.join('; ')}`);

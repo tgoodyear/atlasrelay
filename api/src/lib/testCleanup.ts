@@ -3,7 +3,7 @@ import { getPrincipal } from './auth';
 import { HttpError } from './http';
 import { isId } from './ids';
 import type { Pledge, Project } from './store';
-import { pledgeInFlight } from './store';
+import { pledgeRequestRunning } from './store';
 
 /**
  * Deleting the projects the full-flow tests post, on a test environment only.
@@ -47,6 +47,8 @@ export function marksTestProject(title: string, env: Record<string, string | und
 export interface TestCleanupStore {
   getProject(id: string): Promise<Project | null>;
   listPledges(projectId: string): Promise<Pledge[]>;
+  listPledgeSlots(projectId: string): Promise<{ donorId: string; pledgeId: string; createdAt: string }[]>;
+  closeProject(id: string): Promise<void>;
   deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }>;
 }
 
@@ -63,7 +65,11 @@ export interface TestCleanupResult {
  *    route that does not exist.
  * 2. A signed-in caller, then the project's owner: only the account that posted it.
  * 3. The stored marker: only a project posted by the tests, never a project its owner wrote by hand.
- * 4. No pledge still mid-transfer, so a transfer in progress is never erased from under itself.
+ * 4. The project is closed, so no new pledge starts, and then no pledge request may still be
+ *    running: none mid-transfer, and no recently taken slot without its pledge row. A request
+ *    that read the project before it closed and writes after this check can still leave a row
+ *    behind; the second sweep in deleteProjectRecords narrows that, it does not close it. This is
+ *    a test environment's cleanup, called after the tests finish, not a general delete.
  */
 export async function deleteTestProject(
   req: HttpRequest,
@@ -79,9 +85,10 @@ export async function deleteTestProject(
   if (!project) throw new HttpError(404, 'Not found');
   if (project.ownerId !== principal.userId) throw new HttpError(403, 'Only the project owner can delete it');
   if (project.createdByTests !== true) throw new HttpError(403, 'Only projects the tests posted can be deleted');
-  const pledges = await store.listPledges(id);
-  if (pledges.some((p) => pledgeInFlight(p))) {
-    throw new HttpError(409, 'A transfer to this project is still in progress. Try again in a few minutes.');
+  if (project.status !== 'closed') await store.closeProject(id);
+  const [pledges, slots] = await Promise.all([store.listPledges(id), store.listPledgeSlots(id)]);
+  if (pledgeRequestRunning(slots, pledges)) {
+    throw new HttpError(409, 'A pledge to this project is still in progress. Try again in a few minutes.');
   }
   const removed = await store.deleteProjectRecords(project);
   return { deleted: id, ...removed };

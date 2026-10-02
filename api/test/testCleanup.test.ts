@@ -38,11 +38,13 @@ const pledge = (over: Partial<Pledge> = {}): Pledge => ({
 });
 
 /** A store that records what was asked of it. */
-function fakeStore(row: Project | null, pledges: Pledge[] = []) {
+function fakeStore(row: Project | null, pledges: Pledge[] = [], slots: { donorId: string; pledgeId: string; createdAt: string }[] = []) {
   const calls: string[] = [];
   const store: TestCleanupStore = {
     getProject: async (id) => { calls.push(`get ${id}`); return row; },
     listPledges: async (id) => { calls.push(`pledges ${id}`); return pledges; },
+    listPledgeSlots: async (id) => { calls.push(`slots ${id}`); return slots; },
+    closeProject: async (id) => { calls.push(`close ${id}`); },
     deleteProjectRecords: async (p) => { calls.push(`delete ${p.id} ${p.ownerId}`); return { pledges: pledges.length, claims: 2 }; },
   };
   return { store, calls };
@@ -52,6 +54,8 @@ function fakeStore(row: Project | null, pledges: Pledge[] = []) {
 const untouchable: TestCleanupStore = {
   getProject: async () => assert.fail('read a project'),
   listPledges: async () => assert.fail('read pledges'),
+  listPledgeSlots: async () => assert.fail('read slots'),
+  closeProject: async () => assert.fail('closed a project'),
   deleteProjectRecords: async () => assert.fail('deleted something'),
 };
 
@@ -108,7 +112,7 @@ test('a malformed id or a missing project is 404', async () => {
 test('only the project owner may delete it', async () => {
   const { store, calls } = fakeStore(project());
   assert.equal(await status(deleteTestProject(request(OTHER), store, ON)), 403);
-  assert.equal(calls.some((c) => c.startsWith('delete')), false);
+  assert.deepEqual(calls, [`get ${ID}`], 'nothing closed, nothing deleted');
 });
 
 test('only a project marked at creation may be deleted, even by its owner', async () => {
@@ -123,20 +127,39 @@ test('only a project marked at creation may be deleted, even by its owner', asyn
   assert.equal(calls.some((c) => c.startsWith('delete')), false);
 });
 
-test('a project with a transfer still in flight is not deleted', async () => {
+test('a project with a transfer still in flight is closed but not deleted', async () => {
   const running = pledge({ method: 'api', status: 'pledged', inFlight: true, inFlightSince: new Date().toISOString() });
   const { store, calls } = fakeStore(project(), [pledge({ id: 'p0' }), running]);
+  assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 409);
+  assert.ok(calls.includes(`close ${ID}`), 'closed first, so no new pledge starts');
+  assert.equal(calls.some((c) => c.startsWith('delete')), false);
+});
+
+test('a slot taken moments ago with no pledge row yet is a request in progress', async () => {
+  const fresh = { donorId: 'd9', pledgeId: 'p9', createdAt: new Date().toISOString() };
+  const { store, calls } = fakeStore(project(), [pledge()], [fresh]);
   assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 409);
   assert.equal(calls.some((c) => c.startsWith('delete')), false);
 });
 
 test('the owner of a marked project deletes it with everything under it', async () => {
-  // An in-flight marker older than the grace window is a dead request, not a running transfer.
+  // An in-flight marker older than the grace window is a dead request, not a running transfer, and
+  // so is an old slot with no row behind it. A recent slot whose pledge row exists is settled.
   const stale = pledge({ id: 'p2', method: 'api', status: 'confirmed', inFlight: true, inFlightSince: '2026-01-01T00:00:00.000Z' });
-  const { store, calls } = fakeStore(project(), [pledge(), stale]);
+  const slots = [
+    { donorId: 'd1', pledgeId: 'p1', createdAt: new Date().toISOString() },
+    { donorId: 'd8', pledgeId: 'gone', createdAt: '2026-01-01T00:00:00.000Z' },
+  ];
+  const { store, calls } = fakeStore(project(), [pledge(), stale], slots);
   const result = await deleteTestProject(request(OWNER), store, ON);
   assert.deepEqual(result, { deleted: ID, pledges: 2, claims: 2 });
-  assert.deepEqual(calls, [`get ${ID}`, `pledges ${ID}`, `delete ${ID} owner1`]);
+  assert.deepEqual(calls, [`get ${ID}`, `close ${ID}`, `pledges ${ID}`, `slots ${ID}`, `delete ${ID} owner1`]);
+});
+
+test('an already closed project is not written before it is deleted', async () => {
+  const { store, calls } = fakeStore(project({ status: 'closed' }));
+  await deleteTestProject(request(OWNER), store, ON);
+  assert.equal(calls.includes(`close ${ID}`), false);
 });
 
 test('a project is marked at creation only on a test environment, and only with the test title prefix', () => {

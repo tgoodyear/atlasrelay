@@ -596,13 +596,13 @@ async function deleteMatching(t: TableClient, filter: string): Promise<number> {
  *   claims   donors' pledge slots (partition = project id), the confirmation lock
  *            (confirm-<project id>), and the owner's receipt reservations naming this project
  *            (receipt-<owner id>, filtered on projectId)
- *   projects the owner index entry (owner-<owner id>) and the project row
+ *   projects the project row and its owner index entry (owner-<owner id>)
  *
  * Nothing else holds a figure derived from a project: the home-page figures, the listing and the
  * sitemap are all computed from the project rows when they are read, so once the row is gone they
- * no longer count it. The project row goes last, so a request that fails part way leaves the
- * project in place and the same call can be made again to finish. The pledges and slots are swept
- * once more after it, for a pledge whose request read the project just before it went.
+ * no longer count it. The children go first, so a request that fails part way leaves the project in
+ * place and the same call can be made again to finish. The pledges and slots are swept once more
+ * after the project row, for a pledge whose request read the project just before it went.
  */
 export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }> {
   const [pledgesT, claimsT, projectsT] = await Promise.all([table('pledges'), table(CLAIMS_TABLE), table('projects')]);
@@ -616,10 +616,42 @@ export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerI
   await sweepPledgesAndSlots();
   if (await deleteRow(claimsT, `confirm-${id}`, 'lock')) claims += 1;
   claims += await deleteMatching(claimsT, odata`PartitionKey eq ${receiptPk(project.ownerId)} and projectId eq ${id}`);
-  await deleteRow(projectsT, ownerIndexPk(project.ownerId), id);
+  // The project row before its index entry: an index entry with no project row is skipped by every
+  // reader, while a project row with no index entry would be a live project its owner's dashboard,
+  // the open-project cap and profile deletion could no longer see.
   await deleteRow(projectsT, PROJECTS_PK, id);
+  await deleteRow(projectsT, ownerIndexPk(project.ownerId), id);
   await sweepPledgesAndSlots();
   return { pledges, claims };
+}
+
+/** The donors' pledge slots on a project: which pledge holds each, and since when. */
+export async function listPledgeSlots(projectId: string): Promise<{ donorId: string; pledgeId: string; createdAt: string }[]> {
+  const out: { donorId: string; pledgeId: string; createdAt: string }[] = [];
+  for await (const e of (await table(CLAIMS_TABLE)).listEntities<Entity>({ queryOptions: { filter: odata`PartitionKey eq ${projectId}` } })) {
+    out.push({ donorId: e.rowKey, pledgeId: String(e.pledgeId ?? ''), createdAt: String(e.createdAt ?? '') });
+  }
+  return out;
+}
+
+/**
+ * Whether a pledge request may still be running on a project, from its slots and pledge rows. A slot
+ * is taken before the pledge row is written, so a recent slot with no row behind it, or one whose
+ * row is still in flight, is a request in progress. Bounded by the same grace as everything else
+ * here, so a request that died does not block for ever.
+ */
+export function pledgeRequestRunning(
+  slots: { pledgeId: string; createdAt: string }[],
+  pledges: Pledge[],
+  asOf: number = Date.now(),
+): boolean {
+  if (pledges.some((p) => pledgeInFlight(p, asOf))) return true;
+  const rows = new Map(pledges.map((p) => [p.id, p]));
+  return slots.some((s) => {
+    const since = Date.parse(s.createdAt);
+    if (!Number.isFinite(since) || asOf - since > CLAIM_ORPHAN_GRACE_MS) return false;
+    return !rows.has(s.pledgeId);
+  });
 }
 
 // ---------- pledges ----------

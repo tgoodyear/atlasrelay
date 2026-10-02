@@ -88,6 +88,10 @@ test.beforeEach(deleteBothProfiles);
 // not stop the next), then the profiles: the test's project goes, passed or failed.
 test.afterEach(async ({}, testInfo) => cleanUpRun(run, testInfo));
 test.afterEach(deleteBothProfiles);
+// Again once the file is done. An afterEach hook that times out (the credit return, at worst) skips
+// the hooks after it, but afterAll still runs. Both are no-ops when the afterEach hooks did their work.
+test.afterAll(async ({}, testInfo) => cleanUpRun(run, testInfo));
+test.afterAll(deleteBothProfiles);
 
 /** On a project page, as the donor: open the pledge form and paste a key, as a person would. */
 async function openApiPledge(page: Page, amount: number, key: string): Promise<Locator> {

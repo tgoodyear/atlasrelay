@@ -6,8 +6,8 @@
 #   scripts/purge-test-data.sh <env> [--apply] [--account ID]...
 #
 #   --apply        delete; without it, print what would be deleted and change nothing
-#   --account ID   purge this account id (the Static Web Apps user id) instead of the test
-#                  accounts the script finds from the projects the tests posted; repeatable
+#   --account ID   purge only the account ids given (Static Web Apps user ids) instead of the
+#                  test accounts the script finds; repeatable, so name every account to purge
 #
 # Never prod: the script refuses it, and so does scripts/purge-test-data.mjs, which does the work.
 # Needs az, signed in as the Owner scripts/bootstrap.sh recorded as ATLASRELAY_OPERATOR_PRINCIPAL_ID

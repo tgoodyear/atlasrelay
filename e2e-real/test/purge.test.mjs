@@ -58,10 +58,28 @@ test('the test accounts are found from their projects, and a real person who ple
   assert.deepEqual(found, { accounts: ['D', 'R'], skipped: [] });
 });
 
-test('an account that owns anything not titled like a test is left for the operator to name', () => {
+test('an account that owns anything the tests did not post is left for the operator to name', () => {
   const r = rows();
   r.projects.push(proj('r9', 'R', 'My own study'));
-  assert.deepEqual(detectTestAccounts(r), { accounts: ['D'], skipped: [{ id: 'R', reason: 'owns 1 project(s) not titled like a test; name it with --account to include it' }] });
+  assert.deepEqual(detectTestAccounts(r), { accounts: ['D'], skipped: [{ id: 'R', reason: 'owns 1 project(s) the tests did not post; pass --account with every account to purge, this one included' }] });
+  // A test-looking title without the tests' description is not a test project either.
+  const r2 = rows();
+  r2.projects.push({ ...proj('r8', 'R', 'E2E my own'), description: 'hand written' });
+  assert.deepEqual(detectTestAccounts(r2).accounts, ['D']);
+});
+
+test('a person who pledged to a test project and later deleted their profile is not taken for the test donor', () => {
+  const r = rows();
+  // P pledged to a test project and to H's project, then deleted their profile: both rows say Anonymous.
+  r.pledges.push({ partitionKey: 't1', rowKey: 'p6', donorId: 'P', donorName: DELETED_ACCOUNT_NAME });
+  r.pledges.push({ partitionKey: 'h1', rowKey: 'p7', donorId: 'P', donorName: DELETED_ACCOUNT_NAME });
+  const found = detectTestAccounts(r);
+  assert.deepEqual(found.accounts, ['D', 'R']);
+  assert.deepEqual(found.skipped.map((x) => x.id), ['P']);
+  // An Anonymous donor whose every pledge is on a test project is the test donor after a profile deletion.
+  const r2 = rows();
+  r2.pledges.push({ partitionKey: 't2', rowKey: 'p8', donorId: 'Q', donorName: DELETED_ACCOUNT_NAME });
+  assert.deepEqual(detectTestAccounts(r2).accounts, ['D', 'Q', 'R']);
 });
 
 test('the plan removes the accounts\' projects with everything under them, and their pledges elsewhere', () => {

@@ -34,22 +34,35 @@ export function detectTestAccounts(rows) {
   const testIds = new Set(projects.filter(isTestProject).map((p) => p.rowKey));
   /** @type {Set<string>} */
   const candidates = new Set(projects.filter(isTestProject).map((p) => s(p.ownerId)).filter(Boolean));
+  // A donor is a test account when it pledged under a test name, or when every pledge it ever made
+  // is on a test project. "Anonymous" alone proves nothing: anyone who pledged to a test project and
+  // later deleted their profile reads that way.
+  /** @type {Map<string, Row[]>} */
+  const byDonor = new Map();
   for (const pl of rows.pledges) {
-    if (!testIds.has(pl.partitionKey)) continue;
-    const name = s(pl.donorName);
-    if (name === DELETED_ACCOUNT_NAME || name.startsWith(TEST_DONOR_PREFIX)) {
-      const donor = s(pl.donorId);
-      if (donor) candidates.add(donor);
-    }
+    const donor = s(pl.donorId);
+    if (!donor) continue;
+    byDonor.set(donor, [...(byDonor.get(donor) ?? []), pl]);
+  }
+  /** @type {{ id: string, reason: string }[]} */
+  const skipped = [];
+  for (const [donor, pledges] of byDonor) {
+    if (candidates.has(donor) || !pledges.some((pl) => testIds.has(pl.partitionKey))) continue;
+    const named = pledges.some((pl) => s(pl.donorName).startsWith(TEST_DONOR_PREFIX));
+    const onlyTests = pledges.every((pl) => testIds.has(pl.partitionKey));
+    const anonymous = pledges.every((pl) => s(pl.donorName) === DELETED_ACCOUNT_NAME || s(pl.donorName).startsWith(TEST_DONOR_PREFIX));
+    if (named || (onlyTests && anonymous)) candidates.add(donor);
+    else if (anonymous) skipped.push({ id: donor, reason: 'pledged to a test project as Anonymous and also to other projects; pass --account with every account to purge, this one included' });
   }
   const accounts = [];
-  const skipped = [];
   for (const id of [...candidates].sort()) {
-    const other = projects.filter((p) => s(p.ownerId) === id && !s(p.title).startsWith(TEST_TITLE_PREFIX)).length;
-    if (other > 0) skipped.push({ id, reason: `owns ${other} project(s) not titled like a test; name it with --account to include it` });
+    // The same test as the plan's: anything the account owns that is not a test project would be
+    // deleted with the rest, so an account owning one is left for the operator to decide.
+    const other = projects.filter((p) => s(p.ownerId) === id && !isTestProject(p)).length;
+    if (other > 0) skipped.push({ id, reason: `owns ${other} project(s) the tests did not post; pass --account with every account to purge, this one included` });
     else accounts.push(id);
   }
-  return { accounts, skipped };
+  return { accounts, skipped: skipped.sort((a, b) => (a.id < b.id ? -1 : 1)) };
 }
 
 /**

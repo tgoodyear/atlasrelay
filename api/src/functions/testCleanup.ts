@@ -1,6 +1,6 @@
 import { app, HttpFunctionOptions, HttpRequest } from '@azure/functions';
 import { handle, json } from '../lib/http';
-import { deleteProjectRecords, getProject, listPledges } from '../lib/store';
+import { deleteProjectRecords, getProject, listPledgeSlots, listPledges, patchProject } from '../lib/store';
 import { TEST_CLEANUP_ROUTE, deleteTestProject, testCleanupEnabled } from '../lib/testCleanup';
 import { logEvent } from '../lib/telemetry';
 
@@ -22,7 +22,13 @@ export function registerTestCleanup(
     methods: ['DELETE'],
     authLevel: 'anonymous',
     handler: handle(async (req: HttpRequest) => {
-      const result = await deleteTestProject(req, { getProject, listPledges, deleteProjectRecords });
+      const result = await deleteTestProject(req, {
+        getProject,
+        listPledges,
+        listPledgeSlots,
+        closeProject: async (id) => { await patchProject(id, { status: 'closed' }); },
+        deleteProjectRecords,
+      });
       logEvent('test-cleanup', { projectId: result.deleted, pledges: result.pledges, claims: result.claims });
       return json(result);
     }),
