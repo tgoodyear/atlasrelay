@@ -66,30 +66,37 @@ export default function Privacy() {
             You sign in with {providerList(providers)} through Azure Static Web Apps, which sets its
             sign-in cookies to keep you signed in. The site sets no other cookies. Your profile stores
             which provider you used, the account name it passes on, and an internal account id. Your
-            display name starts as that account name, without anything after an @, and is shown next
-            to your projects and pledges. You can change it on your profile page, and add an
-            affiliation and a link, which are public too.
+            display name is shown next to your projects and pledges. You can change it on your
+            profile page, and add an affiliation and a link, which are public too.
           </p>
           <ul className="muted">
-            <li>GitHub passes on your username.</li>
-            <li>Microsoft passes on an account name that can be your email address.</li>
+            <li>GitHub passes on your username, and your display name starts as that username.</li>
+            <li>
+              Microsoft passes on an account name that can be your email address, and your name. Your
+              display name starts as your name, or as the part of the account name before any @.
+            </li>
             {offers('google') && (
               <li>
                 Google: the site uses Azure's default request to Google, which asked for your name and
                 email address (the openid, email and profile scopes) when this page was written. The
-                account name it passes on can be your email address, so a Google account's display
-                name starts as a placeholder such as user-1a2b3c instead.
+                account name it passes on can be your email address. Your display name starts as your
+                name from Google, or as a placeholder such as user-1a2b3c, never as your email address.
               </li>
             )}
             {offers('orcid') && (
               <li>
                 ORCID: the site asks only for the openid scope, which gives your ORCID iD and, if your
-                ORCID record makes it public, your name. The site asks for that name as the account
-                name; if none comes through, the account name is a placeholder. The site never shows
-                your ORCID iD to other people unless you type it into your profile.
+                ORCID record makes it public, your name. The account name is your ORCID iD. Your
+                display name starts as your public ORCID name, or as a placeholder such as
+                user-1a2b3c. The site never shows your ORCID iD to other people unless you type it into
+                your profile.
               </li>
             )}
           </ul>
+          <p className="muted">
+            When the display name comes from your name at the provider, the dashboard says so once,
+            with a link to change it.
+          </p>
           <p className="muted">
             Researchers add the email of their RIPE NCC Access account so donors can send them
             credits. It never appears on a public page. A signed-in donor sees it when they start a

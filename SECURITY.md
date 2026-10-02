@@ -20,8 +20,8 @@ credits, projects or email addresses to demonstrate a finding.
 ## Reporting abuse or asking for a takedown
 
 Nobody vets the projects posted here. Posting needs a sign-in (GitHub or Microsoft, and Google or
-ORCID once the site offers them) and a self-declared RIPE NCC Access email, and the site cannot tell a real research project from an
-invented one. The transfer page tells donors this.
+ORCID once the site offers them) and a self-declared RIPE NCC Access email, and the site cannot
+tell a real research project from an invented one. The transfer page tells donors this.
 
 If a project is fraudulent, misrepresents who is behind it, or should come down for another
 reason, open an issue labelled `abuse` with the project's URL and what is wrong with it. If
@@ -113,13 +113,16 @@ resources outside the stack.
 Sign-in uses the site's own app registrations at GitHub (a GitHub App), Microsoft (an Entra app
 registration), Google and ORCID, separate for dev and prod. Static Web Apps turns its built-in
 providers off once a site has any registration of its own, so GitHub and Microsoft need the site's
-own registrations too. Each registration has a client secret, kept in the environment's sign-in Key
-Vault and nowhere else: not in the repository, the owner's settings file, the deployment parameters
-or history, or a log. `scripts/register-signin.sh` moves each secret from the provider into the
-vault on standard input, without printing it. The static web app reads the secrets with its own
-managed identity through Key Vault references in its app settings. The vault accepts Azure RBAC
-only: the site's identity can read secrets and the operator can write them; the CI identity has no
-role on it and cannot read app settings. It keeps public network access, because Static Web Apps
+own registrations too. GitHub, Google and ORCID each have a client secret, kept in the
+environment's sign-in Key Vault and nowhere else: not in the repository, the owner's settings
+file, the deployment parameters or history, or a log. `scripts/register-signin.sh` moves each
+secret from the provider into the vault on standard input, without printing it. The static web app
+reads the secrets with its system-assigned identity through Key Vault references in its app
+settings. Microsoft has no secret: the site signs in to Entra with a user-assigned identity that
+only it holds and that the app registration trusts through a federated identity credential; that
+identity has no Azure role. The vault accepts Azure RBAC only: the site's identity can read
+secrets and the operator can write them; the CI identity has no role on it and cannot read app
+settings. It keeps public network access, because Static Web Apps
 reads it from outside any virtual network. Purge protection is on, and every read and write is in
 the vault's audit log in the environment's Log Analytics workspace.
 

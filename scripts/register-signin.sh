@@ -7,17 +7,20 @@
 #   scripts/register-signin.sh prod --rotate github       # a new secret for an existing app
 #
 # Microsoft: creates or updates the Entra app registration with Microsoft Graph (name, accounts,
-#   redirect URI, publisher domain, links, logo, sign-in permissions) and adds a client secret,
-#   keeping the previous one so the site keeps working until it reads the new one.
+#   redirect URI, ID tokens, links, logo, sign-in permissions) and has it trust the site's sign-in
+#   identity through a federated identity credential. It adds no client secret. Graph cannot set
+#   the publisher domain, so until it is set the script lists it at the end as a step for the
+#   Entra admin center.
 # GitHub: creates a GitHub App from a manifest; you click "Create GitHub App" on github.com.
 # Google, ORCID: prints what to register, then asks for the client id and, without echoing it,
 #   the client secret.
 #
 # Secrets go from the provider straight into the vault, on standard input: never printed, never on
-# a command line, never in a file. The client ids go to the settings file. Then the stack is
-# deployed, the providers the site's build should offer are recorded as SIGNIN_PROVIDERS (and in
-# the repository variable the matching workflow builds with), and each provider's sign-in redirect
-# is checked on the live site.
+# a command line, never in a file. The client ids go to the settings file and the vault. Once
+# GitHub and Microsoft both have registrations, the stack is deployed, the providers the site's
+# build should offer are recorded as SIGNIN_PROVIDERS (and in the repository variable the matching
+# workflow builds with), and the script prints where each provider's sign-in leads on the live
+# site.
 #
 # Needs az 2.61+ signed in to the environment's tenant as an Owner who may create app registrations,
 # jq, node with the web workspace installed (for the logo), and gh for the GitHub variable.

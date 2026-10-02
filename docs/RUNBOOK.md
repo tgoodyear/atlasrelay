@@ -10,7 +10,8 @@ deployed from the same template. Environment names are 1 to 6 lowercase letters 
 | --- | --- | --- |
 | Resource group | `rg-atlasrelay-prod` | `infra/main.bicep` |
 | Static Web App (Standard) | `swa-atlasrelay-prod` | `infra/app.bicep` |
-| Sign-in vault (client secrets) | `kvs-atlasrelay-prod-<4 characters>` | `infra/signin.bicep` |
+| Sign-in vault (client secrets and ids) | `kvs-atlasrelay-prod-<4 characters>` | `infra/signin.bicep` |
+| The site's identity for signing in to Microsoft Entra | `id-atlasrelay-prod-signin` | `infra/app.bicep` |
 | Storage account with tables `users`, `projects`, `pledges`, `claims` | `statlasrelayprod<6 characters>` | `infra/app.bicep` |
 | Function App (Flex Consumption), linked to the site as its API, with its app settings and plan | `func-atlasrelay-prod-<6 characters>`, `plan-atlasrelay-prod-api` | `infra/api.bicep` |
 | The Function App's managed identity | `id-atlasrelay-prod-api` | `infra/api.bicep` |
@@ -248,13 +249,20 @@ explains the design.
 
 Where things live:
 
-- **Client ids**: in the settings file (`ATLASRELAY_<PROVIDER>_CLIENT_ID`) and the site's app
-  settings. They are not secret.
-- **Client secrets**: in the environment's sign-in vault, `SIGNIN_KEY_VAULT_NAME`
-  (`kvs-atlasrelay-<env>-...`, `infra/signin.bicep`). The site's app settings hold Key Vault
-  references to them, without a version, and the site reads them with its managed identity
+- **Client ids**: in the settings file (`ATLASRELAY_<PROVIDER>_CLIENT_ID`), in the sign-in vault
+  (`signin-<provider>-client-id`, with `microsoft` for Microsoft), and in the site's app settings.
+  They are not secret. `scripts/provision.sh` takes a client id missing from the settings file
+  from the vault, and warns when the two differ.
+- **Client secrets** for GitHub, Google and ORCID: in the environment's sign-in vault,
+  `SIGNIN_KEY_VAULT_NAME` (`kvs-atlasrelay-<env>-...`, `infra/signin.bicep`). The site's app
+  settings hold Key Vault references to them, without a version, and the site reads them with its
+  system-assigned identity
   ([Key Vault secrets](https://learn.microsoft.com/azure/static-web-apps/key-vault-secrets)). No
   secret is in the settings file, the Bicep parameters, the deployment history or a log.
+- **Microsoft has no secret.** The site signs in to Entra with its user-assigned identity
+  `id-atlasrelay-<env>-signin`, which the app registration trusts through a federated identity
+  credential (`OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID`, "Use a managed identity instead of a
+  secret" in [custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)).
 - **Which providers a build offers**: `SIGNIN_PROVIDERS`, worked out from the client ids by
   `scripts/provision.sh`, and copied to the repository variable the workflow that builds the
   environment reads (`SIGNIN_PROVIDERS` for prod, `DEV_SIGNIN_PROVIDERS` for dev).
@@ -280,13 +288,16 @@ It goes through the providers in turn:
 1. **Microsoft.** It creates or updates the Entra app registration "Atlas Relay (dev)" ("Atlas
    Relay" for prod) with Microsoft Graph. It sets:
    - accounts in any organization and personal Microsoft accounts;
-   - the redirect URI;
+   - the redirect URI, and ID tokens on: Static Web Apps asks for `code id_token`, and with ID
+     tokens off, Microsoft's answer made the site show "401: Unauthorized" after a good sign-in
+     (seen on dev, 2026-10);
    - the home page, privacy and support links;
    - the site's icon as the logo;
    - the sign-in permissions `openid`, `profile` and `email`.
 
-   It then adds a client secret and writes it straight to the vault. Graph cannot set the
-   publisher domain, so the script lists that as a step for the admin center: open the app's
+   It then adds a federated identity credential that trusts the site's sign-in identity, and adds
+   no client secret. Graph cannot set the publisher domain ("Property 'publisherDomain' is
+   read-only"), so the script lists that as a step for the admin center: open the app's
    **Branding & properties** and set **Publisher domain** to `atlasrelay.org`, a verified domain of
    the tenant.
 2. **GitHub.** It opens a page that sends a GitHub App manifest to github.com. Check the name there
@@ -301,7 +312,11 @@ It goes through the providers in turn:
    It then asks for the client id and, without showing it, the client secret.
 4. **ORCID.** It prints what to register under Developer tools on orcid.org, then asks for the
    client id and, without showing it, the client secret. Each ORCID account has one public API
-   client, so dev and prod need different ORCID accounts.
+   client, so dev and prod need different ORCID accounts. The site's account name for an ORCID
+   sign-in is the ORCID iD: Static Web Apps refuses a sign-in without one ("403: We need an email
+   address or a handle from your login service"), and ORCID's token has no email address.
+
+It also writes each client id it records to the vault.
 
 Once GitHub and Microsoft are both registered, it deploys the stack (`scripts/provision.sh`) with
 the client ids. That writes the app settings that point into the vault, and it also tells the API
@@ -314,7 +329,9 @@ others.
 ### Putting it live
 
 App settings alone change nothing a visitor sees. The site keeps its built-in providers until a
-build that names the new ones is deployed:
+build that names the new ones is deployed. The order matters the other way too: while the live
+build names an app setting that does not exist, Static Web Apps answers 404 for every
+`/.auth/login/<provider>`, not only the one that lacks it (seen on dev, 2026-10).
 
 - Dev: `scripts/run-e2e.sh dev` builds with `SIGNIN_PROVIDERS`, deploys to dev and runs the
   full-flow tests, which sign in with Microsoft through the new registration. The `e2e-dev.yml`
@@ -344,15 +361,13 @@ this.
 ### Rotating a secret
 
 ```bash
-scripts/register-signin.sh prod aad                 # Microsoft: a new secret every run
 scripts/register-signin.sh prod --rotate github     # GitHub, Google, ORCID: paste a new secret
 ```
 
-For Microsoft the script adds a new secret, writes it to the vault, and keeps the previous one, so
-nothing breaks before the site reads the new one; anything older is removed. Run it again before
-the secret expires (24 months). For GitHub, Google and ORCID, create the new secret with the
-provider, paste it when asked, and delete the old one there once sign-in works. ORCID replaces the
-secret in place, so ORCID sign-in fails from the reset until the new secret is stored.
+Microsoft has no secret to rotate: its credential is the site's managed identity. For GitHub,
+Google and ORCID, create the new secret with the provider, paste it when asked, and delete the old
+one there once sign-in works. ORCID replaces the secret in place, so ORCID sign-in fails from the
+reset until the new secret is stored.
 
 The app settings name the secret without a version, so a rotated secret needs no deployment. When
 Static Web Apps picks up the new version is not documented; sign in to check before deleting the
@@ -362,12 +377,15 @@ If a secret leaks, rotate it at once and delete the old one with the provider. A
 lets someone act as the site's registration with that provider: for GitHub, for example, it can
 check, reset or revoke the tokens people granted the app. On its own it does not let anyone sign in
 to this site as somebody else, because the provider sends sign-in codes only to the registered
-redirect URIs. It reaches no Azure resource or data: the Entra registration has no application
-permissions and no Azure role assignments, and should get none.
+redirect URIs. None of these secrets reaches an Azure resource or data.
+
+The identity the site signs in to Microsoft with can get tokens as the Entra app registration, and
+nothing else: it has no Azure role, and only the site holds it. The registration has no
+application permissions and no Azure role assignments, and should get none.
 
 ### The vault
 
-`kvs-atlasrelay-<env>-...` uses Azure RBAC only. The site's managed identity has Key Vault Secrets
+`kvs-atlasrelay-<env>-...` uses Azure RBAC only. The site's system-assigned identity has Key Vault Secrets
 User and the operator (`ATLASRELAY_OPERATOR_PRINCIPAL_ID`) has Key Vault Secrets Officer. Public
 network access stays on because Static Web Apps reads the secrets from outside any virtual
 network. Its audit log (`AuditEvent`) goes to the environment's Log Analytics workspace:
