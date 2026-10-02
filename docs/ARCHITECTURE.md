@@ -79,6 +79,7 @@ query filters on `PartitionKey eq 'project'`, so these rows never appear in the 
 | `resultsSummary` (≤4000, plain text), `resultsUrl` | What came of the work, posted by the owner after the credits were spent. Kept separate from `paperUrl`, which is the proposal that justified the ask. Both public. |
 | `resultsPostedAt` | ISO, stamped the first time either of the two above goes non-empty and never cleared afterwards, so a write-up that is later edited away does not retract the fact that the researcher reported. `hasResults` is derived from it in `publicProject`, and the listing filter, the card pill and the home-page `projectsWithResults` count all read that one flag. Absent on rows written before the fields existed, which reads as empty. |
 | `createdByTests` | `true` on a project created on a test environment, while `E2E_PROJECT_CLEANUP` is on, with a title starting `E2E ` (the title the full-flow tests use). Stored at creation and never written afterwards. It is what lets `DELETE /api/test/projects/{id}` remove the project. Absent everywhere else, prod included. Never published. |
+| `deletingSince` | ISO, written by `DELETE /api/test/projects/{id}` when it closes a project to delete it; the deletion waits until it is two minutes old. Never published. |
 | `createdAt`, `updatedAt` | |
 
 Whether a project reported back is not a `status` value. Whether it still wants
@@ -518,10 +519,11 @@ The stack's deny settings already stop the vault from being deleted outside the 
 The site cannot delete a project, so the tests used to leave each run's projects on dev, and the
 home-page figures counted them. Each spec now deletes the projects its run
 posted through `DELETE /api/test/projects/{id}` (`api/src/lib/testCleanup.ts`), signed in as the
-researcher who owns them. The hook runs after the credit return in the two specs that move real
-credits, and before the profiles are deleted, whether the test passed or not, and logs the ids it deleted. Those two specs repeat it once
-all their tests are done, since a hook that times out skips the ones after it. A run fails if it
-could not delete one.
+researcher who owns them, whether the test passed or not, and logs the ids it deleted. In the two
+specs that move real credits, a hook after the credit return and before the profiles are deleted
+closes each test's project, and the deletion is waited for once, after the file's last test; that
+later hook also runs when an earlier one timed out, which skips the hooks after it. A run fails if
+it could not delete one.
 
 The route exists only where the Function App has `E2E_PROJECT_CLEANUP=1`. `infra/main.bicep` passes
 the harness flag to `infra/api.bicep`, which sets the setting only when that flag is true, and the
@@ -529,9 +531,13 @@ flag is false whenever the environment is prod. The same key is filtered out of
 `additionalAppSettings`. Without the setting the function is not registered, and the handler also
 answers 404 before reading the request. Where it exists it deletes a project only for its owner, and
 only when the project carries `createdByTests`, which the API stores at creation when the setting is
-on and the title starts with `E2E `. It closes the project first, so no new pledge starts, and
-refuses while a pledge request may still be running: a transfer in flight, or a slot taken in the
-last two minutes with no pledge row yet. It deletes the pledges, the donors' pledge slots, the
+on and the title starts with `E2E `. It takes two calls. The first closes the project, stamps
+`deletingSince` and answers 409, and from then on no new pledge starts. The second deletes, but
+only once the stamp is two minutes old: a pledge request that read the project as open just before
+the close may still take a slot and transfer, and two minutes is the bound on a running request
+that the pledge slots and the confirmation lock already rely on. Reopening the project starts the
+wait again. As a last guard it also refuses while a transfer is in flight or a slot taken in the
+last two minutes has no pledge row yet. It deletes the pledges, the donors' pledge slots, the
 confirmation lock and the owner's receipt reservations naming the project, then the project row, so
 a request that fails part way leaves the project in place and can be repeated. The owner index entry
 goes after the project row, because an entry with no project behind it is skipped by every reader.

@@ -105,6 +105,9 @@ test('the runner refuses prod before it reads anything', () => {
   assert.ok(sh.indexOf('refusing to purge prod') < sh.indexOf('. scripts/lib/env.sh'), 'the shell script checks before loading settings');
   assert.ok(mjs.indexOf("if (env === 'prod') die(") < mjs.indexOf('new AzureCliCredential('), 'the runner checks before signing in');
   assert.match(mjs, /account\.startsWith\('statlasrelayprod'\)/);
+  // Marks before it deletes, and stops if it cannot; project rows before their index rows.
+  const order = ['totalsDirty: true', "die(`${failed} project(s) could not be marked", 'plan.pledges) n.pledges', 'plan.claims) n.claims', 'plan.projects) n.projects', 'plan.index) n.index'].map((x) => mjs.indexOf(x));
+  assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `steps out of order: ${order}`);
   // A dry run unless asked.
   assert.match(mjs, /if \(!apply\) \{\n\s+log\('dry run: nothing deleted/);
 });

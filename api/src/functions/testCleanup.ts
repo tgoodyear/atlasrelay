@@ -26,7 +26,7 @@ export function registerTestCleanup(
         getProject,
         listPledges,
         listPledgeSlots,
-        closeProject: async (id) => { await patchProject(id, { status: 'closed' }); },
+        beginDeletion: async (id, at) => { await patchProject(id, { status: 'closed', deletingSince: at }); },
         deleteProjectRecords,
       });
       logEvent('test-cleanup', { projectId: result.deleted, pledges: result.pledges, claims: result.claims });

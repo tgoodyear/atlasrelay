@@ -34,21 +34,27 @@ export function runProjects(projects, run) {
  */
 
 /**
- * The API refuses (409) while a pledge's transfer is in flight, which lasts two minutes at most
- * (CLAIM_ORPHAN_GRACE_MS in api/src/lib/store.ts). A test that timed out mid-transfer leaves one, so
- * a 409 is retried for a little longer than that.
+ * The first DELETE closes the project and answers 409; the API deletes it only once it has been
+ * closed for longer than any pledge request runs, two minutes (CLAIM_ORPHAN_GRACE_MS in
+ * api/src/lib/store.ts). It also answers 409 while a transfer is in flight, which lasts as long at
+ * most. So a 409 is retried for three minutes.
  */
-export const IN_FLIGHT_RETRIES = 10;
-export const IN_FLIGHT_WAIT_MS = 15_000;
+export const WAIT_RETRIES = 12;
+export const WAIT_MS = 15_000;
 
 /**
  * Delete every project this run posted. Tries them all, then throws if any is left, so a run that
  * could not clean up fails and says which ids remain.
+ *
+ * With `wait: false` it makes one request per project and does not wait out a 409: that starts the
+ * API's two-minute wait for each project (or deletes one whose wait is over), so a spec can start it
+ * after each test and wait once, after the last.
  * @param {CleanupIo} io
  * @param {string} run
+ * @param {{ wait?: boolean }} [options]
  * @returns {Promise<string[]>} the ids deleted
  */
-export async function deleteRunProjects(io, run) {
+export async function deleteRunProjects(io, run, { wait: waitOut = true } = {}) {
   const mine = runProjects(await io.list(), run);
   /** @type {string[]} */
   const deleted = [];
@@ -57,9 +63,10 @@ export async function deleteRunProjects(io, run) {
   const wait = io.wait ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   for (const { id } of mine) {
     let status = await io.remove(id);
-    for (let i = 0; status === 409 && i < IN_FLIGHT_RETRIES; i++) {
-      io.log(`[cleanup] project ${id} has a transfer in flight; trying again in ${IN_FLIGHT_WAIT_MS / 1000} s`);
-      await wait(IN_FLIGHT_WAIT_MS);
+    if (status === 409) io.log(`[cleanup] project ${id} is closed; deleting it once no pledge to it can still be running`);
+    if (status === 409 && !waitOut) continue;
+    for (let i = 0; status === 409 && i < WAIT_RETRIES; i++) {
+      await wait(WAIT_MS);
       status = await io.remove(id);
     }
     if (status === 200) {

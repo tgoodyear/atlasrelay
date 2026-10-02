@@ -25,9 +25,9 @@ export async function deleteProfile(role: Role): Promise<void> {
  * deletion, so it runs after the credits are back, and runs whether or not the test passed. Logs
  * the ids it deleted; fails when one is left.
  */
-export async function cleanUpRun(run: string, testInfo: TestInfo): Promise<void> {
-  // Its own time on top of the test's: a test that timed out mid-transfer leaves a pledge in flight
-  // for up to two minutes, and the deletion waits that out (lib/cleanup.mjs).
+export async function cleanUpRun(run: string, testInfo: TestInfo, options: { wait?: boolean } = {}): Promise<void> {
+  // Its own time on top of the test's: the API deletes a project only two minutes after closing it,
+  // and the deletion waits that out (lib/cleanup.mjs).
   testInfo.setTimeout(testInfo.timeout + 4 * 60_000);
   const ctx = await playwrightRequest.newContext({ baseURL: process.env.BASE_URL, storageState: statePath('researcher') });
   try {
@@ -41,7 +41,7 @@ export async function cleanUpRun(run: string, testInfo: TestInfo): Promise<void>
       remove: async (id) => (await ctx.delete(`/api/test/projects/${id}`)).status(),
       read: async (id) => (await ctx.get(`/api/projects/${id}`)).status(),
       log: (line) => console.log(line),
-    }, run);
+    }, run, options);
   } finally {
     await ctx.dispose();
   }

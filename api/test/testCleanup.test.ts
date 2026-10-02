@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpRequest } from '@azure/functions';
 import { HttpError } from '../src/lib/http';
-import type { Pledge, Project } from '../src/lib/store';
+import { CLAIM_ORPHAN_GRACE_MS, type Pledge, type Project } from '../src/lib/store';
 import { TEST_CLEANUP_ROUTE, TEST_CLEANUP_SETTING, deleteTestProject, marksTestProject, testCleanupEnabled, type TestCleanupStore } from '../src/lib/testCleanup';
 import { registerTestCleanup } from '../src/functions/testCleanup';
 import { publicProject } from '../src/lib/views';
@@ -20,12 +20,16 @@ function request(principal?: object, id = ID): HttpRequest {
   return new HttpRequest({ method: 'DELETE', url: `https://example.org/api/test/projects/${id}`, headers, params: { id } });
 }
 
+/** Closed for deletion long enough ago that no pledge request can still be running. */
+const LONG_AGO = '2026-01-01T00:00:00.000Z';
+
 const project = (over: Partial<Project> = {}): Project => ({
   id: ID, ownerId: 'owner1', ownerName: 'E2E researcher', title: 'E2E full flow abc', summary: 's', description: 'd',
-  creditsRequested: 100, creditsConfirmed: 100, creditsPending: 0, status: 'open', tags: [],
+  creditsRequested: 100, creditsConfirmed: 100, creditsPending: 0, tags: [],
   affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
   resultsSummary: '', resultsUrl: '', resultsPostedAt: '',
   moderationClosed: false, createdAt: '', updatedAt: '', createdByTests: true,
+  status: 'closed', deletingSince: LONG_AGO,
   ...over,
 });
 
@@ -44,7 +48,7 @@ function fakeStore(row: Project | null, pledges: Pledge[] = [], slots: { donorId
     getProject: async (id) => { calls.push(`get ${id}`); return row; },
     listPledges: async (id) => { calls.push(`pledges ${id}`); return pledges; },
     listPledgeSlots: async (id) => { calls.push(`slots ${id}`); return slots; },
-    closeProject: async (id) => { calls.push(`close ${id}`); },
+    beginDeletion: async (id) => { calls.push(`close ${id}`); },
     deleteProjectRecords: async (p) => { calls.push(`delete ${p.id} ${p.ownerId}`); return { pledges: pledges.length, claims: 2 }; },
   };
   return { store, calls };
@@ -55,7 +59,7 @@ const untouchable: TestCleanupStore = {
   getProject: async () => assert.fail('read a project'),
   listPledges: async () => assert.fail('read pledges'),
   listPledgeSlots: async () => assert.fail('read slots'),
-  closeProject: async () => assert.fail('closed a project'),
+  beginDeletion: async () => assert.fail('closed a project'),
   deleteProjectRecords: async () => assert.fail('deleted something'),
 };
 
@@ -127,11 +131,31 @@ test('only a project marked at creation may be deleted, even by its owner', asyn
   assert.equal(calls.some((c) => c.startsWith('delete')), false);
 });
 
-test('a project with a transfer still in flight is closed but not deleted', async () => {
+test('the first call closes the project and deletes nothing', async () => {
+  for (const row of [project({ status: 'open', deletingSince: undefined }), project({ deletingSince: undefined }), project({ status: 'open' })]) {
+    // Open, closed by someone else, or reopened after a first call: each starts the wait.
+    const { store, calls } = fakeStore(row);
+    assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 409);
+    assert.deepEqual(calls, [`get ${ID}`, `close ${ID}`]);
+  }
+});
+
+test('the project is deleted only once it has been closed for longer than any pledge request runs', async () => {
+  // A pledge request that read the project as open just before the close may still take a slot and
+  // transfer. The grace is the bound every claim in the store already relies on.
+  const justNow = new Date(Date.now() - CLAIM_ORPHAN_GRACE_MS + 10_000).toISOString();
+  const { store, calls } = fakeStore(project({ deletingSince: justNow }));
+  assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 409);
+  assert.deepEqual(calls, [`get ${ID}`], 'neither closed again nor deleted');
+  const after = new Date(Date.now() - CLAIM_ORPHAN_GRACE_MS - 1_000).toISOString();
+  const later = fakeStore(project({ deletingSince: after }));
+  assert.equal(await status(deleteTestProject(request(OWNER), later.store, ON)), 200);
+});
+
+test('a project with a transfer still in flight is not deleted', async () => {
   const running = pledge({ method: 'api', status: 'pledged', inFlight: true, inFlightSince: new Date().toISOString() });
   const { store, calls } = fakeStore(project(), [pledge({ id: 'p0' }), running]);
   assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 409);
-  assert.ok(calls.includes(`close ${ID}`), 'closed first, so no new pledge starts');
   assert.equal(calls.some((c) => c.startsWith('delete')), false);
 });
 
@@ -153,13 +177,7 @@ test('the owner of a marked project deletes it with everything under it', async 
   const { store, calls } = fakeStore(project(), [pledge(), stale], slots);
   const result = await deleteTestProject(request(OWNER), store, ON);
   assert.deepEqual(result, { deleted: ID, pledges: 2, claims: 2 });
-  assert.deepEqual(calls, [`get ${ID}`, `close ${ID}`, `pledges ${ID}`, `slots ${ID}`, `delete ${ID} owner1`]);
-});
-
-test('an already closed project is not written before it is deleted', async () => {
-  const { store, calls } = fakeStore(project({ status: 'closed' }));
-  await deleteTestProject(request(OWNER), store, ON);
-  assert.equal(calls.includes(`close ${ID}`), false);
+  assert.deepEqual(calls, [`get ${ID}`, `pledges ${ID}`, `slots ${ID}`, `delete ${ID} owner1`]);
 });
 
 test('a project is marked at creation only on a test environment, and only with the test title prefix', () => {
@@ -171,8 +189,10 @@ test('a project is marked at creation only on a test environment, and only with 
   assert.equal(marksTestProject('E2Eno space', ON), false);
 });
 
-test('the marker is never published', () => {
-  assert.equal('createdByTests' in publicProject(project()), false);
+test('the marker and the deletion stamp are never published', () => {
+  const p = publicProject(project());
+  assert.equal('createdByTests' in p, false);
+  assert.equal('deletingSince' in p, false);
 });
 
 // ---------- the prod gate in Bicep ----------

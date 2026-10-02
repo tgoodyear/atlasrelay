@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { IN_FLIGHT_RETRIES, TEST_TITLE_PREFIX, deleteRunProjects, runProjects } from '../lib/cleanup.mjs';
+import { WAIT_RETRIES, TEST_TITLE_PREFIX, deleteRunProjects, runProjects } from '../lib/cleanup.mjs';
 
 const RUN = 'abc123def456';
 const projects = [
@@ -55,7 +55,7 @@ test('every spec titles its projects so the run can find them, and cleans up aft
     // Titles end in the run id.
     for (const m of text.matchAll(/title: `([^`]*)`/g)) assert.match(m[1], /^E2E .*\$\{run\}$/, `${spec}: ${m[1]}`);
     // The cleanup hook is declared after the credit return (where there is one) and before the profiles go.
-    const cleanup = text.search(/test\.after(Each|All)\(async \(\{\}, testInfo\) => cleanUpRun\(run, testInfo\)\);/);
+    const cleanup = text.search(/test\.after(Each|All)\(async \(\{\}, testInfo\) => cleanUpRun\(run, testInfo(, \{ wait: false \})?\)\);/);
     const profiles = text.search(/test\.after(Each|All)\(deleteBothProfiles\);/);
     assert.ok(cleanup > 0 && profiles > cleanup, `${spec}: cleanup must be declared before the profile deletion`);
     const creditReturn = text.indexOf('await sendBack(');
@@ -105,15 +105,34 @@ test('a refusal fails the run after trying the rest', async () => {
   assert.deepEqual(lines, ['[cleanup] deleted 1 project(s): p2']);
 });
 
-test('a transfer in flight is waited out, then the project is deleted', async () => {
-  const { io, calls, waits } = site({ p1: [409, 409, 200] });
+test('the close is waited out, then the project is deleted', async () => {
+  const { io, calls, waits, lines } = site({ p1: [409, 409, 200] });
   assert.deepEqual(await deleteRunProjects(io, RUN), ['p1', 'p2']);
   assert.deepEqual(calls, ['p1', 'p1', 'p1', 'p2']);
   assert.equal(waits.length, 2);
+  assert.equal(lines[0], '[cleanup] project p1 is closed; deleting it once no pledge to it can still be running');
+});
+
+test('without waiting, a 409 starts the close and is not an error', async () => {
+  const { io, calls, waits } = site({ p1: [409], p2: [200] });
+  assert.deepEqual(await deleteRunProjects(io, RUN, { wait: false }), ['p2']);
+  assert.deepEqual(calls, ['p1', 'p2']);
+  assert.equal(waits.length, 0);
+  // Anything else still fails.
+  const other = site({ p1: [403] });
+  await assert.rejects(deleteRunProjects(other.io, RUN, { wait: false }), /p1 \(HTTP 403\)/);
+});
+
+test('the retries outlast the two minutes the API waits after closing', async () => {
+  const { WAIT_MS } = await import('../lib/cleanup.mjs');
+  const store = readFileSync(new URL('../../api/src/lib/store.ts', import.meta.url), 'utf8');
+  const grace = Number(store.match(/export const CLAIM_ORPHAN_GRACE_MS = (\d+) \* (\d+) \* (\d+);/)?.slice(1).reduce((a, b) => a * Number(b), 1));
+  assert.equal(grace, 120_000);
+  assert.ok(WAIT_RETRIES * WAIT_MS >= grace + 30_000, 'at least 30 s to spare');
 });
 
 test('a transfer that stays in flight gives up after the retries and fails the run', async () => {
   const { io, calls } = site({ p1: [409] });
   await assert.rejects(deleteRunProjects(io, RUN), /p1 \(HTTP 409\)/);
-  assert.equal(calls.filter((c) => c === 'p1').length, IN_FLIGHT_RETRIES + 1);
+  assert.equal(calls.filter((c) => c === 'p1').length, WAIT_RETRIES + 1);
 });

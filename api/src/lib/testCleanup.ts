@@ -3,7 +3,7 @@ import { getPrincipal } from './auth';
 import { HttpError } from './http';
 import { isId } from './ids';
 import type { Pledge, Project } from './store';
-import { pledgeRequestRunning } from './store';
+import { CLAIM_ORPHAN_GRACE_MS, pledgeRequestRunning } from './store';
 
 /**
  * Deleting the projects the full-flow tests post, on a test environment only.
@@ -48,7 +48,8 @@ export interface TestCleanupStore {
   getProject(id: string): Promise<Project | null>;
   listPledges(projectId: string): Promise<Pledge[]>;
   listPledgeSlots(projectId: string): Promise<{ donorId: string; pledgeId: string; createdAt: string }[]>;
-  closeProject(id: string): Promise<void>;
+  /** Close the project and stamp deletingSince, in one merge. */
+  beginDeletion(id: string, at: string): Promise<void>;
   deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }>;
 }
 
@@ -65,11 +66,14 @@ export interface TestCleanupResult {
  *    route that does not exist.
  * 2. A signed-in caller, then the project's owner: only the account that posted it.
  * 3. The stored marker: only a project posted by the tests, never a project its owner wrote by hand.
- * 4. The project is closed, so no new pledge starts, and then no pledge request may still be
- *    running: none mid-transfer, and no recently taken slot without its pledge row. A request
- *    that read the project before it closed and writes after this check can still leave a row
- *    behind; the second sweep in deleteProjectRecords narrows that, it does not close it. This is
- *    a test environment's cleanup, called after the tests finish, not a general delete.
+ * 4. Two calls, at least CLAIM_ORPHAN_GRACE_MS apart. The first closes the project and stamps
+ *    deletingSince, and answers 409. A pledge request reads the project, sees it open and goes on
+ *    to take a slot, write its row and transfer; every one that read it before the close has
+ *    finished within the grace, which is the bound the pledge slots and the confirmation lock
+ *    already rely on (a RIPE call gives up after 20 seconds). Every one that reads it after the
+ *    close is refused as closed. So once the stamp is older than the grace, no pledge request is
+ *    left that could write to the project, and the second call deletes. Anything that reopens the
+ *    project starts the wait again. The pledge rows are checked as well, as a last guard.
  */
 export async function deleteTestProject(
   req: HttpRequest,
@@ -85,7 +89,15 @@ export async function deleteTestProject(
   if (!project) throw new HttpError(404, 'Not found');
   if (project.ownerId !== principal.userId) throw new HttpError(403, 'Only the project owner can delete it');
   if (project.createdByTests !== true) throw new HttpError(403, 'Only projects the tests posted can be deleted');
-  if (project.status !== 'closed') await store.closeProject(id);
+  const now = Date.now();
+  const since = Date.parse(project.deletingSince ?? '');
+  if (project.status !== 'closed' || !Number.isFinite(since)) {
+    await store.beginDeletion(id, new Date(now).toISOString());
+    throw new HttpError(409, `The project is closed and will be deleted once any pledge in progress has finished. Try again in ${CLAIM_ORPHAN_GRACE_MS / 1000} seconds.`);
+  }
+  if (now - since <= CLAIM_ORPHAN_GRACE_MS) {
+    throw new HttpError(409, `The project was closed for deletion less than ${CLAIM_ORPHAN_GRACE_MS / 1000} seconds ago. Try again shortly.`);
+  }
   const [pledges, slots] = await Promise.all([store.listPledges(id), store.listPledgeSlots(id)]);
   if (pledgeRequestRunning(slots, pledges)) {
     throw new HttpError(409, 'A pledge to this project is still in progress. Try again in a few minutes.');

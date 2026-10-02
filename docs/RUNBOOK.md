@@ -277,12 +277,15 @@ tests use (`web/e2e/ui.ts`). It has three spec files:
   the site's "Transfer now with an API key" form. See [Real RIPE Atlas transfers](#real-ripe-atlas-transfers).
 
 Each spec file deletes both profiles before and after its tests (`ripe-transfer.spec.ts` and
-`manual-verify.spec.ts` around each test). Before the profiles go, it deletes the projects the run
-posted through the test-only route `DELETE /api/test/projects/{id}`, after the credit return in the
-two specs that move real credits, and whether or not the test passed, and prints `[cleanup] deleted N project(s): <ids>`. A run that
-could not delete one fails and names it. The two specs that move real credits run the cleanup and
-the profile deletion again once all their tests are done, because a hook that times out (the credit
-return, at worst) skips the hooks declared after it. The route exists only where `E2E_PROJECT_CLEANUP=1`,
+`manual-verify.spec.ts` around each test). It also deletes the projects the run posted, through the
+test-only route `DELETE /api/test/projects/{id}`, whether or not the test passed, and prints
+`[cleanup] deleted N project(s): <ids>`. A run that could not delete one fails and names it. The
+route closes a project on the first call and deletes it on a later one, at least two minutes on, so
+no pledge request that started before the close can still be running. The two specs that move real
+credits close each test's project in a hook after the credit return and before the profiles go, and
+wait for the deletions once, in an `afterAll` hook, which runs even when an `afterEach` hook timed
+out (the credit return, at worst), which skips the hooks declared after it. The cleanup adds about
+two minutes to each spec file. The route exists only where `E2E_PROJECT_CLEANUP=1`,
 which the environment's stack sets on every environment except prod
 ([Test cleanup](ARCHITECTURE.md#test-cleanup)). A run against an environment last deployed before
 that fails its cleanup with HTTP 404 until `scripts/provision.sh` deploys it again.

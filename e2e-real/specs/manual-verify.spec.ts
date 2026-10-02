@@ -74,11 +74,11 @@ test.afterEach(async ({}, testInfo) => {
 
 test.beforeEach(deleteBothProfiles);
 // After the credit return above (hooks run in the order they are declared, and a failing one does
-// not stop the next), then the profiles: the test's project goes, passed or failed.
-test.afterEach(async ({}, testInfo) => cleanUpRun(run, testInfo));
+// not stop the next), then the profiles: the test's project is closed for deletion, passed or failed.
+// The API deletes a project two minutes after closing it, so the deletion itself is waited for once,
+// in afterAll, which also covers an afterEach hook that timed out and skipped the ones after it.
+test.afterEach(async ({}, testInfo) => cleanUpRun(run, testInfo, { wait: false }));
 test.afterEach(deleteBothProfiles);
-// Again once the file is done. An afterEach hook that times out (the credit return, at worst) skips
-// the hooks after it, but afterAll still runs. Both are no-ops when the afterEach hooks did their work.
 test.afterAll(async ({}, testInfo) => cleanUpRun(run, testInfo));
 test.afterAll(deleteBothProfiles);
 

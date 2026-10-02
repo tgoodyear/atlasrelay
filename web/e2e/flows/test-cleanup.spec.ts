@@ -6,6 +6,30 @@ import { allRows, expect, postProject, putRow, row, test, type Person } from './
 
 const cleanup = (who: { request: Person['request'] }, id: string) => who.request.delete(`/api/test/projects/${id}`);
 
+/**
+ * Move the project's deletion stamp back past the two minutes the API waits after closing it, as if
+ * that time had passed.
+ */
+async function backdateDeletion(id: string): Promise<void> {
+  const stored = await row('projects', 'project', id);
+  expect(stored?.deletingSince, 'the first call stamped the project').toBeTruthy();
+  const { etag: _etag, timestamp: _timestamp, ...rest } = stored as Record<string, unknown> & { partitionKey: string; rowKey: string };
+  await putRow('projects', { ...rest, deletingSince: '2026-01-01T00:00:00.000Z' });
+}
+
+/** The two calls the route needs: the first closes the project, the second (after the wait) deletes it. */
+async function closeThenDelete(who: { request: Person['request'] }, id: string) {
+  const first = await cleanup(who, id);
+  expect(first.status(), await first.text()).toBe(409);
+  expect((await row('projects', 'project', id))?.status).toBe('closed');
+  // Inside the wait, it still refuses and does not restart the wait.
+  const stamp = (await row('projects', 'project', id))?.deletingSince;
+  expect((await cleanup(who, id)).status()).toBe(409);
+  expect((await row('projects', 'project', id))?.deletingSince).toBe(stamp);
+  await backdateDeletion(id);
+  return cleanup(who, id);
+}
+
 /** Every stored row that names the project, in any table. */
 async function rowsNaming(id: string): Promise<string[]> {
   const out: string[] = [];
@@ -52,7 +76,7 @@ test('the owner deletes a test project with its pledges, claims, lock, receipts 
     `projects project/${project.id}`,
   ].sort());
 
-  const res = await cleanup(researcher, project.id);
+  const res = await closeThenDelete(researcher, project.id);
   expect(res.status(), await res.text()).toBe(200);
   expect(await res.json()).toEqual({ deleted: project.id, pledges: 2, claims: 3 });
 
@@ -100,7 +124,21 @@ test('nobody but the owner, and nothing the tests did not post, can be deleted',
   expect(await row('projects', 'project', real.id)).not.toBeNull();
 });
 
-test('a project whose transfer is still in flight is closed but not deleted', async ({ person }) => {
+test('the first call closes the project, so a donor can no longer pledge to it', async ({ person }) => {
+  const researcher = await person({ role: 'researcher' });
+  const donor = await person({ role: 'donor' });
+  const project = await postProject(researcher);
+  expect((await cleanup(researcher, project.id)).status()).toBe(409);
+  const pledge = await donor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 5, method: 'manual' } });
+  expect(pledge.status()).toBe(409);
+  // Reopening it starts the wait again.
+  expect((await researcher.request.patch(`/api/projects/${project.id}`, { data: { status: 'open' } })).status()).toBe(200);
+  await backdateDeletion(project.id);
+  expect((await cleanup(researcher, project.id)).status()).toBe(409);
+  expect((await row('projects', 'project', project.id))?.deletingSince).not.toBe('2026-01-01T00:00:00.000Z');
+});
+
+test('a project whose transfer is still in flight is not deleted', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher);
   const now = new Date().toISOString();
@@ -108,16 +146,15 @@ test('a project whose transfer is still in flight is closed but not deleted', as
     partitionKey: project.id, rowKey: 'zzzzinflight01', donorId: 'someone', donorName: 'x', amount: 10, method: 'api',
     status: 'pledged', inFlight: true, inFlightSince: now, createdAt: now, updatedAt: now,
   });
-  expect((await cleanup(researcher, project.id)).status()).toBe(409);
-  // Closed, so no new pledge starts, and still there for the next attempt.
-  expect((await row('projects', 'project', project.id))?.status).toBe('closed');
+  expect((await closeThenDelete(researcher, project.id)).status()).toBe(409);
+  expect(await row('projects', 'project', project.id)).not.toBeNull();
 });
 
 test('a slot taken moments ago whose pledge row is not written yet holds the deletion off', async ({ person }) => {
   const researcher = await person({ role: 'researcher' });
   const project = await postProject(researcher);
   await putRow('claims', { partitionKey: project.id, rowKey: 'someone', pledgeId: 'notwrittenyet01', createdAt: new Date().toISOString() });
-  expect((await cleanup(researcher, project.id)).status()).toBe(409);
+  expect((await closeThenDelete(researcher, project.id)).status()).toBe(409);
   // Once the slot is older than any request could still be running, it is an orphan and goes too.
   await putRow('claims', { partitionKey: project.id, rowKey: 'someone', pledgeId: 'notwrittenyet01', createdAt: '2026-01-01T00:00:00.000Z' });
   const res = await cleanup(researcher, project.id);

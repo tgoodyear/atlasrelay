@@ -99,6 +99,11 @@ export interface Project {
    * no prod row ever has it and no edit can add it. Never published.
    */
   createdByTests?: boolean;
+  /**
+   * When the test cleanup route closed the project to delete it (lib/testCleanup.ts). It deletes only
+   * once this is older than any pledge request could still be running. Never published.
+   */
+  deletingSince?: string;
 }
 
 export interface Pledge {
@@ -345,6 +350,7 @@ function toProject(e: Entity): Project {
     storedAt: storageTimestamp(e.timestamp),
     // Only when set, so a row without the column reads back exactly as it did before it existed.
     ...(e.createdByTests === true ? { createdByTests: true } : {}),
+    ...(typeof e.deletingSince === 'string' && e.deletingSince ? { deletingSince: e.deletingSince } : {}),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -1073,7 +1079,7 @@ const CLAIMS_TABLE = 'claims' as const;
  * direction is only that a donor whose request died at exactly the wrong moment waits a little
  * before retrying, against a double transfer in the other.
  */
-const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
+export const CLAIM_ORPHAN_GRACE_MS = 2 * 60 * 1000;
 
 /**
  * Take the slot. Returns false when another live pledge already holds it.
