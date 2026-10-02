@@ -441,7 +441,7 @@ test('sign-in buttons match the build, and return paths stay on the site', () =>
   assert.equal(safeReturnPath('/projects/abc'), '/projects/abc');
   assert.equal(safeReturnPath('/projects?tag=dns#top'), '/projects?tag=dns#top');
   assert.equal(safeReturnPath('/projects/abc/../new'), '/projects/new');
-  for (const bad of ['https://evil.example/', '//evil.example/', '/\\evil.example', 'javascript:alert(1)', '', null, '/a\nb', '/a\tb', '/..//evil.example', '/.//evil.example', '/%2e%2e//evil.example', '/a/../..//evil.example', '/%2F%2Fevil.example', '/.auth/logout?post_logout_redirect_uri=/', '/logout', '/login/google', '/api/me', '/.auth/login/github']) {
+  for (const bad of ['https://evil.example/', '//evil.example/', '/\\evil.example', 'javascript:alert(1)', '', null, '/a\nb', '/a\tb', '/..//evil.example', '/.//evil.example', '/%2e%2e//evil.example', '/a/../..//evil.example', '/%2F%2Fevil.example', '/.auth/logout?post_logout_redirect_uri=/', '/logout', '/login/google', '/api/me', '/.auth/login/github', '/signin', '/signin?next=%2Fsignin', '/SignIn/']) {
     assert.equal(safeReturnPath(bad), '/dashboard', String(bad));
   }
   assert.equal(loginUrl('orcid', '/projects/abc'), '/.auth/login/orcid?post_login_redirect_uri=%2Fprojects%2Fabc');

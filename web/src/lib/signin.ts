@@ -134,7 +134,8 @@ export function safeReturnPath(value: string | null | undefined, fallback = '/da
   }
   const path = url.pathname;
   if (url.origin !== 'https://return.invalid' || path.startsWith('//') || /%2f|%5c/i.test(path)) return fallback;
-  if (/^\/(\.auth|api|login|logout)(\/|$)/i.test(path)) return fallback;
+  // Not the sign-in page itself either: signing in from it would land back on it, which redirects again.
+  if (/^\/(\.auth|api|login|logout|signin)(\/|$)/i.test(path)) return fallback;
   return path + url.search + url.hash;
 }
 

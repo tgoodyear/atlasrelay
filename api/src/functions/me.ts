@@ -2,7 +2,7 @@ import { app, HttpRequest } from '@azure/functions';
 import { requireAccount } from '../lib/account';
 import { handle, HttpError, json, readJson } from '../lib/http';
 import { Project, anonymizeRetainedNames, deleteProjectPostWindow, deleteUser, ensureUser, listPledges, listProjectsByOwner, patchProject, pledgeRacedDeletion, projectMayHaveRacedDeletion, updateUser } from '../lib/store';
-import { email, httpsUrl, str } from '../lib/validate';
+import { bool, email, httpsUrl, str } from '../lib/validate';
 import { initialDisplayName, privateUser } from '../lib/views';
 import { logError } from '../lib/telemetry';
 
@@ -36,7 +36,8 @@ app.http('me-put', {
     if (affiliation !== undefined) patch.affiliation = affiliation;
     const url = httpsUrl(body, 'url');
     if (url !== undefined) patch.url = url;
-    const user = await updateUser(p.userId, patch);
+    // The app's automatic name from the sign-in sends this: it applies only to a profile never saved.
+    const user = await updateUser(p.userId, patch, { onlyIfUntouched: bool(body, 'ifUntouched') });
     return json({ user: privateUser(user) });
   }),
 });

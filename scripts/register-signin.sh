@@ -318,8 +318,11 @@ share_orcid_from() {
   az keyvault secret show --vault-name "$from_vault" --name "$name" --subscription "$from_sub" \
     --query name -o tsv > /dev/null 2>&1 || return 1
   echo "  sharing $from's ORCID client $from_id"
+  # Called as an if condition, where a failure does not stop the script by itself: stop here,
+  # before the client id is recorded without its secret.
   az keyvault secret show --vault-name "$from_vault" --name "$name" --subscription "$from_sub" \
-    --query value -o tsv --only-show-errors | put_secret "$name"
+    --query value -o tsv --only-show-errors | put_secret "$name" ||
+    die "could not copy $from's ORCID secret to $VAULT; nothing recorded"
   aset ATLASRELAY_ORCID_CLIENT_ID "$from_id"
   put_client_id orcid "$from_id"
   PENDING+=("ORCID client $from_id (orcid.org, Developer tools): Redirect URIs must include $(callback_list orcid), next to $from's")

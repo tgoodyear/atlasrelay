@@ -45,8 +45,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const name = nameFromClaims(p.identityProvider, p.claims);
         if (shouldPrefill(me.user, name)) {
           try {
-            me = await api.updateMe({ displayName: name });
-            setPrefilledName(name);
+            // Applied only if the profile is still untouched when it is written (another tab may
+            // have saved a name meanwhile), so the notice follows what was actually saved.
+            me = await api.updateMe({ displayName: name, ifUntouched: true });
+            if (me.user.displayName === name) setPrefilledName(name);
           } catch {
             // The account keeps the name it has; the profile page can change it.
           }

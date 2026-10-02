@@ -278,9 +278,25 @@ export async function deleteUser(id: string): Promise<void> {
   }
 }
 
-export async function updateUser(id: string, patch: Partial<Pick<User, 'displayName' | 'atlasEmail' | 'affiliation' | 'url'>>): Promise<User> {
+/** Never saved since it was created: the app may still fill in the name from the sign-in. */
+function untouched(u: User): boolean {
+  return Boolean(u.createdAt) && u.createdAt === u.updatedAt;
+}
+
+/**
+ * `onlyIfUntouched` applies the patch only to a profile never saved since it was created, decided
+ * on the version this write is conditional on: the app's automatic name from the sign-in must not
+ * overwrite a name the person chose meanwhile (in another tab, say). Otherwise the profile is
+ * returned as it is.
+ */
+export async function updateUser(
+  id: string,
+  patch: Partial<Pick<User, 'displayName' | 'atlasEmail' | 'affiliation' | 'url'>>,
+  opts: { onlyIfUntouched?: boolean } = {},
+): Promise<User> {
   const existing = await getUser(id);
   if (!existing) notFound();
+  if (opts.onlyIfUntouched && !untouched(existing)) return existing;
   const updated: User = { ...existing, ...patch, updatedAt: now() };
   // updateEntity, not upsertEntity, and conditional on the version we read. An unconditional
   // upsert here would recreate a profile that was deleted between the read above and this write,
@@ -293,6 +309,11 @@ export async function updateUser(id: string, patch: Partial<Pick<User, 'displayN
       existing.etag ? { etag: existing.etag } : undefined,
     );
   } catch (err) {
+    // Saved by someone else between the read and this write: an automatic update yields to it.
+    if (opts.onlyIfUntouched && err instanceof RestError && err.statusCode === 412) {
+      const current = await getUser(id);
+      if (current) return current;
+    }
     if (err instanceof RestError && (err.statusCode === 404 || err.statusCode === 412)) notFound();
     throw err;
   }

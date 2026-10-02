@@ -69,6 +69,20 @@ test('the dashboard stops offering the sign-in name once the profile changes it'
   await expect(visitor.page.getByText("This is how you'll appear")).toHaveCount(0);
 });
 
+test('the name from the sign-in never overwrites a name the person already saved', async ({ signedOut }) => {
+  const visitor = await signedOut();
+  const id = `e2e${uid()}`;
+  await signInAgain(visitor.context, { identityProvider: 'google', userId: id, userDetails: `${id}@gmail.com`, userRoles: ['anonymous', 'authenticated'], claims: [] });
+  // A new account: the automatic update applies.
+  const first = await (await visitor.request.put('/api/me', { data: { displayName: 'Ada Lovelace', ifUntouched: true } })).json();
+  expect(first.user.displayName).toBe('Ada Lovelace');
+  // Saved by the person (in another tab, say): a later automatic update leaves it alone.
+  await visitor.request.put('/api/me', { data: { displayName: 'Augusta King' } });
+  const late = await (await visitor.request.put('/api/me', { data: { displayName: 'Ada Lovelace', ifUntouched: true } })).json();
+  expect(late.user.displayName).toBe('Augusta King');
+  expect((await (await visitor.request.get('/api/me')).json()).user.displayName).toBe('Augusta King');
+});
+
 test('a Google account with no name claim keeps the placeholder', async ({ signedOut }) => {
   const visitor = await signedOut();
   const id = `e2e${uid()}`;
