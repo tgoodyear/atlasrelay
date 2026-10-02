@@ -416,7 +416,8 @@ AzureDiagnostics
 
 Purge protection is on, so nobody can purge the vault or its secrets during the 7-day retention
 period. `scripts/teardown.sh` leaves the deleted vault recoverable, and the next deployment of the
-environment recovers it, secrets included.
+environment recovers it, secrets included, but not its role assignments: see "Rebuilding a torn-down
+environment".
 
 ### Turning them off
 
@@ -859,6 +860,30 @@ Removing a resource from the templates deletes it on that deployment. A new sett
 GitHub Environment, and purges the test vault of a non-prod environment. For prod it also deletes the zone and removes the repository secrets, so the
 Deploy workflow builds without deploying until prod is bootstrapped again. A new zone gets new
 name servers, and the registrar has to be updated.
+
+### Rebuilding a torn-down environment
+
+Within the sign-in vault's 7-day retention, bootstrapping or provisioning the environment again
+recovers the vault with its secrets and client ids, and records its name. Two things don't come
+back, so a rebuild with sign-in registrations takes these steps by hand:
+
+1. **Your access to the vault.** Its role assignments went with the resource group, so the run stops
+   with `can't read signin-…-client-id` (or `can't list the secrets`). Grant yourself the role at
+   the resource group, not the vault: the stack creates the vault's own assignment, and one made by
+   hand at the same scope would collide with it.
+   ```bash
+   az role assignment create --role "Key Vault Secrets Officer" \
+     --assignee "$(scripts/settings.sh <env> ATLASRELAY_OPERATOR_PRINCIPAL_ID)" \
+     --scope "/subscriptions/$(scripts/settings.sh <env> AZURE_SUBSCRIPTION_ID)/resourceGroups/rg-atlasrelay-<env>"
+   ```
+   Wait a minute or two for it to apply, then run `scripts/provision.sh <env>` again.
+2. **Microsoft's trust in the site.** The sign-in identity is new, and the Entra app's federated
+   credential still names the old one, so Microsoft sign-in fails until
+   `scripts/register-signin.sh <env> aad` points it at the new identity. Run it right after the
+   provision.
+
+Then remove the assignment from step 1 (`az role assignment delete` with the same arguments): the
+stack's own assignment on the vault is in place by then. Automating both steps is a follow-up.
 
 ## History
 

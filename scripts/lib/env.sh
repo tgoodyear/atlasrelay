@@ -234,6 +234,7 @@ recover_signin_vault() {
   # The settings of a torn-down environment are renamed away, so record the vault's name again:
   # sync_client_ids reads the client ids from it next.
   [ -n "$(aget SIGNIN_KEY_VAULT_NAME)" ] || aset SIGNIN_KEY_VAULT_NAME "$vault"
+  echo "note: a recovered vault comes back without its role assignments; if reading it fails below, see docs/RUNBOOK.md, \"Rebuilding a torn-down environment\""
 }
 # The sign-in providers the deployed site has app settings for, from Azure (names only; the values
 # are dropped here). Empty when the site does not exist yet.
