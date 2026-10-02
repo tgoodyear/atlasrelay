@@ -270,9 +270,10 @@ Where things live:
 Every redirect URI has the form `https://<host>/.auth/login/<provider>/callback`, with the
 providers `github`, `aad`, `google` and `orcid`. For prod the host is `atlasrelay.org`; make the
 apex the default domain first ([Canonical host](#canonical-host)) so that `www` and the
-`azurestaticapps.net` name redirect to it. For dev it is the site's own hostname
-(`scripts/settings.sh dev SWA_HOSTNAME`), which the full-flow tests use; sign-in on
-`dev.atlasrelay.org` does not work.
+`azurestaticapps.net` name redirect to it; `scripts/register-signin.sh prod` checks both. For dev
+there are two hosts, and each needs its redirect URI, because Static Web Apps sends the provider
+the callback on the hostname the sign-in started from: the site's own hostname
+(`scripts/settings.sh dev SWA_HOSTNAME`), which the full-flow tests use, and `dev.atlasrelay.org`.
 
 ### Registering
 
