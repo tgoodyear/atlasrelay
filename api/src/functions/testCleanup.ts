@@ -1,6 +1,6 @@
 import { app, HttpFunctionOptions, HttpRequest } from '@azure/functions';
 import { handle, json } from '../lib/http';
-import { deleteProjectRecords, getProject, listPledgeSlots, listPledges, patchProject } from '../lib/store';
+import { deleteProjectRecords, getCleanupTombstone, getProject, listPledgeSlots, listPledges, patchProject } from '../lib/store';
 import { TEST_CLEANUP_ROUTE, deleteTestProject, testCleanupEnabled } from '../lib/testCleanup';
 import { logEvent } from '../lib/telemetry';
 
@@ -27,6 +27,12 @@ export function registerTestCleanup(
         listPledges,
         listPledgeSlots,
         beginDeletion: async (id, at) => { await patchProject(id, { status: 'closed', deletingSince: at }); },
+        // updatedAt is passed through so the fence is a pure version check, not an edit.
+        fence: async (id, etag) => {
+          const p = await getProject(id);
+          await patchProject(id, { status: 'closed', updatedAt: p?.updatedAt }, etag);
+        },
+        getCleanupTombstone,
         deleteProjectRecords,
       });
       logEvent('test-cleanup', { projectId: result.deleted, pledges: result.pledges, claims: result.claims });

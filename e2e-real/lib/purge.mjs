@@ -85,6 +85,8 @@ export function planPurge(rows, accounts) {
     gone.has(r.partitionKey)
     || (r.partitionKey.startsWith('confirm-') && gone.has(r.partitionKey.slice('confirm-'.length)))
     || [...acct].some((a) => r.partitionKey === `receipt-${a}`)
+    // Tombstones of cleanups that did not finish (api/src/lib/store.ts, getCleanupTombstone).
+    || (r.partitionKey.startsWith('cleanup-') && (gone.has(r.partitionKey.slice('cleanup-'.length)) || acct.has(s(r.ownerId))))
     // The accounts' pledge slots on projects that stay.
     || (acct.has(r.rowKey) && rows.projects.some((p) => p.partitionKey === 'project' && p.rowKey === r.partitionKey)));
   const dirty = [...new Set(pledgeRows.map((r) => r.partitionKey).filter((id) => !gone.has(id)))].sort();

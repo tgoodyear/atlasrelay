@@ -35,6 +35,8 @@ const rows = () => ({
     { partitionKey: 'h1', rowKey: 'D' },
     { partitionKey: 'h1', rowKey: 'X' },
     { partitionKey: 'confirm-h1', rowKey: 'lock' },
+    { partitionKey: 'cleanup-t9', rowKey: 'tombstone', ownerId: 'R' },
+    { partitionKey: 'cleanup-h9', rowKey: 'tombstone', ownerId: 'H' },
   ],
 });
 const keys = (rs) => rs.map((r) => `${r.partitionKey}/${r.rowKey}`).sort();
@@ -89,7 +91,8 @@ test('the plan removes the accounts\' projects with everything under them, and t
   // Everything on the test projects, H's pledge included, and D's pledge on H's project.
   assert.deepEqual(keys(plan.pledges), ['h1/p4', 't1/p1', 't2/p2', 't2/p3']);
   // Slots and locks of the test projects, R's receipts, and D's slot on h1; not X's slot, H's receipts or h1's lock.
-  assert.deepEqual(keys(plan.claims), ['confirm-t2/lock', 'h1/D', 'receipt-R/991', 't1/D']);
+  // R's unfinished cleanup tombstone goes too; H's stays.
+  assert.deepEqual(keys(plan.claims), ['cleanup-t9/tombstone', 'confirm-t2/lock', 'h1/D', 'receipt-R/991', 't1/D']);
   // h1 loses a pledge, so its cached totals are rebuilt.
   assert.deepEqual(plan.dirty, ['h1']);
   assert.deepEqual(plan.remaining, { projects: 1, withCredits: 1 });

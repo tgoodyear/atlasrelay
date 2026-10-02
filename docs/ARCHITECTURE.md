@@ -79,7 +79,7 @@ query filters on `PartitionKey eq 'project'`, so these rows never appear in the 
 | `resultsSummary` (≤4000, plain text), `resultsUrl` | What came of the work, posted by the owner after the credits were spent. Kept separate from `paperUrl`, which is the proposal that justified the ask. Both public. |
 | `resultsPostedAt` | ISO, stamped the first time either of the two above goes non-empty and never cleared afterwards, so a write-up that is later edited away does not retract the fact that the researcher reported. `hasResults` is derived from it in `publicProject`, and the listing filter, the card pill and the home-page `projectsWithResults` count all read that one flag. Absent on rows written before the fields existed, which reads as empty. |
 | `createdByTests` | `true` on a project created on a test environment, while `E2E_PROJECT_CLEANUP` is on, with a title starting `E2E ` (the title the full-flow tests use). Stored at creation and never written afterwards. It is what lets `DELETE /api/test/projects/{id}` remove the project. Absent everywhere else, prod included. Never published. |
-| `deletingSince` | ISO, written by `DELETE /api/test/projects/{id}` when it closes a project to delete it; the deletion waits until it is two minutes old. Never published. |
+| `deletingSince` | ISO, written by `DELETE /api/test/projects/{id}` when it closes a project to delete it; the deletion waits until it is two minutes old, and the project cannot be reopened meanwhile. Never published. |
 | `createdAt`, `updatedAt` | |
 
 Whether a project reported back is not a `status` value. Whether it still wants
@@ -535,12 +535,16 @@ on and the title starts with `E2E `. It takes two calls. The first closes the pr
 `deletingSince` and answers 409, and from then on no new pledge starts. The second deletes, but
 only once the stamp is two minutes old: a pledge request that read the project as open just before
 the close may still take a slot and transfer, and two minutes is the bound on a running request
-that the pledge slots and the confirmation lock already rely on. Reopening the project starts the
-wait again. As a last guard it also refuses while a transfer is in flight or a slot taken in the
-last two minutes has no pledge row yet. It deletes the pledges, the donors' pledge slots, the
-confirmation lock and the owner's receipt reservations naming the project, then the project row, so
-a request that fails part way leaves the project in place and can be repeated. The owner index entry
-goes after the project row, because an entry with no project behind it is skipped by every reader.
+that the pledge slots and the confirmation lock already rely on. The edit form cannot reopen a
+project while it waits, and if a reopen slipped in anyway the next call starts the wait again. As a
+last guard it also refuses while a transfer is in flight or a slot taken in the last two minutes has
+no pledge row yet, and it deletes only after a conditional write on the version it checked. It
+writes a tombstone in the claims table (`cleanup-<id>`) before deleting anything and removes it
+last, so the owner can finish a cleanup that failed part way by calling again, even once the
+project row is gone. It deletes the pledges, the donors' pledge slots, the
+confirmation lock and the owner's receipt reservations naming the project, then the project row.
+The owner index entry goes after the project row, because an entry with no project behind it is
+skipped by every reader.
 It then sweeps the pledges and slots once more, for a pledge made while it ran. Nothing else stores
 a figure derived from a project: the home-page figures, the listing and the sitemap are computed
 from the project rows when they are read.

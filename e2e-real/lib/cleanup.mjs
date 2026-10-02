@@ -41,6 +41,8 @@ export function runProjects(projects, run) {
  */
 export const WAIT_RETRIES = 12;
 export const WAIT_MS = 15_000;
+export const SERVER_ERROR_RETRIES = 3;
+export const SERVER_ERROR_WAIT_MS = 5_000;
 
 /**
  * Delete every project this run posted. Tries them all, then throws if any is left, so a run that
@@ -67,6 +69,12 @@ export async function deleteRunProjects(io, run, { wait: waitOut = true } = {}) 
     if (status === 409 && !waitOut) continue;
     for (let i = 0; status === 409 && i < WAIT_RETRIES; i++) {
       await wait(WAIT_MS);
+      status = await io.remove(id);
+    }
+    // A server error can leave a cleanup part done; the API finishes it on the next call, even once
+    // the project row is gone, so it is retried a few times.
+    for (let i = 0; status >= 500 && i < SERVER_ERROR_RETRIES; i++) {
+      await wait(SERVER_ERROR_WAIT_MS);
       status = await io.remove(id);
     }
     if (status === 200) {

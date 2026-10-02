@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { WAIT_RETRIES, TEST_TITLE_PREFIX, deleteRunProjects, runProjects } from '../lib/cleanup.mjs';
+import { SERVER_ERROR_RETRIES, WAIT_RETRIES, TEST_TITLE_PREFIX, deleteRunProjects, runProjects } from '../lib/cleanup.mjs';
 
 const RUN = 'abc123def456';
 const projects = [
@@ -96,6 +96,15 @@ test('an environment without the route fails the run and says why', async () => 
 test('a 404 followed by a failed read is not taken as gone', async () => {
   const { io } = site({ p1: [404] }, new Set(), { p1: 503 });
   await assert.rejects(deleteRunProjects(io, RUN), /p1 \(HTTP 404, then HTTP 503 reading it back\)/);
+});
+
+test('a server error is retried, since the API finishes a part-done cleanup on the next call', async () => {
+  const { io, calls } = site({ p1: [500, 503, 200] });
+  assert.deepEqual(await deleteRunProjects(io, RUN), ['p1', 'p2']);
+  assert.deepEqual(calls, ['p1', 'p1', 'p1', 'p2']);
+  const stuck = site({ p1: [500] });
+  await assert.rejects(deleteRunProjects(stuck.io, RUN), /p1 \(HTTP 500\)/);
+  assert.equal(stuck.calls.filter((c) => c === 'p1').length, SERVER_ERROR_RETRIES + 1);
 });
 
 test('a refusal fails the run after trying the rest', async () => {

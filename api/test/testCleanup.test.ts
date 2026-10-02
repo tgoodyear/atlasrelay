@@ -29,7 +29,7 @@ const project = (over: Partial<Project> = {}): Project => ({
   affiliation: '', homepageUrl: '', repoUrl: '', paperUrl: '', deadline: '',
   resultsSummary: '', resultsUrl: '', resultsPostedAt: '',
   moderationClosed: false, createdAt: '', updatedAt: '', createdByTests: true,
-  status: 'closed', deletingSince: LONG_AGO,
+  status: 'closed', deletingSince: LONG_AGO, etag: 'W/"v1"',
   ...over,
 });
 
@@ -42,9 +42,19 @@ const pledge = (over: Partial<Pledge> = {}): Pledge => ({
 });
 
 /** A store that records what was asked of it. */
-function fakeStore(row: Project | null, pledges: Pledge[] = [], slots: { donorId: string; pledgeId: string; createdAt: string }[] = []) {
+function fakeStore(
+  row: Project | null,
+  pledges: Pledge[] = [],
+  slots: { donorId: string; pledgeId: string; createdAt: string }[] = [],
+  opts: { tombstone?: { ownerId: string }; fenceFails?: boolean } = {},
+) {
   const calls: string[] = [];
   const store: TestCleanupStore = {
+    fence: async (id, etag) => {
+      calls.push(`fence ${id} ${etag}`);
+      if (opts.fenceFails) throw Object.assign(new Error('Precondition failed'), { statusCode: 412 });
+    },
+    getCleanupTombstone: async (id) => { calls.push(`tombstone ${id}`); return opts.tombstone ?? null; },
     getProject: async (id) => { calls.push(`get ${id}`); return row; },
     listPledges: async (id) => { calls.push(`pledges ${id}`); return pledges; },
     listPledgeSlots: async (id) => { calls.push(`slots ${id}`); return slots; },
@@ -60,6 +70,8 @@ const untouchable: TestCleanupStore = {
   listPledges: async () => assert.fail('read pledges'),
   listPledgeSlots: async () => assert.fail('read slots'),
   beginDeletion: async () => assert.fail('closed a project'),
+  fence: async () => assert.fail('fenced a project'),
+  getCleanupTombstone: async () => assert.fail('read a tombstone'),
   deleteProjectRecords: async () => assert.fail('deleted something'),
 };
 
@@ -110,7 +122,7 @@ test('a malformed id or a missing project is 404', async () => {
   assert.equal(await status(deleteTestProject(request(OWNER, 'NOT-AN-ID'), untouchable, ON)), 404);
   const { store, calls } = fakeStore(null);
   assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 404);
-  assert.deepEqual(calls, [`get ${ID}`]);
+  assert.deepEqual(calls, [`get ${ID}`, `tombstone ${ID}`]);
 });
 
 test('only the project owner may delete it', async () => {
@@ -177,7 +189,23 @@ test('the owner of a marked project deletes it with everything under it', async 
   const { store, calls } = fakeStore(project(), [pledge(), stale], slots);
   const result = await deleteTestProject(request(OWNER), store, ON);
   assert.deepEqual(result, { deleted: ID, pledges: 2, claims: 2 });
-  assert.deepEqual(calls, [`get ${ID}`, `pledges ${ID}`, `slots ${ID}`, `delete ${ID} owner1`]);
+  assert.deepEqual(calls, [`get ${ID}`, `pledges ${ID}`, `slots ${ID}`, `fence ${ID} W/"v1"`, `delete ${ID} owner1`]);
+});
+
+test('a cleanup that failed after the project row went is finished by its owner, and by nobody else', async () => {
+  const mine = fakeStore(null, [], [], { tombstone: { ownerId: 'owner1' } });
+  assert.deepEqual(await deleteTestProject(request(OWNER), mine.store, ON), { deleted: ID, pledges: 0, claims: 2 });
+  assert.deepEqual(mine.calls, [`get ${ID}`, `tombstone ${ID}`, `delete ${ID} owner1`]);
+  const theirs = fakeStore(null, [], [], { tombstone: { ownerId: 'owner1' } });
+  assert.equal(await status(deleteTestProject(request(OTHER), theirs.store, ON)), 404);
+  assert.equal(theirs.calls.some((c) => c.startsWith('delete')), false);
+});
+
+test('a project that changed after the checks is not deleted', async () => {
+  // A reopen, or any other write, between the read and the deletion fails the conditional write.
+  const { store, calls } = fakeStore(project(), [], [], { fenceFails: true });
+  assert.equal(await status(deleteTestProject(request(OWNER), store, ON)), 409);
+  assert.equal(calls.some((c) => c.startsWith('delete')), false);
 });
 
 test('a project is marked at creation only on a test environment, and only with the test title prefix', () => {

@@ -1,4 +1,4 @@
-import { allRows, expect, postProject, putRow, row, test, type Person } from './fixtures';
+import { allRows, deleteRow, expect, postProject, putRow, row, test, type Person } from './fixtures';
 
 // DELETE /api/test/projects/{id}: how the full-flow tests on dev remove the projects they post. The
 // local stack turns it on the way Bicep does outside prod (E2E_PROJECT_CLEANUP=1). That the route
@@ -131,11 +131,35 @@ test('the first call closes the project, so a donor can no longer pledge to it',
   expect((await cleanup(researcher, project.id)).status()).toBe(409);
   const pledge = await donor.request.post(`/api/projects/${project.id}/pledges`, { data: { amount: 5, method: 'manual' } });
   expect(pledge.status()).toBe(409);
-  // Reopening it starts the wait again.
-  expect((await researcher.request.patch(`/api/projects/${project.id}`, { data: { status: 'open' } })).status()).toBe(200);
-  await backdateDeletion(project.id);
+  // It cannot be reopened while the cleanup waits, so the stamp stands for an unbroken closed period.
+  const reopen = await researcher.request.patch(`/api/projects/${project.id}`, { data: { status: 'open' } });
+  expect(reopen.status(), await reopen.text()).toBe(409);
+  expect((await row('projects', 'project', project.id))?.status).toBe('closed');
+  // A reopen that got in anyway (one that read the project before it was stamped) leaves it open,
+  // and the next call starts the wait again rather than deleting.
+  const stored = (await row('projects', 'project', project.id)) as Record<string, unknown> & { partitionKey: string; rowKey: string };
+  const { etag: _etag, timestamp: _timestamp, ...rest } = stored;
+  await putRow('projects', { ...rest, status: 'open', deletingSince: '2026-01-01T00:00:00.000Z' });
   expect((await cleanup(researcher, project.id)).status()).toBe(409);
-  expect((await row('projects', 'project', project.id))?.deletingSince).not.toBe('2026-01-01T00:00:00.000Z');
+  const restamped = await row('projects', 'project', project.id);
+  expect(restamped?.status).toBe('closed');
+  expect(restamped?.deletingSince).not.toBe('2026-01-01T00:00:00.000Z');
+});
+
+test('a cleanup that stopped after the project row went is finished by calling again', async ({ person }) => {
+  const researcher = await person({ role: 'researcher' });
+  const stranger = await person({ role: 'researcher' });
+  const project = await postProject(researcher);
+  // What a cleanup leaves when it fails after deleting the project row: its tombstone, the owner
+  // index entry, and a pledge row the final sweep did not reach.
+  await deleteRow('projects', 'project', project.id);
+  await putRow('claims', { partitionKey: `cleanup-${project.id}`, rowKey: 'tombstone', ownerId: researcher.id, createdAt: new Date().toISOString() });
+  await putRow('pledges', { partitionKey: project.id, rowKey: 'latepledge0001', donorId: 'someone', amount: 1, status: 'cancelled' });
+  expect((await cleanup(stranger, project.id)).status()).toBe(404);
+  const res = await cleanup(researcher, project.id);
+  expect(res.status(), await res.text()).toBe(200);
+  expect(await rowsNaming(project.id)).toEqual([]);
+  expect((await cleanup(researcher, project.id)).status()).toBe(404);
 });
 
 test('a project whose transfer is still in flight is not deleted', async ({ person }) => {

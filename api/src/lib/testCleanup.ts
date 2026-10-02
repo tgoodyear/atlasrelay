@@ -50,6 +50,13 @@ export interface TestCleanupStore {
   listPledgeSlots(projectId: string): Promise<{ donorId: string; pledgeId: string; createdAt: string }[]>;
   /** Close the project and stamp deletingSince, in one merge. */
   beginDeletion(id: string, at: string): Promise<void>;
+  /**
+   * A conditional write on the version just read, keeping the project closed. Rejects (412) when the
+   * project changed since, so nothing that happened after the checks below can be deleted under.
+   */
+  fence(id: string, etag: string): Promise<void>;
+  /** The owner recorded when a cleanup started and has not finished (store.getCleanupTombstone). */
+  getCleanupTombstone(id: string): Promise<{ ownerId: string } | null>;
   deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }>;
 }
 
@@ -72,8 +79,14 @@ export interface TestCleanupResult {
  *    finished within the grace, which is the bound the pledge slots and the confirmation lock
  *    already rely on (a RIPE call gives up after 20 seconds). Every one that reads it after the
  *    close is refused as closed. So once the stamp is older than the grace, no pledge request is
- *    left that could write to the project, and the second call deletes. Anything that reopens the
- *    project starts the wait again. The pledge rows are checked as well, as a last guard.
+ *    left that could write to the project, and the second call deletes. The stamp stands for an
+ *    unbroken closed period because the edit path refuses to reopen a project that carries it, and
+ *    a reopen that slipped in anyway (one that read the project before the stamp) leaves it open,
+ *    which starts the wait again. The pledge rows are checked as well, and the deletion goes ahead
+ *    only after a conditional write on the version all of this was decided on.
+ *
+ * A tombstone written before anything is deleted lets the owner finish a cleanup that failed part way,
+ * even after the project row went.
  */
 export async function deleteTestProject(
   req: HttpRequest,
@@ -86,7 +99,14 @@ export async function deleteTestProject(
   const id = req.params.id;
   if (!isId(id)) throw new HttpError(404, 'Not found');
   const project = await store.getProject(id);
-  if (!project) throw new HttpError(404, 'Not found');
+  if (!project) {
+    // A cleanup that failed after the project row went is finished by its owner calling again. The
+    // tombstone is written only by a cleanup that had passed every check below.
+    const tombstone = await store.getCleanupTombstone(id);
+    if (!tombstone || tombstone.ownerId !== principal.userId) throw new HttpError(404, 'Not found');
+    const removed = await store.deleteProjectRecords({ id, ownerId: tombstone.ownerId });
+    return { deleted: id, ...removed };
+  }
   if (project.ownerId !== principal.userId) throw new HttpError(403, 'Only the project owner can delete it');
   if (project.createdByTests !== true) throw new HttpError(403, 'Only projects the tests posted can be deleted');
   const now = Date.now();
@@ -101,6 +121,17 @@ export async function deleteTestProject(
   const [pledges, slots] = await Promise.all([store.listPledges(id), store.listPledgeSlots(id)]);
   if (pledgeRequestRunning(slots, pledges)) {
     throw new HttpError(409, 'A pledge to this project is still in progress. Try again in a few minutes.');
+  }
+  // Everything above was decided on the version read at the top. A reopen or any other write since
+  // then means the decision may no longer hold, so the next call decides again.
+  if (!project.etag) throw new HttpError(409, 'The project could not be checked. Try again.');
+  try {
+    await store.fence(id, project.etag);
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 412) {
+      throw new HttpError(409, 'The project changed while it was being deleted. Try again.');
+    }
+    throw err;
   }
   const removed = await store.deleteProjectRecords(project);
   return { deleted: id, ...removed };

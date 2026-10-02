@@ -606,10 +606,27 @@ async function deleteMatching(t: TableClient, filter: string): Promise<number> {
  *
  * Nothing else holds a figure derived from a project: the home-page figures, the listing and the
  * sitemap are all computed from the project rows when they are read, so once the row is gone they
- * no longer count it. The children go first, so a request that fails part way leaves the project in
- * place and the same call can be made again to finish. The pledges and slots are swept once more
- * after the project row, for a pledge whose request read the project just before it went.
+ * no longer count it. A tombstone (getCleanupTombstone) is written first and removed last, so a
+ * request that fails at any step can be repeated to finish, before or after the project row went.
+ * The pledges and slots are swept once more after the project row, for a pledge whose request read
+ * the project just before it went.
  */
+/** The partition of a cleanup's tombstone in the claims table: one row, `tombstone`. */
+function cleanupPk(projectId: string): string {
+  return `cleanup-${projectId}`;
+}
+
+/**
+ * The owner of a project whose cleanup started and has not finished, or null. Written before
+ * anything is deleted and removed last, so a cleanup that failed after the project row went can
+ * still be found and finished: the project row is gone by then, and with it the owner and the marker
+ * the route checks.
+ */
+export async function getCleanupTombstone(projectId: string): Promise<{ ownerId: string } | null> {
+  const e = await getEntity(CLAIMS_TABLE, cleanupPk(projectId), 'tombstone');
+  return e ? { ownerId: String(e.ownerId ?? '') } : null;
+}
+
 export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }> {
   const [pledgesT, claimsT, projectsT] = await Promise.all([table('pledges'), table(CLAIMS_TABLE), table('projects')]);
   const id = project.id;
@@ -619,6 +636,8 @@ export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerI
     pledges += await deleteMatching(pledgesT, odata`PartitionKey eq ${id}`);
     claims += await deleteMatching(claimsT, odata`PartitionKey eq ${id}`);
   };
+  // First, so that every later step can fail and be retried: see getCleanupTombstone.
+  await claimsT.upsertEntity({ partitionKey: cleanupPk(id), rowKey: 'tombstone', ownerId: project.ownerId, createdAt: now() }, 'Replace');
   await sweepPledgesAndSlots();
   if (await deleteRow(claimsT, `confirm-${id}`, 'lock')) claims += 1;
   claims += await deleteMatching(claimsT, odata`PartitionKey eq ${receiptPk(project.ownerId)} and projectId eq ${id}`);
@@ -628,6 +647,7 @@ export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerI
   await deleteRow(projectsT, PROJECTS_PK, id);
   await deleteRow(projectsT, ownerIndexPk(project.ownerId), id);
   await sweepPledgesAndSlots();
+  await deleteRow(claimsT, cleanupPk(id), 'tombstone');
   return { pledges, claims };
 }
 
