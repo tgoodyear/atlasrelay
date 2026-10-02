@@ -93,6 +93,12 @@ export interface Project {
    * updatedAt. Read only by profile deletion, to tell whether a project changed recently. Never published.
    */
   storedAt?: string;
+  /**
+   * Posted by the full-flow tests on a test environment, so DELETE /api/test/projects/{id} may remove
+   * it (lib/testCleanup.ts). Written only at creation, and only where E2E_PROJECT_CLEANUP is on, so
+   * no prod row ever has it and no edit can add it. Never published.
+   */
+  createdByTests?: boolean;
 }
 
 export interface Pledge {
@@ -337,6 +343,8 @@ function toProject(e: Entity): Project {
     totalsCheckedAt: typeof e.totalsCheckedAt === 'string' ? e.totalsCheckedAt : undefined,
     totalsDirty: e.totalsDirty === true,
     storedAt: storageTimestamp(e.timestamp),
+    // Only when set, so a row without the column reads back exactly as it did before it existed.
+    ...(e.createdByTests === true ? { createdByTests: true } : {}),
     createdAt: String(e.createdAt ?? ''),
     updatedAt: String(e.updatedAt ?? ''),
   };
@@ -555,6 +563,63 @@ export async function listProjectsByOwner(ownerId: string): Promise<Project[]> {
     for (const p of batch) if (p && p.ownerId === ownerId) out.push(p);
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/** Delete one row; false when it was already gone. */
+async function deleteRow(t: TableClient, partitionKey: string, rowKey: string): Promise<boolean> {
+  try {
+    await t.deleteEntity(partitionKey, rowKey);
+    return true;
+  } catch (err) {
+    if (err instanceof RestError && err.statusCode === 404) return false;
+    throw err;
+  }
+}
+
+/** Delete every row a query returns; how many it deleted. */
+async function deleteMatching(t: TableClient, filter: string): Promise<number> {
+  const keys: { partitionKey: string; rowKey: string }[] = [];
+  for await (const e of t.listEntities<Entity>({ queryOptions: { filter, select: ['PartitionKey', 'RowKey'] } })) {
+    keys.push({ partitionKey: e.partitionKey, rowKey: e.rowKey });
+  }
+  let n = 0;
+  for (const k of keys) if (await deleteRow(t, k.partitionKey, k.rowKey)) n += 1;
+  return n;
+}
+
+/**
+ * Remove a project and every row that exists because of it. Used only by the test cleanup route
+ * (lib/testCleanup.ts), which decides whether the caller may; this does no checking of its own.
+ *
+ * What a project leaves in storage, and so what goes:
+ *   pledges  every pledge, partitioned by project id
+ *   claims   donors' pledge slots (partition = project id), the confirmation lock
+ *            (confirm-<project id>), and the owner's receipt reservations naming this project
+ *            (receipt-<owner id>, filtered on projectId)
+ *   projects the owner index entry (owner-<owner id>) and the project row
+ *
+ * Nothing else holds a figure derived from a project: the home-page figures, the listing and the
+ * sitemap are all computed from the project rows when they are read, so once the row is gone they
+ * no longer count it. The project row goes last, so a request that fails part way leaves the
+ * project in place and the same call can be made again to finish. The pledges and slots are swept
+ * once more after it, for a pledge whose request read the project just before it went.
+ */
+export async function deleteProjectRecords(project: Pick<Project, 'id' | 'ownerId'>): Promise<{ pledges: number; claims: number }> {
+  const [pledgesT, claimsT, projectsT] = await Promise.all([table('pledges'), table(CLAIMS_TABLE), table('projects')]);
+  const id = project.id;
+  let pledges = 0;
+  let claims = 0;
+  const sweepPledgesAndSlots = async () => {
+    pledges += await deleteMatching(pledgesT, odata`PartitionKey eq ${id}`);
+    claims += await deleteMatching(claimsT, odata`PartitionKey eq ${id}`);
+  };
+  await sweepPledgesAndSlots();
+  if (await deleteRow(claimsT, `confirm-${id}`, 'lock')) claims += 1;
+  claims += await deleteMatching(claimsT, odata`PartitionKey eq ${receiptPk(project.ownerId)} and projectId eq ${id}`);
+  await deleteRow(projectsT, ownerIndexPk(project.ownerId), id);
+  await deleteRow(projectsT, PROJECTS_PK, id);
+  await sweepPledgesAndSlots();
+  return { pledges, claims };
 }
 
 // ---------- pledges ----------

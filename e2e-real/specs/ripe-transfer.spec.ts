@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { pledgeRow, postProjectInForm, postResults, saveProfile } from '../../web/e2e/ui';
 import { ripeAccounts, ripeTransferCredits, type RipeSide } from '../accounts';
-import { deleteBothProfiles, signedIn } from '../site';
+import { cleanUpRun, deleteBothProfiles, signedIn } from '../site';
 import { pollUntil, ripeClient, shortSide, type RipeClient } from '../lib/ripe.mjs';
 
 // Real RIPE Atlas transfers through the site, between two real RIPE Atlas accounts:
@@ -84,6 +84,9 @@ test.afterEach(async ({}, testInfo) => {
 });
 
 test.beforeEach(deleteBothProfiles);
+// After the credit return above (hooks run in the order they are declared, and a failing one does
+// not stop the next), then the profiles: the test's project goes, passed or failed.
+test.afterEach(async ({}, testInfo) => cleanUpRun(run, testInfo));
 test.afterEach(deleteBothProfiles);
 
 /** On a project page, as the donor: open the pledge form and paste a key, as a person would. */

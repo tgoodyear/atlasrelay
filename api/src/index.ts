@@ -8,6 +8,7 @@ import './functions/stats';
 import './functions/atlas';
 import './functions/sitemap';
 import './functions/projectPage';
+import './functions/testCleanup';
 
 app.setup({ enableHttpStream: false });
 

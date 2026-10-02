@@ -78,6 +78,7 @@ query filters on `PartitionKey eq 'project'`, so these rows never appear in the 
 | `affiliation`, `homepageUrl`, `repoUrl`, `paperUrl`, `deadline` | Optional. |
 | `resultsSummary` (≤4000, plain text), `resultsUrl` | What came of the work, posted by the owner after the credits were spent. Kept separate from `paperUrl`, which is the proposal that justified the ask. Both public. |
 | `resultsPostedAt` | ISO, stamped the first time either of the two above goes non-empty and never cleared afterwards, so a write-up that is later edited away does not retract the fact that the researcher reported. `hasResults` is derived from it in `publicProject`, and the listing filter, the card pill and the home-page `projectsWithResults` count all read that one flag. Absent on rows written before the fields existed, which reads as empty. |
+| `createdByTests` | `true` on a project the full-flow tests posted on a test environment: stored at creation when `E2E_PROJECT_CLEANUP` is on and the title starts with `E2E `, and never written afterwards. It is what lets `DELETE /api/test/projects/{id}` remove the project. Absent everywhere else, prod included. Never published. |
 | `createdAt`, `updatedAt` | |
 
 Whether a project reported back is not a `status` value. Whether it still wants
@@ -305,6 +306,7 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 | `POST /api/atlas/balance` | user | `{apiKey}` → `{current_balance,...}` from RIPE. Never stored. |
 | `GET /api/sitemap` | public | Sitemap XML of the public pages and every project not taken down. Served at `/sitemap.xml` by a rewrite in `staticwebapp.config.json`. |
 | `GET /api/project-page` | public | HTML for `/projects/{id}` and `/projects/{id}/edit`, reached by a rewrite of `/projects/*`. See [Pages and routing](#pages-and-routing). |
+| `DELETE /api/test/projects/{id}` | owner; test environments only | Deletes a project the full-flow tests posted, with its pledges and claim rows. Exists only where `E2E_PROJECT_CLEANUP=1`, which is never prod; see [Test cleanup](#test-cleanup). |
 
 Authorization is enforced twice: `staticwebapp.config.json` route rules require the
 `authenticated` role on mutating routes, and every function re-checks the decoded
@@ -511,6 +513,36 @@ the vault's name is fixed per environment and `scripts/teardown.sh` purges it, s
 bootstrapped again the same day, and the passwords and keys can be replaced at any time.
 The stack's deny settings already stop the vault from being deleted outside the stack.
 
+#### Test cleanup
+
+The site cannot delete a project, so the tests used to leave each run's projects on dev, funded and
+with results, and the home-page figures counted them. Each spec now deletes the projects its run
+posted through `DELETE /api/test/projects/{id}` (`api/src/lib/testCleanup.ts`), signed in as the
+researcher who owns them. The hook runs after the credit return and before the profiles are
+deleted, whether the test passed or not, and logs the ids it deleted. A run fails if it could not
+delete one.
+
+The route exists only where the Function App has `E2E_PROJECT_CLEANUP=1`. `infra/main.bicep` passes
+the harness flag to `infra/api.bicep`, which sets the setting only when that flag is true, and the
+flag is false whenever the environment is prod. The same key is filtered out of
+`additionalAppSettings`. Without the setting the function is not registered, and the handler also
+answers 404 before reading the request. Where it exists it deletes a project only for its owner, and
+only when the project carries `createdByTests`, which the API stores at creation when the setting is
+on and the title starts with `E2E `. It refuses while a pledge's transfer is in flight. It deletes
+the pledges, the donors' pledge slots, the confirmation lock, the owner's receipt reservations
+naming the project, the owner index entry, and the project row last, so a request that fails part
+way can be repeated. Nothing else stores a figure derived from a project: the home-page figures,
+the listing and the sitemap are computed from the project rows when they are read.
+
+`scripts/check-params.sh` checks the compiled templates (prod's parameters turn the harness off,
+and the setting depends on nothing but the harness flag), and `api/test/testCleanup.test.ts` checks
+the gate, the owner and marker rules and the Bicep sources.
+
+`scripts/purge-test-data.sh <env>` removes what the test accounts left before this existed. It is
+for test environments only and refuses prod. It finds the accounts from the projects the tests
+posted and works on the tables directly, signed in as the operator. It is a dry run unless given
+`--apply`.
+
 ## Repository layout
 
 ```
@@ -522,7 +554,7 @@ infra/    main.bicep (subscription scope, one deployment stack per environment) 
 scripts/  bootstrap.sh, provision.sh, teardown.sh, settings.sh (lib/env.sh); bind-custom-domain.sh;
           logs.sh; check-params.sh; set-test-users.sh and set-ripe-keys.sh (test accounts and
           RIPE Atlas keys into the dev vault); run-e2e.sh (lib/e2e-job.sh: build the test image,
-          start the test job)
+          start the test job); purge-test-data.sh (remove old test runs' projects, never prod)
 e2e-real/ full-flow tests against dev with real Microsoft sign-in and real RIPE Atlas transfers;
           Dockerfile for the job's image
 ops/queries/  saved KQL queries that scripts/logs.sh runs against the Log Analytics workspace

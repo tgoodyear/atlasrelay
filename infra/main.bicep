@@ -208,6 +208,8 @@ module api 'api.bicep' = {
     linkApi: linkApi
     appInsightsConnectionString: platform.outputs.appInsightsConnectionString
     additionalAppSettings: additionalAppSettings
+    // The test cleanup route goes with the harness that uses it, so never to prod.
+    testCleanup: harness
     tags: tags
   }
 }

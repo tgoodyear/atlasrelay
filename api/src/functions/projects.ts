@@ -8,6 +8,7 @@ import { httpsUrl, int, isoDate, MAX_CREDITS, oneOf, str, tags } from '../lib/va
 import { isPublicProject, publicPledge, publicProject, publicUser } from '../lib/views';
 import { projectHead } from '../lib/projectHtml';
 import { logError } from '../lib/telemetry';
+import { marksTestProject } from '../lib/testCleanup';
 
 /**
  * How many projects one listing will re-read pledges for. Anything above this keeps its cached
@@ -269,6 +270,9 @@ app.http('projects-create', {
       moderationClosed: false,
       createdAt: ts,
       updatedAt: ts,
+      // Only on a test environment, and only for a title the full-flow tests use: the one thing that
+      // lets DELETE /api/test/projects/{id} remove this project later (lib/testCleanup.ts).
+      ...(marksTestProject(fields.title!) ? { createdByTests: true } : {}),
     };
     await createProject(project);
 
