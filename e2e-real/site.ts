@@ -2,6 +2,12 @@ import { request as playwrightRequest, expect, type Browser, type BrowserContext
 import { statePath, type Role } from './accounts';
 import { deleteRunProjects } from './lib/cleanup.mjs';
 
+/**
+ * The API refuses a state-changing request whose Content-Type is not application/json, body or
+ * not (assertSameOriginWrite in api/src/lib/http.ts), so the body-less DELETEs here send it too.
+ */
+const JSON_WRITE = { headers: { 'content-type': 'application/json' } };
+
 // What the specs do with the signed-in test accounts outside the page steps of web/e2e/ui.ts.
 
 /**
@@ -12,7 +18,7 @@ import { deleteRunProjects } from './lib/cleanup.mjs';
 export async function deleteProfile(role: Role): Promise<void> {
   const ctx = await playwrightRequest.newContext({ baseURL: process.env.BASE_URL, storageState: statePath(role) });
   try {
-    const res = await ctx.delete('/api/me');
+    const res = await ctx.delete('/api/me', JSON_WRITE);
     expect(res.status(), `DELETE /api/me as the ${role}: ${await res.text()}`).toBe(200);
   } finally {
     await ctx.dispose();
@@ -38,7 +44,7 @@ export async function cleanUpRun(run: string, testInfo: TestInfo, options: { wai
         expect(res.status(), `GET /api/my as the researcher: ${await res.text()}`).toBe(200);
         return ((await res.json()) as { projects: { id: string; title: string }[] }).projects;
       },
-      remove: async (id) => (await ctx.delete(`/api/test/projects/${id}`)).status(),
+      remove: async (id) => (await ctx.delete(`/api/test/projects/${id}`, JSON_WRITE)).status(),
       read: async (id) => (await ctx.get(`/api/projects/${id}`)).status(),
       log: (line) => console.log(line),
     }, run, options);

@@ -325,6 +325,21 @@ at the end of a route, so `GET /api/projects/{id}/pledges` is protected in code 
 (it returns a JSON 401). There is no global 401 redirect: API calls get JSON errors and
 the SPA shows its own sign-in prompt.
 
+Every state-changing request (any method but GET, HEAD and OPTIONS) must carry
+`Content-Type: application/json`; parameters such as `charset=utf-8` are allowed and the media type
+is compared case-insensitively. Anything else gets a 415. When the browser sends `Sec-Fetch-Site`,
+it must be `same-origin`, or the request gets a 403; `same-site`, `cross-site` and `none` are all
+refused, since the site's pages call the API only with `fetch()` from the same origin. Requests
+without the header (curl, Playwright's request API, older browsers) are judged on the Content-Type
+alone. Both checks run in `handle()` (`api/src/lib/http.ts`), before sign-in, the body or storage
+is read, and a source test fails if a state-changing route is registered without `handle()`.
+Body-less requests such as `DELETE /api/me` follow the same rule, so the web client and the test
+harnesses send the header on every mutating call. Together these stop another site from posting a
+form or a no-CORS `fetch()` to the API with a visitor's sign-in cookie: a form cannot send
+`application/json`, and a cross-site `fetch()` that sets it needs a CORS preflight, which the API
+never grants. Every API response also carries `X-Content-Type-Options: nosniff`, set by the API
+itself, because Static Web Apps does not add `globalHeaders` to responses from the linked backend.
+
 ## Sign-in providers
 
 Static Web Apps offers two kinds of sign-in, and a site uses one or the other
@@ -741,6 +756,9 @@ docs/     this spec, RIPE research notes, runbook
 - Global headers: CSP (self, including the self-hosted fonts, and the App Insights ingestion
   endpoints for browser telemetry), HSTS, `X-Content-Type-Options`,
   `Referrer-Policy`, `Permissions-Policy`.
+- API responses set `X-Content-Type-Options: nosniff` themselves, since `globalHeaders` do not
+  reach the linked backend. State-changing API requests must be `application/json` and, when the
+  browser says, same-origin; see [API](#api-api-a-function-app-linked-to-the-site).
 - Input validation on every write; string lengths, enums, URL scheme allow-list
   (`https:` only), integer ranges.
 - Storage accounts: public blob access off, TLS 1.2 minimum, shared-key access off. See

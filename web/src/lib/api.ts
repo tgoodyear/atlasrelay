@@ -174,9 +174,13 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // The API refuses any non-GET request that does not say application/json, body or not (see
+  // assertSameOriginWrite in api/src/lib/http.ts), so DELETE /api/me sends it with no body.
+  const method = (init.method ?? 'GET').toUpperCase();
+  const mutating = method !== 'GET' && method !== 'HEAD';
   const res = await fetch(path, {
     ...init,
-    headers: { accept: 'application/json', ...(init.body ? { 'content-type': 'application/json' } : {}), ...(init.headers ?? {}) },
+    headers: { accept: 'application/json', ...(mutating || init.body ? { 'content-type': 'application/json' } : {}), ...(init.headers ?? {}) },
     credentials: 'same-origin',
   });
   if (res.status === 204) return undefined as T;

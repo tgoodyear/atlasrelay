@@ -212,3 +212,20 @@ test('the ceiling is decided on a project row read under the lock, and a change 
   const patchCall = edit.slice(write, edit.indexOf('});', write));
   assert.ok(patchCall.includes('...writeFields') && !/\.\.\.fields\b/.test(patchCall), 'the edit writes writeFields, never the raw fields');
 });
+
+test('every API route that accepts a state-changing method is wrapped in handle(), which refuses cross-site writes', () => {
+  // assertSameOriginWrite runs inside handle(). A route registered with a bare handler would skip
+  // it, and with it the Content-Type and Sec-Fetch-Site rules that stop cross-site form posts.
+  const dir = join(repoRoot, 'api/src/functions');
+  let checked = 0;
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
+    const text = readFileSync(join(dir, file), 'utf8');
+    for (const m of text.matchAll(/methods:\s*\[([^\]]*)\]([\s\S]*?)handler:\s*(\S+)/g)) {
+      const methods = m[1].match(/'[A-Z]+'/g)?.map((x) => x.slice(1, -1)) ?? [];
+      if (methods.every((x) => x === 'GET' || x === 'HEAD')) continue;
+      checked++;
+      assert.ok(m[3].startsWith('handle('), `${file}: a ${methods.join('/')} route's handler is not wrapped in handle()`);
+    }
+  }
+  assert.ok(checked >= 7, `expected to find the state-changing routes, found ${checked}`);
+});
