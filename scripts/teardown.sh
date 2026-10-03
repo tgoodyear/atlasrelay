@@ -7,8 +7,9 @@
 #
 #   scripts/teardown.sh <env>
 #
-# Needs: az 2.61+ and gh, signed in, Owner on the subscription and admin on the repository.
-# Asks for the environment's name before deleting anything.
+# Needs: az 2.61+ and gh, signed in, Owner on the subscription and admin on the repository. Stops before changing
+# anything if a management lock is on the environment's resource group (prod has one). Asks for the
+# environment's name before deleting anything.
 set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: scripts/teardown.sh <env>" >&2; exit 2; }
 ENV_NAME=$1
@@ -62,6 +63,31 @@ for id in $ids; do
   [ "$inside" = true ] || others="$others$id"$'\n'
 done
 others=$(grep -v '^$' <<< "$others" || true)
+
+# A management lock (prod's CanNotDelete lock, put on by hand and not in Bicep) makes the group
+# delete below fail, after the repository secrets are gone and the stack is detached. Check first,
+# before anything changes, and leave removing the lock to a deliberate step. A lock on the
+# subscription itself is inherited by every group and blocks the delete too, but `az lock list -g`
+# doesn't show it, so check that scope as well.
+if ! sublocks=$(az lock list "${AZ_SUB[@]}" --query "[?!contains(id, '/resourceGroups/')].{name:name, level:level, id:id}" -o tsv 2>&1); then
+  die "can't list the management locks on subscription $SUBSCRIPTION: $sublocks"
+fi
+[ -z "$sublocks" ] || die "subscription $SUBSCRIPTION has management locks, which every resource group inherits:
+$(sed 's/^/  /' <<< "$sublocks")
+Nothing has been changed. Remove each lock on purpose first, e.g.
+  az lock delete --ids <id> ${AZ_SUB[*]}
+then run this again."
+for g in $groups; do
+  if ! locks=$(az lock list -g "$g" "${AZ_SUB[@]}" --query "[].{name:name, level:level, id:id}" -o tsv 2>&1); then
+    grep -qiE 'ResourceGroupNotFound|could not be found' <<< "$locks" && continue
+    die "can't list the management locks on $g: $locks"
+  fi
+  [ -z "$locks" ] || die "resource group $g has management locks, so it can't be deleted:
+$(sed 's/^/  /' <<< "$locks")
+Nothing has been changed. Remove each lock on purpose first, e.g.
+  az lock delete --ids <id> ${AZ_SUB[*]}
+then run this again."
+done
 
 echo "This deletes environment $ENV_NAME from subscription $SUBSCRIPTION:"
 sed 's/^/  resource group (everything in it) /' <<< "$groups"
