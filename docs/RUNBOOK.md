@@ -49,7 +49,8 @@ It also gets the full-flow test harness, which is never deployed in prod
   allowed, so the portal and `az` can still change settings, and bindings and records the stack
   does not declare can still be removed. To delete a managed resource by hand, first deploy with
   `DENY_SETTINGS_MODE=none scripts/provision.sh <env>`; the next ordinary deployment restores
-  the deny assignments.
+  the deny assignments. The one exception is prod's resource group lock, which an Owner can
+  delete directly ([Changing infrastructure](#changing-infrastructure)).
 - Deployment stacks have no what-if.
 
 ### Prod's delete lock
