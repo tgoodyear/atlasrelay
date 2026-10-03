@@ -22,7 +22,7 @@ deployed from the same template. Environment names are 1 to 6 lowercase letters 
 | CI identity, federated with the GitHub Environment `prod` | `id-atlasrelay-prod-ci` | `infra/identity.bicep` |
 | Custom roles and their assignments to the CI identity | "Atlas Relay CI Deployer (prod)", "Atlas Relay CI API Deployer (prod)" | `infra/rbac.bicep` |
 | Public DNS zone (prod only) | `atlasrelay.org` | `infra/dns.bicep` |
-| Management lock `CanNotDelete` on the resource group (prod only; see [Prod's delete lock](#prods-delete-lock)) | `prod-cannot-delete` | not in Bicep |
+| Management lock `CanNotDelete` on the resource group (prod only; see [Prod's delete lock](#prods-delete-lock)) | `prod-cannot-delete` | `infra/lock.bicep` |
 
 Every resource is tagged `project=atlasrelay` and `environment=<env>`. `dev` gets the same set
 with `dev` in the names, no zone, no lock, no availability test (so no "Home page unavailable"
@@ -49,18 +49,20 @@ It also gets the full-flow test harness, which is never deployed in prod
   allowed, so the portal and `az` can still change settings, and bindings and records the stack
   does not declare can still be removed. To delete a managed resource by hand, first deploy with
   `DENY_SETTINGS_MODE=none scripts/provision.sh <env>`; the next ordinary deployment restores
-  the deny assignments.
+  the deny assignments. The one exception is prod's resource group lock, which an Owner can
+  delete directly ([Prod's delete lock](#prods-delete-lock)).
 - Deployment stacks have no what-if.
 
 ### Prod's delete lock
 
 `rg-atlasrelay-prod` also carries a management lock, `prod-cannot-delete` at level `CanNotDelete`.
-It was added with `az lock create` and is not declared in Bicep. It guards the storage accounts,
+It is declared in Bicep (`infra/lock.bicep`), deployed when the `resourceGroupLock` parameter is
+true, which `infra/main.bicepparam` sets for prod only. It guards the storage accounts,
 because Table Storage has no soft delete: Azure can sometimes recover a deleted storage account
 within 14 days, but only on a best-effort basis. While it is in place no resource in the group can be deleted through Azure Resource Manager, by anyone or by
 the stack:
 
-- A resource removed from the templates stays in prod, and the deployment cannot delete it.
+- A deployment that removes a resource from the templates fails on the delete.
 - `az staticwebapp hostname delete` fails, so a custom domain binding can't be recreated
   ([A hostname stuck at "Validating"](#a-hostname-stuck-at-validating)).
 - `scripts/teardown.sh prod` stops before it changes anything.
@@ -68,15 +70,28 @@ the stack:
 Writes are not affected: deployments, settings, the site's content and the tables all work as
 before. Nor is data: the lock covers Azure resources only, so the API, and anyone with a data role
 on the tables, can still delete tables and rows (deleting a profile, the test cleanup route,
-`scripts/purge-test-data.sh`). To delete something in prod, remove the lock deliberately, do the
-deletion, and put the lock back:
+`scripts/purge-test-data.sh`).
+
+The stack's deny settings leave out one action, `Microsoft.Authorization/locks/delete`, so an Owner
+can remove the lock without a deployment first. To delete something in prod by hand, such as a
+custom domain binding, remove the lock deliberately, do the deletion, and provision to put the
+lock back:
 
 ```bash
-az lock delete -n prod-cannot-delete -g rg-atlasrelay-prod --subscription <id>
+az lock delete -n prod-cannot-delete -g rg-atlasrelay-prod \
+  --subscription "$(scripts/settings.sh prod AZURE_SUBSCRIPTION_ID)"
 # ... the deletion ...
-az lock create -n prod-cannot-delete -g rg-atlasrelay-prod --subscription <id> --lock-type CanNotDelete \
-  --notes "Atlas Relay prod: protects the site's data. Remove deliberately before a planned teardown."
+scripts/provision.sh prod
 ```
+
+To remove a resource from prod's templates, the deployment itself has to run without the lock, or
+it puts the lock back before it deletes anything:
+
+1. Remove the lock with `az lock delete` as above.
+2. `scripts/settings.sh prod ATLASRELAY_RESOURCE_GROUP_UNLOCKED true` (it sets `resourceGroupLock`
+   to false), then `scripts/provision.sh prod` with the change.
+3. `scripts/settings.sh prod ATLASRELAY_RESOURCE_GROUP_UNLOCKED ""`, then `scripts/provision.sh prod`
+   again to restore the lock. `az lock list -g rg-atlasrelay-prod` shows it.
 
 CI deploys no Bicep. The CI roles can read the resource group, the static web app and its linked
 backend, list the site's deployment token, and read the Function App and publish a package to it.
@@ -912,9 +927,10 @@ and ShellCheck. After the merge, a subscription Owner deploys it:
 scripts/provision.sh prod
 ```
 
-Removing a resource from the templates deletes it on that deployment. A new setting goes in
-`infra/main.bicepparam` as a `readEnvironmentVariable` and in `.azure/env.example`;
-`scripts/check-params.sh` fails when the two disagree.
+Removing a resource from the templates deletes it on that deployment, except in prod while the
+resource group's delete lock is on ([Prod's delete lock](#prods-delete-lock) has the steps).
+A new setting goes in `infra/main.bicepparam` as a `readEnvironmentVariable` and in
+`.azure/env.example`; `scripts/check-params.sh` fails when the two disagree.
 
 `scripts/teardown.sh <env>` deletes an environment: its stack, resource group, custom roles and
 GitHub Environment, and purges the test vault of a non-prod environment. For prod it also deletes
@@ -923,7 +939,8 @@ prod is bootstrapped again. A new zone gets new name servers, and the registrar 
 The sign-in vault stays recoverable for 7 days, and the sign-in registrations with the providers are
 not deleted. In prod, remove the delete lock first ([Prod's delete lock](#prods-delete-lock)):
 `scripts/teardown.sh` checks every resource group it would delete for a management lock and stops,
-before changing anything, if it finds one.
+before changing anything, if it finds one. Any `scripts/provision.sh prod` between removing the
+lock and the teardown puts it back.
 
 ### Rebuilding a torn-down environment
 

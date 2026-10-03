@@ -41,3 +41,6 @@ param swaApexToken = readEnvironmentVariable('ATLASRELAY_SWA_APEX_TOKEN', '')
 // off: removing it from a live environment would leave its vault soft-deleted under a name the next
 // deployment needs. scripts/teardown.sh removes it with the environment.
 param testHarness = readEnvironmentVariable('AZURE_ENV_NAME') != 'prod'
+// prod's resource group carries the CanNotDelete lock (infra/lock.bicep). ATLASRELAY_RESOURCE_GROUP_UNLOCKED=true
+// leaves it off for one deployment that deletes a resource (docs/RUNBOOK.md, "Changing infrastructure").
+param resourceGroupLock = readEnvironmentVariable('AZURE_ENV_NAME') == 'prod' && !bool(readEnvironmentVariable('ATLASRELAY_RESOURCE_GROUP_UNLOCKED', 'false'))
