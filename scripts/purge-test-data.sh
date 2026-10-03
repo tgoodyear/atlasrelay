@@ -10,7 +10,7 @@
 #                  test accounts the script finds; repeatable, so name every account to purge
 #
 # Never prod: the script refuses it, and so does scripts/purge-test-data.mjs, which does the work.
-# Needs az, signed in as the Owner scripts/bootstrap.sh recorded as ATLASRELAY_OPERATOR_PRINCIPAL_ID
+# Needs az, signed in as the account scripts/bootstrap.sh recorded as ATLASRELAY_OPERATOR_PRINCIPAL_ID
 # (Storage Table Data Contributor on the data account), and node with the repository's packages
 # installed (npm ci at the root).
 set -euo pipefail

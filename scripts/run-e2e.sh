@@ -5,7 +5,8 @@
 #
 #   scripts/run-e2e.sh <env> [--no-wait] [--base-url URL]
 #
-#   --no-wait        return once the test job is running, without waiting for it to finish
+#   --no-wait        return once the test job is running and renews the lock itself, without
+#                    waiting for it to finish
 #   --base-url URL   test this address instead of the job's own, e.g. the site's default
 #                    azurestaticapps.net hostname while a new custom domain is still settling
 #
@@ -17,7 +18,7 @@
 # runs/local-<time>/, as a workflow run's do. Never prod: it refuses an environment without the
 # test harness, and checks every resource it deploys to is the environment's own.
 #
-# Needs: az, jq, git, curl, zip and node 22, signed in to Azure as an Owner of the environment's
+# Needs: az, jq, git, curl, zip and Node 24.11+, signed in to Azure as an Owner of the environment's
 # subscription. Run scripts/provision.sh <env> first when the templates have changed (the
 # registry, the job's variables, the locks container).
 set -euo pipefail

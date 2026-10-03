@@ -67,8 +67,11 @@ Off only to relink a lost identity provider ("Direct requests to the Function Ap
 docs/RUNBOOK.md) or to check a new app directly; an unlinked app answers every request as anonymous.''')
 param linkApi bool = true
 
-@description('''Object id of the Owner who works on the tables by hand and, outside prod, writes the test
-accounts into the test vault (scripts/set-test-users.sh). Empty: nobody has data access.''')
+@description('''Object id of the operator (scripts/bootstrap.sh records whoever runs it). Gets Storage Table
+Data Contributor on the data account, for moderation and exports by hand, and Key Vault Secrets Officer
+on the sign-in vault (scripts/register-signin.sh). Outside prod, also Key Vault Secrets Officer on the
+test vault (scripts/set-test-users.sh, scripts/set-ripe-keys.sh), Storage Blob Data Reader on the test
+results and Storage Blob Data Contributor on the full-flow lock (scripts/run-e2e.sh). Empty: none of these.''')
 param operatorPrincipalId string = ''
 
 @description('''Client ids of the site's own sign-in registrations (docs/RUNBOOK.md, "Sign-in

@@ -9,17 +9,18 @@ name: Full-flow tests on dev
 # key. docs/RUNBOOK.md, "Full-flow tests on dev".
 #
 # dev is one site, one API and one set of tables. Every run, this workflow's or one started from
-# the owner's machine with scripts/run-e2e.sh, holds one lock from before it deploys until its tests
-# end (scripts/lib/e2e-job.sh, e2e-real/lib/lock.mjs), so the build under test is always the run's
+# a maintainer's machine with scripts/run-e2e.sh, holds one lock from before it deploys until its
+# tests end (scripts/lib/e2e-job.sh, e2e-real/lib/lock.mjs), so the build under test is always the run's
 # own, and two runs never use the test accounts at the same time.
 #
-# Only the owner can make it run:
-# - It runs after a push to main (only the owner can merge under the "Protect main" ruleset) that
-#   changes the tests, or by hand. There is no pull request trigger of any kind, so a fork or a
-#   pull request cannot start it.
+# Only the account tgoodyear can make it run:
+# - It runs after a push to main that changes the tests, or by hand. Merging to main needs write
+#   access, and the "Protect main" ruleset requires a pull request with the required checks
+#   passing. There is no pull request trigger of any kind, so a fork or a pull request cannot
+#   start it.
 # - Every job checks the repository, the actor and the branch.
 # - The job that gets an Azure token runs in the GitHub Environment dev, which only main may use and
-#   which waits for the owner's approval (unless scripts/bootstrap.sh dev last ran with
+#   which waits for approval by tgoodyear (unless scripts/bootstrap.sh dev last ran with
 #   --no-approval). The CI identity trusts that environment and nothing else, and holds roles in
 #   dev's resource group only, so it cannot deploy anywhere else.
 # - The build runs in a job of its own, without an Azure identity.
@@ -109,7 +110,7 @@ jobs:
     if: github.repository == 'tgoodyear/atlasrelay' && github.actor == 'tgoodyear' && github.ref == 'refs/heads/main' && vars.DEV_ENABLED == 'true'
     runs-on: ubuntu-latest
     # The CI identity trusts jobs in this GitHub Environment only; scripts/bootstrap.sh restricts it
-    # to main and, unless run with --no-approval, makes it wait for the owner's approval.
+    # to main and, unless run with --no-approval, makes it wait for approval by tgoodyear.
     environment: dev
     # The image build (up to 20 minutes), up to 47 waiting for the lock, the deploy (up to 10 for the
     # API, 20 for the site, 5 for it to be served), and 55 for the execution, with a few to spare.

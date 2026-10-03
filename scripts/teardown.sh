@@ -4,6 +4,9 @@
 # full-flow test vault is purged so the environment can be bootstrapped again at once. For prod
 # that includes the DNS zone: a new zone gets new name servers, and the registrar has to be
 # updated before the domain resolves again. Local settings (.azure/<env>/.env) are kept, renamed.
+# The sign-in vault (kvs-...) has purge protection, so it stays recoverable for 7 days and the next
+# deployment of the environment recovers it; the sign-in app registrations with GitHub, Microsoft,
+# Google and ORCID are not deleted.
 #
 #   scripts/teardown.sh <env>
 #
@@ -64,7 +67,7 @@ for id in $ids; do
 done
 others=$(grep -v '^$' <<< "$others" || true)
 
-# A management lock (prod's CanNotDelete lock, put on by hand and not in Bicep) makes the group
+# A management lock (prod's CanNotDelete lock, which is not declared in Bicep) makes the group
 # delete below fail, after the repository secrets are gone and the stack is detached. Check first,
 # before anything changes, and leave removing the lock to a deliberate step. A lock on the
 # subscription itself is inherited by every group and blocks the delete too, but `az lock list -g`

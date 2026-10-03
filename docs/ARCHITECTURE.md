@@ -12,7 +12,7 @@ the project, the pledge and its confirmation.
 | Simple UI | Single-page React app with a handful of screens. |
 | Serverless | Azure Static Web Apps (Standard) + an Azure Function App on the Flex Consumption plan, linked to the site as its API + Azure Table Storage + App Insights. |
 | CI/CD from GitHub | GitHub Actions workflows for the app deploy (build and test on PRs, deploy on push to `main`, logging in with OIDC through a user-assigned managed identity; no Azure secrets are stored in GitHub), infra checks (Bicep lint on PRs and `main`), and the full-flow tests on dev, which run in Azure. The infrastructure itself is one deployment stack per environment, deployed by a subscription Owner. |
-| Identity | GitHub or Microsoft sign-in via Static Web Apps built-in auth, or, once the owner registers the apps, GitHub, Microsoft, Google and ORCID through the site's own registrations ([Sign-in providers](#sign-in-providers)). RIPE NCC Access OIDC is not obtainable for third parties today (see `RIPE-ATLAS-NOTES.md`); custom providers are where it would go. |
+| Identity | GitHub, Microsoft, Google and ORCID sign-in through the site's own app registrations in Static Web Apps custom authentication, on prod and dev ([Sign-in providers](#sign-in-providers)). A build without registrations falls back to the built-in GitHub and Microsoft sign-in. RIPE NCC Access OIDC is not obtainable for third parties today (see [RIPE-ATLAS-NOTES.md](RIPE-ATLAS-NOTES.md)); custom providers are where it would go. |
 | Never custody credits or keys | Transfers happen on RIPE's side. API keys supplied by donors are used for one request and discarded; nothing key-like is written to storage or logs. |
 
 ## System diagram
@@ -46,7 +46,10 @@ the project, the pledge and its confirmation.
 | `affiliation`, `url` | Optional public profile fields. |
 | `createdAt`, `updatedAt` | ISO timestamps. |
 
-### Posting window (`users` table, PK `project-post`, RK `<swa userId>`)
+The account id is the `userId` Static Web Apps issues, with `google:` or `orcid:` in front for those
+two providers (see [Sign-in providers](#sign-in-providers)). Every other table uses the same id.
+
+### Posting window (`users` table, PK `project-post`, RK `<account id>`)
 
 One row per account that has posted a project, holding `lastProjectAt`. It is taken before the
 project row is written, by creating the row or by replacing it conditionally on its version, so a
@@ -56,28 +59,30 @@ the conditional replace `PUT /api/me` uses and make a concurrent profile save re
 gone. `DELETE /api/me` removes it with the profile: it is keyed by account id, so keeping it would
 retain an identifier of an account that asked to be removed.
 
-### Owner index (`projects` table, PK `owner-<swa userId>`, RK `<project id>`)
+### Owner index (`projects` table, PK `owner-<account id>`, RK `<project id>`)
 
 One small row per project an account has posted, written before the project row and never changed
-afterwards. It is how the open-project cap and `DELETE /api/me` find an owner's projects: a keyed
-partition read plus a point read per project, instead of a filter on `ownerId` over every project on
-the site. Membership only; status is always read from the project row, so a close or a takedown
-made directly in storage cannot leave the index disagreeing about the cap. Every other projects
-query filters on `PartitionKey eq 'project'`, so these rows never appear in the listing.
+afterwards. It is how the open-project cap and `DELETE /api/me` find the projects an account posted:
+a keyed partition read plus a point read per project, instead of a filter on `ownerId` over every
+project on the site. Membership only; status is always read from the project row, so a close or a
+takedown made directly in storage cannot leave the index disagreeing about the cap. Every other
+projects query filters on `PartitionKey eq 'project'`, so these rows never appear in the listing.
 
 ### Project (`projects` table, PK `project`, RK `<id>`)
 
 | Field | Notes |
 | --- | --- |
-| `ownerId`, `ownerName` | Denormalized owner display name for listing. |
+| `ownerId`, `ownerName` | The account that posted the project, and its display name copied in for the listing. |
 | `title` (≤120), `summary` (≤280), `description` (≤8000, plain text with paragraphs) | |
 | `creditsRequested` | Integer 1..1e9. |
 | `creditsConfirmed`, `creditsPending` | Cached sums recomputed from pledges after every pledge change. |
 | `status` | `open` \| `closed`. `funded` is derived and does not stop pledges. Whether a project is *listed* depends on confirmed credits alone, so a pending pledge can never hide it. A pending pledge reserves capacity for `PENDING_RESERVATION_DAYS` (14) and then stops counting, so an abandoned pledge releases what it held. |
 | `tags` | Subset of: ping, traceroute, dns, sslcert, http, ntp, ipv4, ipv6, anchors, other. |
 | `affiliation`, `homepageUrl`, `repoUrl`, `paperUrl`, `deadline` | Optional. |
-| `resultsSummary` (≤4000, plain text), `resultsUrl` | What came of the work, posted by the owner after the credits were spent. Kept separate from `paperUrl`, which is the proposal that justified the ask. Both public. |
+| `resultsSummary` (≤4000, plain text), `resultsUrl` | What came of the work, posted by the researcher after the credits were spent. Kept separate from `paperUrl`, which is the proposal that justified the ask. Both public. |
 | `resultsPostedAt` | ISO, stamped the first time either of the two above goes non-empty and never cleared afterwards, so a write-up that is later edited away does not retract the fact that the researcher reported. `hasResults` is derived from it in `publicProject`, and the listing filter, the card pill and the home-page `projectsWithResults` count all read that one flag. Absent on rows written before the fields existed, which reads as empty. |
+| `moderationClosed` | Set by an operator, by hand in storage, to take a project down ([Abuse limits](#abuse-limits), runbook "Operations"). A taken-down project is off the listing and the sitemap, its page answers 404, and its researcher cannot reopen it. Only an operator can clear it. Never published. |
+| `totalsCheckedAt`, `totalsDirty` | Bookkeeping for the cached totals: when the listing last recomputed them, and a flag set when a recompute could not be written, so the next maintenance pass repairs it. Never published. |
 | `createdByTests` | `true` on a project created on a test environment, while `E2E_PROJECT_CLEANUP` is on, with a title starting `E2E ` (the title the full-flow tests use). Stored at creation and never written afterwards. It is what lets `DELETE /api/test/projects/{id}` remove the project. Absent everywhere else, prod included. Never published. |
 | `deletingSince` | ISO, written by `DELETE /api/test/projects/{id}` when it closes a project to delete it; the deletion waits until it is two minutes old, and the project cannot be reopened meanwhile. Never published. |
 | `createdAt`, `updatedAt` | |
@@ -91,10 +96,14 @@ different thing from a closed one that did not.
 | Field | Notes |
 | --- | --- |
 | `donorId`, `donorName` | |
-| `anonymous` | The donor asked not to be named publicly. `publicPledge` replaces the name with the constant `Anonymous`; `privatePledge`, which only the project owner and the donor themselves receive, restores it and keeps this flag set so the UI can say the name is not public. Absent on rows written before this existed, which reads as false. |
+| `anonymous` | The donor asked not to be named publicly. `publicPledge` replaces the name with the constant `Anonymous`; `privatePledge`, which only the researcher and the donor themselves receive, restores it and keeps this flag set so the UI can say the name is not public. Absent on rows written before this existed, which reads as false. |
 | `amount` | Integer ≥ 1. Capped two ways: by the project's remaining *capacity* (100× the request, minus confirmed, minus live reservations) and by `maxSinglePledge`, which is what is left to the goal, or one goal's worth once the goal is met. The second cap stops any one pledge reserving the whole ceiling. |
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |
+| `transferredAt` | When the API saw RIPE accept an API transfer. |
+| `transferUncertain` | Written before an API transfer is sent and cleared when RIPE's acceptance is recorded. Still set on a `sent` pledge means the outcome was never recorded: RIPE did not answer, or it accepted and the confirmation could not be saved. The pledge waits there for the researcher to settle it. A researcher's settlement leaves it set. |
+| `inFlight`, `inFlightSince` | Set while the request that wrote the row is still attempting the transfer, so nobody can confirm or cancel the pledge (and free the donor's slot) until the attempt resolves. |
+| `receivedAmount`, `amountVerified` | When the researcher checked a manual pledge with a key ([Checking a manual pledge](#checking-a-manual-pledge)): the amount that arrived, and whether it was read from RIPE Atlas. 0 and false when nobody checked. |
 | `transactionId` | Empty on new pledges. RIPE does not index a transaction until well after it accepts the transfer (measured live: absent immediately, present 40 to 70 seconds later), so it cannot be looked up inside the request, and this platform has no background worker to do it later. The transfer endpoint's own response carries only a generic list URL, identical for every transfer, so it is not a reference either. Older rows may hold a value. |
 | `transactionUrl` | Empty on new pledges, for the same reason as `transactionId`: there is no lookup left to build a link from. Rows created before that change may hold a link to a matched transaction, or the generic list URL the transfer endpoint returned. |
 | `message` | Optional public note from the donor. |
@@ -102,6 +111,18 @@ different thing from a closed one that did not.
 
 Pending = `pledged` + `sent`. Confirmed = `confirmed`. Both are recomputed by summing
 the partition after each change, so the project row never drifts.
+
+### Claims (`claims` table)
+
+Small rows whose only job is to be created atomically, so exactly one of several racing requests
+wins:
+
+| Partition key, row key | What it holds |
+| --- | --- |
+| `<projectId>`, `<donor account id>` | A donor's pledge slot: one live pledge per donor per project ([Ordering](#ordering-and-what-happens-when-a-transfer-fails)). |
+| `confirm-<projectId>`, `lock` | The confirmation lock: one confirmation at a time per project ([Checking a manual pledge](#checking-a-manual-pledge)). |
+| `receipt-<ownerId>`, `<RIPE transaction id>` | A receipt reservation: one RIPE transaction can be recorded against only one pledge of that researcher. |
+| `cleanup-<projectId>`, `tombstone` | Written while the test cleanup route deletes a project ([Test cleanup](#test-cleanup)). |
 
 ## Flows
 
@@ -114,6 +135,9 @@ the partition after each change, so the project row never drifts.
    https://atlas.ripe.net/credits/ (transactions list). Optionally paste a key of their own
    with only "Get information about your credits" when confirming; see
    [Checking a manual pledge](#checking-a-manual-pledge). Close the project when done.
+5. Once the credits are spent, post a short write-up of the results and a link (`resultsSummary`,
+   `resultsUrl`). The project then shows that it reported back, and the listing can filter on it.
+   Linking the RIPE Atlas measurements themselves, by measurement id, is not built.
 
 ### Donor
 1. Open a project, click **Send credits**, pick an amount. It defaults to what is left toward the goal, and is bounded by `maxSinglePledge`: what is left to the goal, or one goal's worth once the goal is met. A project accepts up to 100× its request in total, but no single pledge may reserve that whole ceiling.
@@ -148,9 +172,9 @@ the partition after each change, so the project row never drifts.
 
 ### Checking a manual pledge
 
-A manual pledge records what the donor said they would send. The donor transfers on
-atlas.ripe.net, where the site cannot see it, and may send a different amount. When the owner confirms,
-they may paste a key of their own with only "Get information about your credits". The API reads
+A manual pledge records what the donor said they would send. The donor transfers on atlas.ripe.net,
+where the site cannot see it, and may send a different amount. When the researcher confirms, they
+may paste a key of their own with only "Get information about your credits". The API reads
 `GET /credits/transactions/?sort=-date&type=admin&page_size=100` once with it, keeps nothing of the
 key, and looks for the arrival.
 
@@ -159,9 +183,9 @@ RIPE's rows carry `id`, `type`, a signed `amount`, `date` in epoch seconds, `rea
 `description` reads "from" and an email address, but the format is undocumented and the site does
 not know a donor's RIPE NCC Access email, so a row is not tied to a donor. A row is a candidate when it is `admin`, its amount is positive (credits in), it is no
 older than the pledge (to the second, since RIPE stamps whole seconds), and its id is not already
-recorded against another pledge on any of the owner's projects.
+recorded against another pledge on any of the researcher's projects.
 
-A candidate is *contested* when another of the owner's pledges of the same amount, with no RIPE
+A candidate is *contested* when another of the researcher's pledges of the same amount, with no RIPE
 transaction id recorded, could account for it: a pledge still waiting (its donor may have sent), an
 API transfer (the server never looks its row up), or a manual pledge confirmed without a check. A
 waiting pledge could account for any arrival after it was created; a confirmed API transfer, any
@@ -172,17 +196,27 @@ it was last updated. Then:
 | Candidates | What happens |
 | --- | --- |
 | Exactly one of the pledged amount, not contested | Confirmed, verified, with RIPE's transaction id. Other amounts beside it are ignored. |
-| One, of another amount | 409. The owner sees "RIPE Atlas shows N credits arrived since this pledge was made (pledged M)" and chooses to record N, confirm M unchecked, or wait. |
-| Several, a contested one, or the page may be incomplete | 409 with the list, contested rows marked and none preselected. The owner picks one, or confirms M unchecked. Nothing is guessed. |
+| One, of another amount | 409. The researcher sees "RIPE Atlas shows N credits arrived since this pledge was made (pledged M)" and chooses to record N, confirm M unchecked, or wait. |
+| Several, a contested one, or the page may be incomplete | 409 with the list, contested rows marked and none preselected. The researcher picks one, or confirms M unchecked. Nothing is guessed. |
 | None | 409. The row may not be indexed yet (RIPE lists a transfer some time after it happens). Check again, or confirm M unchecked. |
 | Key refused (401/403) | 400 naming the permission. Nothing recorded. |
-| RIPE does not answer | 409. Nothing recorded. Check again, or confirm M unchecked. Confirming is final, so the site does not confirm for the owner when the read times out. |
+| RIPE does not answer | 409. Nothing recorded. Check again, or confirm M unchecked. Confirming is final, so the site does not confirm for the researcher when the read times out. |
 
-A row the owner picks is read again in the request that records it, and has to pass the same
+A row the researcher picks is read again in the request that records it, and has to pass the same
 tests, so the browser never supplies an amount. Recording never takes the project past its 100×
-ceiling: if what arrived would, the owner is told and offered M unchecked when M fits, or cancel.
-A project already at its ceiling is refused before the key is sent. What arrived is not held to the
-per-pledge maximum, which limits what a donor may reserve, not what can be recorded as received.
+ceiling: if what arrived would, the researcher is told and offered M unchecked when M fits, or
+cancel. A project already at its ceiling is refused before the key is sent. What arrived is not held
+to the per-pledge maximum, which limits what a donor may reserve, not what can be recorded as
+received.
+
+Every confirmation runs under the project's confirmation lock (`confirm-<projectId>` in the claims
+table), from reading the confirmed total to writing the pledge, so two confirmations of different
+pledges cannot both pass the ceiling check and together go past it. A confirmation that finds the
+lock held waits briefly for it to be released. A project edit that changes `creditsRequested`, which
+moves the ceiling, takes the same lock and answers 409 while a confirmation holds it; an edit that
+leaves `creditsRequested` unchanged does not take the lock. The same RIPE transaction can be
+recorded only once per researcher: a receipt reservation in the claims table, created before the
+pledge is saved, decides between two requests that pick it at once.
 
 The pledge keeps `amount` (what was pledged) and gains `receivedAmount` (what arrived, 0 when
 unchecked), `amountVerified`, and RIPE's id in `transactionId`. Totals count `receivedAmount`
@@ -229,12 +263,12 @@ tell them what they find.
 
 Once the credits have moved, nothing in the handler is allowed to fail the request. The row
 update is best-effort, because a retry at that point would send the credits twice; a confirmation
-that did not persist is reported as a warning on a pledge the owner can still confirm.
+that did not persist is reported as a warning on a pledge the researcher can still confirm.
 
 ### Abuse limits
 
 - An account may hold 3 open projects at once. Posting is free, and every project hands its
-  owner's contact address to anyone who starts a pledge. Closing one frees a slot. The cap is
+  researcher's contact address to anyone who starts a pledge. Closing one frees a slot. The cap is
   settled after the write rather than checked before it, because a count read before a write cannot
   enforce anything, and closing the surplus is best effort: what the poster is told comes from the
   rows the settlement observed, so a close that did not land is reported as a project that is live
@@ -242,12 +276,12 @@ that did not persist is reported as a warning on a pledge the owner can still co
   next create or reopen re-derives the surplus.
 - An account may post one project a minute. The cap above limits open projects, not rows, and it
   closes the surplus itself, so a loop of posts needs no close step to leave a permanent row per
-  request. Owner lookups go through the owner index (below), so those rows slow only the account
-  that posted them, but every one is still served on the listing. The limit is held as a row, for
-  the same reason the pledge claim is. It bounds the rate, not the total: nothing prunes closed projects, so a table already
-  grown stays grown.
+  request. Lookups of an account's projects go through the owner index (above), so those rows slow
+  only the account that posted them, but every one is still served on the listing. The limit is held
+  as a row, for the same reason the pledge claim is. It bounds the rate, not the total: nothing
+  prunes closed projects, so a table already grown stays grown.
 - A donor may hold one live pledge per project. Without it, one account could reserve a project
-  repeatedly and re-read the owner's contact address at will. The limit is the `claims` row
+  repeatedly and re-read the researcher's contact address at will. The limit is the `claims` row
   described under [Ordering](#ordering-and-what-happens-when-a-transfer-fails).
 - No single pledge may reserve a project's whole ceiling, so one free account cannot block every
   other donor.
@@ -259,9 +293,12 @@ that did not persist is reported as a warning on a pledge the owner can still co
 
 The RIPE NCC Access email is the one piece of personal data the platform holds that matters. It
 never appears on an anonymous endpoint. A signed-in donor sees it when they begin a manual
-pledge, because they need it to transfer the credits, and the owner sees that donor by name
-against the pledge. `DELETE /api/me` removes the profile and the address; projects and pledges
-remain, carrying only the chosen display name, because other people rely on that record.
+pledge, because they need it to transfer the credits, and the researcher sees that donor by name
+against the pledge. `DELETE /api/me` removes the profile and the address, closes the account's
+open projects and removes its posting-window row. Projects and pledges remain, because other people
+rely on that record, but the display name copied onto them is replaced with `Anonymous`. The
+response says how many projects it closed, how many names it anonymized, and whether the sweep
+finished.
 
 Sign-in handles are never returned publicly. Static Web Apps fills `userDetails` with the email
 address for some identity providers, and that value seeds both the handle and the initial display
@@ -287,7 +324,7 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
   the site keys accounts by the id Static Web Apps issues, never by email.
   We cannot verify the email against RIPE without federation. Mitigations: the email is
   only shown to committed donors; API transfers fail loudly if the email is not a RIPE
-  NCC Access account (RIPE returns 4xx); projects display the owner's display name and
+  NCC Access account (RIPE returns 4xx); projects display the researcher's display name and
   creation date; abuse is handled by closing projects (see the runbook).
 - Donor keys: single request, never persisted, never logged. The function also refuses
   to proceed if the key would be echoed in any error path.
@@ -299,19 +336,22 @@ The public page `/privacy` (`web/src/pages/Privacy.tsx`) tells visitors the same
 | `GET /api/me` | user | Profile + client principal. Creates the user row on first call. |
 | `PUT /api/me` | user | Update `displayName`, `atlasEmail`, `affiliation`, `url`. |
 | `DELETE /api/me` | user | Delete the profile, including the stored RIPE NCC Access email. |
-| `GET /api/projects?status=open&tag=dns&q=` | public | List. `status` is `open`, `funded`, `closed`, `results` or `all`. Never includes emails or projects an operator took down. |
-| `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message), and `page`, the title and description the project page's head carries. 404 for a project an operator took down, except to its owner. |
+| `GET /api/projects?status=open&tag=dns&q=&sort=newest` | public | List. `status` is `open`, `funded`, `closed`, `results` or `all`; `sort` is `newest`, `need`, `deadline` or `progress`. Never includes emails or projects an operator took down. |
+| `GET /api/projects/{id}` | public | Detail + public pledge feed (donor name, amount, status, message), and `page`, the title and description the project page's head carries. 404 for a project an operator took down, except to the researcher who posted it. |
 | `POST /api/projects` | user (needs `atlasEmail`) | Create. 429 when the account posted less than a minute ago; 409 when the open-project cap closed this project again. |
-| `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. |
-| `GET /api/projects/{id}/pledges` | owner or donor | Owner: all pledges. Donor: own. |
+| `PATCH /api/projects/{id}` | owner | Edit fields or set `status`. 403 when reopening a project an operator took down; 409 when reopening one the test cleanup is deleting, when reopening without a RIPE NCC Access email on the profile, or when a confirmation holds the lock and the edit changes `creditsRequested`. |
+| `GET /api/projects/{id}/pledges` | owner or donor | The researcher: all pledges. A donor: their own. |
 | `POST /api/projects/{id}/pledges` | user, not owner | `{amount, method, message, anonymous?, apiKey?}`. `anonymous` must be a real boolean when present; it withholds the donor's name from public views. Returns pledge and, for `manual`, the recipient email. |
-| `PATCH /api/pledges/{projectId}/{id}` | donor or owner | Donor: `sent`/`cancelled`. Owner: `confirmed`/`cancelled` (for stale pledges). On a manual pledge the owner may add `apiKey` (their own key) and, after a first answer, `transactionId`; see [Checking a manual pledge](#checking-a-manual-pledge). Answers 409 with `details.verification` when the owner has to decide. |
+| `PATCH /api/pledges/{projectId}/{id}` | donor or owner | Donor: `sent`/`cancelled`. The researcher: `confirmed`/`cancelled` (for stale pledges). On a manual pledge the researcher may add `apiKey` (their own key) and, after a first answer, `transactionId`; see [Checking a manual pledge](#checking-a-manual-pledge). Answers 409 with `details.verification` when the researcher has to decide. |
 | `GET /api/my` | user | My projects + my pledges. |
 | `GET /api/stats` | public | Totals for the home page. |
-| `POST /api/atlas/balance` | user | `{apiKey}` → `{current_balance,...}` from RIPE. Never stored. |
+| `POST /api/atlas/balance` | user | `{apiKey}` → `{balance, estimatedDailyIncome, estimatedDailyExpenditure}`, read from RIPE's `GET /credits/`. The key is never stored. |
 | `GET /api/sitemap` | public | Sitemap XML of the public pages and every project not taken down. Served at `/sitemap.xml` by a rewrite in `staticwebapp.config.json`. |
 | `GET /api/project-page` | public | HTML for `/projects/{id}` and `/projects/{id}/edit`, reached by a rewrite of `/projects/*`. See [Pages and routing](#pages-and-routing). |
 | `DELETE /api/test/projects/{id}` | owner; test environments only | Deletes a project marked `createdByTests`, with its pledges and claim rows. Exists only where `E2E_PROJECT_CLEANUP=1`, which is never prod; see [Test cleanup](#test-cleanup). Not in the `staticwebapp.config.json` route rules; the handler alone checks sign-in. |
+
+In the Auth column, *owner* means the account that posted the project (`ownerId`), and *donor* the
+account that made the pledge.
 
 Authorization is enforced twice: `staticwebapp.config.json` route rules require the
 `authenticated` role on mutating routes, and every function re-checks the decoded
@@ -337,8 +377,10 @@ since the site's pages call the API only with `fetch()` from the same origin. Re
 alone. Both checks run in `handle()` (`api/src/lib/http.ts`), before sign-in, the body or storage
 is read. A source test fails if any API route other than the read-only sitemap and project page is
 registered without `handle()`.
-Body-less requests such as `DELETE /api/me` follow the same rule, so the web client and the test
-harnesses send the header on every mutating call. Together these stop another site from posting a
+Body-less requests such as `DELETE /api/me` follow the same rule. Static Web Apps drops the
+Content-Type of a request with no body before it reaches the API, so the web client
+(`web/src/lib/api.ts`) and the test harnesses send a JSON body on every mutating call, `{}` when
+there is nothing to send. Together these stop another site from posting a
 form or a no-CORS `fetch()` to the API with a visitor's sign-in cookie: a form cannot send
 `application/json`, and a cross-site `fetch()` that sets it needs a CORS preflight, which the API
 never grants. Every API response also carries `X-Content-Type-Options: nosniff`, set by the API
@@ -360,12 +402,22 @@ Static Web Apps offers two kinds of sign-in, and a site uses one or the other
 
 The build picks the kind. `web/src/lib/signin.ts` turns `VITE_SIGNIN_PROVIDERS` into the
 `staticwebapp.config.json` that ships: empty gives the committed file (built-in GitHub and
-Microsoft); a list such as `github,aad,google,orcid` adds the `auth` section, the `/login/<provider>`
-shortcuts and the sign-in buttons for those providers, and refuses to build without `github` and
-`aad`. Facebook, Twitter, Apple and any of the four providers the build does not offer answer 404
-at `/.auth/login/<provider>`, because the platform still answered some of them on its own
-(`/.auth/login/google` and `/.auth/login/facebook` went on to the provider in 2026-10). The shipped
-config names app settings and holds no values.
+Microsoft); a list such as `github,aad,google,orcid` adds the `auth` section, the sign-in shortcuts
+(`/login` for GitHub, `/login/microsoft`, `/login/google`, `/login/orcid`) and the sign-in buttons
+for those providers, and refuses to build without `github` and `aad`. Facebook, Twitter, Apple and
+any of the four providers the build does not offer answer 404 at `/.auth/login/<provider>`, because
+the platform still answered some of them on its own (`/.auth/login/google` and
+`/.auth/login/facebook` went on to the provider in 2026-10). The shipped config names app settings
+and holds no values. Prod and dev are both built with all four providers.
+
+Each sign-in button shows its provider's mark beside the text. The marks are drawn inline from
+`web/src/lib/providerLogos.ts`, which records where each comes from and the terms it is used under,
+so the page loads nothing from the providers.
+
+The "Sign out" link is `/logout`. The committed config sends it to the platform's
+`/.auth/logout`; a build with the site's own registrations sends it to `/.auth/logout/complete`
+instead, which clears the site's sign-in cookie and returns to the home page without visiting the
+provider. The runbook explains why ([Signing out](RUNBOOK.md#signing-out)).
 
 Each environment (dev, prod) has its own four registrations, made by `scripts/register-signin.sh`.
 The client ids are in the settings file and the vault, and become plain app settings. The client
@@ -434,11 +486,14 @@ matching rule wins, and there is no navigation fallback.
 | --- | --- | --- |
 | `/` | `index.html` | 200 |
 | `/projects` | `shell/projects.html` | 200 |
-| `/projects/new`, `/dashboard`, `/profile` | `shell/app.html` (noindex) | 200 |
+| `/projects/new`, `/dashboard`, `/profile`, `/signin` | `shell/app.html` (noindex) | 200 |
 | `/projects/*` | `project-page` function | 200 or 404, see below |
 | `/how-it-works` | `shell/how-it-works.html` | 200 |
 | `/privacy` | `shell/privacy.html` | 200 |
-| `/sitemap.xml` | `sitemap` function | 200, or 503 when storage fails |
+| `/sitemap.xml` | `sitemap` function | 200, or 503 when storage fails; 404 on a test site |
+| `/login`, `/login/microsoft` (and `/login/google`, `/login/orcid` where offered) | redirect to `/.auth/login/<provider>` | 302 |
+| `/logout` | redirect, see [Sign-in providers](#sign-in-providers) | 302 |
+| `/.auth/login/<provider>` for a provider the build does not offer, and Facebook, Twitter and Apple | | 404 |
 | anything else | `404.html` (noindex) | 404 |
 
 The build writes the `shell/*.html` files and `404.html` from `web/index.html`, each with its own
@@ -449,12 +504,14 @@ function:
 2. SWA rewrites the request to `/api/project-page`. A rewrite cannot carry the id, so the
    function reads it from `x-ms-original-url`, which SWA sets to the URL that was asked for.
 3. The function accepts only `/projects/{id}` and `/projects/{id}/edit` where the id is 12 to
-   32 lowercase letters and digits. Anything else is a 404 without a storage read.
-4. It reads the project row. A missing project, or one an operator took down, is a 404 with
-   `404.html` for everyone, since the function does not look at who is signed in. The rule is
-   `isPublicProject` in `api/src/lib/views.ts`, which the sitemap and the listing also apply.
-   `GET /api/projects/{id}` applies it to everyone except the project's owner, so a signed-in
-   owner still sees a taken-down project in the app.
+   32 lowercase letters and digits. Anything else is a 404 without a storage read. An edit page
+   with a well-formed id is always the project shell with the edit form's title and `noindex`,
+   also without a storage read; the app loads the project and checks who may edit it.
+4. For `/projects/{id}`, it reads the project row. A missing project, or one an operator took down,
+   is a 404 with `404.html` for everyone, since the function does not look at who is signed in. The
+   rule is `isPublicProject` in `api/src/lib/views.ts`, which the sitemap and the listing also
+   apply. `GET /api/projects/{id}` applies it to everyone except the researcher who posted the
+   project, so they still see a taken-down project in the app when signed in.
 5. For a public project it returns `shell/project.html` with the project's title and summary in
    `<title>`, the meta description, the Open Graph and Twitter tags, and the text inside
    `#root`, plus a canonical URL and `og:url` on `https://atlasrelay.org`. Every value is
@@ -471,10 +528,11 @@ fails if the bundle does not name the built script file. Storage errors, and a r
 loads and fetches the project itself. SWA does not apply `globalHeaders` to function responses,
 so the function sets the same security headers itself.
 
-## Azure resources (every one declared in Bicep)
+## Azure resources
 
 Each environment is one deployment stack at subscription scope, `atlasrelay-<env>`, deployed from
 `infra/main.bicep` by `scripts/bootstrap.sh` or `scripts/provision.sh` (a subscription Owner).
+Everything below is declared in Bicep except prod's management lock, described after the table.
 The names below are prod's; `dev` has the same set with `dev` in place of `prod`, no zone, and a
 `dev` CNAME in the prod zone.
 
@@ -493,15 +551,25 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | User-assigned managed identity `id-atlasrelay-prod-signin`, held by the site only; the Entra app registration trusts it (federated credential added by `scripts/register-signin.sh`). No Azure role | `infra/app.bicep` | |
 | Custom role "Atlas Relay CI Deployer (prod)": read the resource group, the static site and its linked backend, and list the site's deployment token; assigned to the CI identity on the group | `infra/rbac.bicep` | |
 | Custom role "Atlas Relay CI API Deployer (prod)": read the Function App and publish a package to it; assigned to the CI identity on the Function App only | `infra/rbac.bicep` | |
-| Public DNS zone `atlasrelay.org` with the apex A record, a `www` CNAME to the site, the apex TXT set and mail-rejection records (prod only) | `infra/dns.bicep` | Azure DNS |
-| Full-flow test harness (dev only): virtual network `vnet-atlasrelay-dev`, Key Vault `kv-atlasrelay-dev-<6 characters>` (RBAC, public network access disabled) with a private endpoint and the `privatelink.vaultcore.azure.net` zone, test identity `id-atlasrelay-dev-e2e`, results storage `stare2edev<6 characters>` (Entra ID only), container registry `cratlasrelaydev<6 characters>` for the test image (no admin user, no anonymous pull; AcrPull for the test identity only), Container Apps environment `cae-atlasrelay-dev` (Consumption profile, in the network) and job `caj-atlasrelay-dev-e2e` | `infra/testharness.bicep` | Standard vault; Basic registry; Consumption |
-| Custom role "Atlas Relay e2e runner (dev)": read and start the test job, read and stop its executions, read two Container Apps log tables; custom role "Atlas Relay e2e image builder (dev)" on the registry: queue an ACR Tasks build and read its status, output image and log; plus Storage Blob Data Reader on the results container; all for the CI identity (dev only) | `infra/testharness-rbac.bicep` | |
+| Public DNS zone `atlasrelay.org` with the apex A record, a `www` CNAME to the site, the apex TXT set (SPF, the Static Web Apps apex token, and the Google Search Console and Microsoft Entra domain verification records) and mail-rejection records (prod only) | `infra/dns.bicep` | Azure DNS |
+| Full-flow test harness (dev only): virtual network `vnet-atlasrelay-dev`, Key Vault `kv-atlasrelay-dev-<6 characters>` (RBAC, public network access disabled; the test accounts' sign-in credentials and the RIPE Atlas keys) with a private endpoint and the `privatelink.vaultcore.azure.net` zone, test identity `id-atlasrelay-dev-e2e`, results storage `stare2edev<6 characters>` (Entra ID only), container registry `cratlasrelaydev<6 characters>` for the test image (no admin user, no anonymous pull; AcrPull for the test identity only), Container Apps environment `cae-atlasrelay-dev` (Consumption profile, in the network) and job `caj-atlasrelay-dev-e2e` | `infra/testharness.bicep` | Standard vault; Basic registry; Consumption |
+| Custom role "Atlas Relay e2e runner (dev)": read and start the test job, read and stop its executions, read two Container Apps log tables; custom role "Atlas Relay e2e image builder (dev)" on the registry: queue an ACR Tasks build and read its status, output image and log; plus Storage Blob Data Reader on the results container and Storage Blob Data Contributor on the `locks` container; all for the CI identity (dev only) | `infra/testharness-rbac.bicep` | |
 
 The stack deploys with `--action-on-unmanage deleteResources`, so a resource removed from the
 templates is deleted on the next deployment, and `--deny-settings-mode denyDelete`, so nobody can
-delete a managed resource outside the stack, Owners included. That replaces the `CanNotDelete`
-locks the storage account and the site used to carry. Neither setting excludes any principal: CI
-deletes nothing, and an Owner who needs to delete by hand deploys once with the deny settings off.
+delete a managed resource outside the stack, Owners included. Neither setting excludes any
+principal: CI deletes nothing, and an Owner who needs to delete by hand deploys once with the deny
+settings off.
+
+Prod's resource group also carries a management lock, `prod-cannot-delete` (`CanNotDelete`), which
+was added with `az lock create` and is not declared in Bicep. It guards the storage accounts, since
+Table Storage has no soft delete. While it is in place no resource in `rg-atlasrelay-prod` can be
+deleted through Azure Resource Manager, by anyone, the stack included: a resource removed from the
+templates stays, and so does a custom domain binding (`az staticwebapp hostname delete` fails).
+Writes are unaffected, and so is data: the lock does not stop the API or an operator with a data
+role from deleting tables or rows. Remove the lock on purpose before a planned deletion or teardown,
+and put it back afterwards; `scripts/teardown.sh` refuses to start while a lock is on the group
+(runbook, [Changing infrastructure](RUNBOOK.md#changing-infrastructure)).
 
 CI deploys no Bicep. Its roles can read the resource group, the site and its linked backend, list
 the deployment token the upload action needs, and read the Function App and publish a package to
@@ -589,18 +657,17 @@ identity alone has AcrPull. The CI identity can queue a build, start the job and
 and has no role on the vault. GitHub holds no copy of the passwords or the keys, and the job
 redacts them, and the two RIPE account emails, from its logs and results.
 
-dev is one site, one API and one set of tables. Each run deploys the build it tests there, and
-keeps every other run off dev until its tests end. The orchestrator (the workflow, or
-`scripts/run-e2e.sh` on the owner's machine) takes a 60-second lease on one blob, `full-flow` in
-the results account's `locks` container, before it publishes the API and uploads the site, and
-renews it every 20 seconds. It starts the job with the lease's id; the job renews the same lease
-while its tests run, and the orchestrator releases it at the end. A run that finds it held waits
-up to 45 minutes. A lease that nobody renews lapses within a minute, so a run that dies frees dev
-on its own, and with only one lock, no two runs can each wait for the other. The
-deploy uses the roles the CI identity has in every environment (`infra/rbac.bicep`), on dev's
-resources only; `scripts/lib/e2e-job.sh` refuses prod and checks each resource's `environment` tag.
-The CI identity, the operator and the test identity have Storage Blob Data Contributor on the
-`locks` container, which holds nothing else.
+dev is one site, one API and one set of tables. Each run deploys the build it tests there, and keeps
+every other run off dev until its tests end. The orchestrator (the workflow, or `scripts/run-e2e.sh`
+on a subscription Owner's machine) takes a 60-second lease on one blob, `full-flow` in the results
+account's `locks` container, before it publishes the API and uploads the site, and renews it every
+20 seconds. It starts the job with the lease's id; the job renews the same lease while its tests
+run, and the orchestrator releases it at the end. A run that finds it held waits up to 45 minutes. A
+lease that nobody renews lapses within a minute, so a run that dies frees dev on its own, and with
+only one lock, no two runs can each wait for the other. The deploy uses the roles the CI identity
+has in every environment (`infra/rbac.bicep`), on dev's resources only; `scripts/lib/e2e-job.sh`
+refuses prod and checks each resource's `environment` tag. The CI identity, the operator and the
+test identity have Storage Blob Data Contributor on the `locks` container, which holds nothing else.
 
 The RIPE keys belong to the harness, not to donors. The site's rule that it keeps no donor's key
 is unchanged: the donor key reaches the site the way any donor's would, pasted into the pledge
@@ -615,17 +682,18 @@ is public, and a self-hosted runner in a public repository can be handed a job b
 from a fork. A job that only Azure can start, from an image the workflow names, needs no runner
 listening for GitHub work.
 
-Why the vault, not GitHub secrets: a GitHub secret reaches every step of the job that reads it,
-and any code that step runs. In the vault, the test identity reads the passwords and keys from
-inside the network. The only other principal with access is the Owner recorded as the operator,
-who writes them (Key Vault Secrets Officer, which can read as well) and reaches the vault only
-while `scripts/set-test-users.sh` or `scripts/set-ripe-keys.sh` has opened it to their address.
+Why the vault, not GitHub secrets: a GitHub secret reaches every step of the job that reads it, and
+any code that step runs. In the vault, the test identity reads the passwords and keys from inside
+the network. The only other principal with access is the subscription Owner recorded as the
+operator, who writes them (Key Vault Secrets Officer, which can read as well) and reaches the vault
+only while `scripts/set-test-users.sh` or `scripts/set-ripe-keys.sh` has opened it to their address.
 
 What is trusted: the CI identity chooses the image that runs with the test identity, since it
 builds that image in the registry and starts the job with it, and that image can read the
 passwords and the RIPE keys. The keys can move real credits out of both RIPE accounts, up to their
-balances, for as long as they are valid. Only a workflow run on `main`, by the owner, approved in
-the GitHub Environment `dev`, gets the CI identity's token. The passwords belong to throwaway
+balances, for as long as they are valid. Only a workflow run on `main`, started by the one GitHub
+account the workflow allows and approved in the GitHub Environment `dev`, gets the CI identity's
+token. The passwords belong to throwaway
 accounts in a tenant that holds nothing else. A RIPE key works only within the validity window set
 when it was created, and can be disabled or deleted at https://atlas.ripe.net/keys/ at any time.
 
@@ -639,7 +707,7 @@ The stack's deny settings already stop the vault from being deleted outside the 
 The site cannot delete a project, so the tests used to leave each run's projects on dev, and the
 home-page figures counted them. Each spec now deletes the projects its run
 posted through `DELETE /api/test/projects/{id}` (`api/src/lib/testCleanup.ts`), signed in as the
-researcher who owns them, whether the test passed or not, and logs the ids it deleted. In the two
+researcher who posted them, whether the test passed or not, and logs the ids it deleted. In the two
 specs that move real credits, a hook after the credit return and before the profiles are deleted
 closes each test's project, and the deletion is waited for once, after the file's last test; that
 later hook also runs when an earlier one timed out, which skips the hooks after it. A run fails if
@@ -649,31 +717,31 @@ The route exists only where the Function App has `E2E_PROJECT_CLEANUP=1`. `infra
 the harness flag to `infra/api.bicep`, which sets the setting only when that flag is true, and the
 flag is false whenever the environment is prod. The same key is filtered out of
 `additionalAppSettings`. Without the setting the function is not registered, and the handler also
-answers 404 before reading the request. Where it exists it deletes a project only for its owner, and
-only when the project carries `createdByTests`, which the API stores at creation when the setting is
-on and the title starts with `E2E `. It takes two calls. The first closes the project, stamps
-`deletingSince` and answers 409, and from then on no new pledge starts. The second deletes, but
-only once the stamp is two minutes old: a pledge request that read the project as open just before
-the close may still take a slot and transfer, and two minutes is the bound on a running request
-that the pledge slots and the confirmation lock already rely on. Pledge updates (marking sent,
-confirming, cancelling) are refused on a stamped project for the same reason. The edit form cannot reopen a
-project while it waits, and if a reopen slipped in anyway the next call starts the wait again. As a
-last guard it also refuses while a transfer is in flight or a slot taken in the last two minutes has
-no pledge row yet, and it deletes only after a conditional write on the version it checked; the
-project row itself is then deleted only at the version that write produced. It
+answers 404 before reading the request. Where it exists it deletes a project only for the researcher
+who posted it, and only when the project carries `createdByTests`, which the API stores at creation
+when the setting is on and the title starts with `E2E `. It takes two calls. The first closes the
+project, stamps `deletingSince` and answers 409, and from then on no new pledge starts. The second
+deletes, but only once the stamp is two minutes old: a pledge request that read the project as open
+just before the close may still take a slot and transfer, and two minutes is the bound on a running
+request that the pledge slots and the confirmation lock already rely on. Pledge updates (marking
+sent, confirming, cancelling) are refused on a stamped project for the same reason. The edit form
+cannot reopen a project while it waits, and if a reopen slipped in anyway the next call starts the
+wait again. As a last guard it also refuses while a transfer is in flight or a slot taken in the
+last two minutes has no pledge row yet, and it deletes only after a conditional write on the version
+it checked; the project row itself is then deleted only at the version that write produced. It
 writes a tombstone in the claims table (`cleanup-<id>`) before deleting anything and removes it
-last, so the owner can finish a cleanup that failed part way by calling again, even once the
+last, so the researcher can finish a cleanup that failed part way by calling again, even once the
 project row is gone. After the tombstone it deletes the project row, so a deletion stopped by a
 changed project touches nothing under it. Then the owner index entry (an entry with no project
 behind it is skipped by every reader), the pledges, the donors' pledge slots, the confirmation lock
-and the owner's receipt reservations naming the project, and the pledges and slots once more, for
-a pledge made while it ran. Nothing else stores
-a figure derived from a project: the home-page figures, the listing and the sitemap are computed
-from the project rows when they are read.
+and the researcher's receipt reservations naming the project, and the pledges and slots once more,
+for a pledge made while it ran. Nothing else stores a figure derived from a project: the home-page
+figures, the listing and the sitemap are computed from the project rows when they are read.
 
 `scripts/check-params.sh` checks the compiled templates (prod's parameters turn the harness off,
 and the setting depends on nothing but the harness flag), and `api/test/testCleanup.test.ts` checks
-the gate, the owner and marker rules and the Bicep sources.
+the gate, the rule that only the researcher who posted a project can delete it, the marker rule
+and the Bicep sources.
 
 `scripts/purge-test-data.sh <env>` removes what the test accounts left before this existed. It is
 for test environments only and refuses prod. It finds the accounts from the projects the tests
@@ -685,21 +753,26 @@ posted and works on the tables directly, signed in as the operator. It is a dry 
 ```
 web/      Vite + React + TypeScript SPA; public/staticwebapp.config.json
 api/      Azure Functions v4 (Node 24, TypeScript)
-infra/    main.bicep (subscription scope, one deployment stack per environment) and its modules;
-          main.bicepparam reads the environment's settings
+infra/    main.bicep (subscription scope, one deployment stack per environment) and its modules
+          (dns-subdomain.bicep adds a non-prod environment's CNAME to the prod zone);
+          main.bicepparam reads the environment's settings; workbooks/ holds the monitoring workbook
 .azure/   env.example; each environment's settings in .azure/<env>/.env (git-ignored)
 scripts/  bootstrap.sh, provision.sh, teardown.sh, settings.sh (lib/env.sh); bind-custom-domain.sh;
-          logs.sh; check-params.sh; set-test-users.sh and set-ripe-keys.sh (test accounts and
-          RIPE Atlas keys into the dev vault); run-e2e.sh (lib/e2e-job.sh: build the test image,
-          start the test job); purge-test-data.sh (remove old test runs' projects, never prod)
+          register-signin.sh (sign-in registrations; lib/github-app.mjs for the GitHub App,
+          lib/render-logo.mjs for the Entra app's logo); logs.sh; check-params.sh;
+          set-test-users.sh and set-ripe-keys.sh (test accounts and RIPE Atlas keys into the dev
+          vault, through lib/test-vault.sh); run-e2e.sh (lib/e2e-job.sh: build the test image,
+          deploy, start the test job); purge-test-data.sh and purge-test-data.mjs (remove old test
+          runs' projects, never prod); indexnow.mjs (submit the sitemap after a prod deploy)
 e2e-real/ full-flow tests against dev with real Microsoft sign-in and real RIPE Atlas transfers;
           Dockerfile for the job's image
 ops/queries/  saved KQL queries that scripts/logs.sh runs against the Log Analytics workspace
-.github/workflows/deploy.yml   build + test on PRs; on main, publish the API to the Function App, then upload the site
+.github/workflows/deploy.yml   build + test on every PR; on main, publish the API, upload the site, IndexNow
 .github/workflows/infra.yml    Bicep build + lint, settings check, ShellCheck; deploys nothing
 .github/workflows/e2e-dev.yml  build the test image, run the full-flow tests on dev in Azure
 .github/workflows/e2e-image.yml  build the test image on PRs; pushes nothing
 docs/     this spec, RIPE research notes, runbook
+README.md, CONTRIBUTING.md, SECURITY.md
 ```
 
 ## CI/CD
@@ -708,9 +781,11 @@ docs/     this spec, RIPE research notes, runbook
   web (with the repository variable `APPINSIGHTS_CONNECTION_STRING`, which turns on browser
   telemetry) and API, then stage a self-contained `api-deploy/` folder (the bundle, `host.json`
   and `package.json`, published as it is with no remote build), smoke-load the API entry point,
-  upload both as artifacts. Runs on PRs too.
+  upload both as artifacts. Runs on every pull request, whatever it changes.
 - `deploy.yml`, job `browser` (no Azure identity): Playwright tests in `web/e2e` against a
   `vite preview` of the site; they answer `/api`, `/.auth` and App Insights requests themselves.
+  The job also checks that a pasted key is redacted from a real browser trace
+  (`e2e-real/test/trace-redaction.test.mjs`).
 - `deploy.yml`, job `flows` (no Azure identity, no secrets): full-flow Playwright tests in
   `web/e2e/flows` against the whole application on the runner. Azure Functions Core Tools comes
   from its GitHub release, pinned by version and SHA-256. `web/e2e/flows/harness/stack.ts` starts
@@ -718,7 +793,8 @@ docs/     this spec, RIPE research notes, runbook
   serving `web/dist`, and a stub of the RIPE Atlas API that the API reaches through
   `ATLAS_API_BASE`. Traces and the stack's logs are uploaded when it fails. `deploy` needs `build`,
   `browser` and `flows`.
-- `deploy.yml`, job `deploy` (push to `main` / manual only, in the GitHub Environment `prod`):
+- `deploy.yml`, job `deploy` (push to `main`, or a manual run on `main`; never on a pull request;
+  in the GitHub Environment `prod`, which accepts only `main`):
   download artifacts, `azure/login` (OIDC, managed identity), find the Function App from the
   site's linked backend (the run stops if there is none), publish the zipped API to it through
   its `/api/publish` endpoint with a Microsoft Entra token and wait for the deployment, read the
@@ -732,12 +808,14 @@ docs/     this spec, RIPE research notes, runbook
   `scripts/indexnow.mjs`, which reads the live `/sitemap.xml` and posts its URLs to IndexNow.
   It logs failures as warnings and is `continue-on-error`, so it cannot fail a deploy.
 - `infra.yml`: builds and lints every template (a warning fails it), runs
-  `scripts/check-params.sh` and ShellCheck, on PRs and on `main`. It holds no Azure identity.
+  `scripts/check-params.sh` and ShellCheck, on pull requests and pushes to `main` that change
+  `infra/`, `.azure/env.example`, the shell scripts or the workflow, and by hand. It holds no Azure
+  identity.
 - `e2e-dev.yml` (push to `main` that touches `e2e-real/`, `web/e2e/ui.ts`,
   `scripts/lib/e2e-job.sh` or the workflow, and manual; never on pull requests; every job checks
   that the repository is `tgoodyear/atlasrelay`, the actor `tgoodyear` and the ref `main`): job
   `build` (no Azure identity) builds the site and the API at the commit and stages the API zip;
-  job `run`, in the GitHub Environment `dev` (main only; waits for the owner's approval unless
+  job `run`, in the GitHub Environment `dev` (main only; waits for approval by `tgoodyear` unless
   `scripts/bootstrap.sh dev` last ran with `--no-approval`), logs in with OIDC as the dev CI
   identity, builds `e2e-real/Dockerfile` in dev's registry with ACR Tasks, takes the full-flow
   lock, publishes the API and uploads the site to dev, starts the Container Apps job with the new
@@ -750,23 +828,34 @@ docs/     this spec, RIPE research notes, runbook
   run, and installs no packages. It signs az in again with a fresh OIDC token during the run,
   since az cannot renew the first sign-in. Without the repository variable `DEV_ENABLED=true` it only prints a
   notice.
-- `e2e-image.yml` (PRs that change `e2e-real/` or `web/e2e/ui.ts`): builds the test image and
-  lists the tests inside it. Pushes nothing, holds no identity.
-- `deploy.yml` degrades to build-only until bootstrap has run; after that
+- `e2e-image.yml` (pull requests that change `e2e-real/`, `web/e2e/ui.ts`, `web/package.json`,
+  `infra/testharness.bicep` or the workflow, and by hand): checks that the job's default image and
+  the Dockerfile agree (`e2e-real/test/versions.test.mjs`), builds the test image and lists the
+  tests inside it. Pushes nothing, holds no identity.
+- `deploy.yml` runs on every pull request, so its three checks always report. A push to `main`
+  that changes only docs, `infra/`, the shell scripts, `.azure/` or `infra.yml` does not run it,
+  so it deploys nothing. It degrades to build-only until bootstrap has run; after that
   (`AZURE_BOOTSTRAPPED` repo variable) a missing secret fails the run instead of
   skipping. Deployments to `main` are serialized (`concurrency`); PR runs have their own
   groups. Third-party actions are pinned to commit SHAs and kept current by Dependabot.
+- The repository's "Protect main" ruleset requires a pull request for every change to `main`, with
+  the checks Build and test, Browser tests and Full-flow tests passing, and has no bypass actors.
+  The repository also requires every action to be pinned to a full commit SHA.
   The SWA deploy action is a Docker action that pulls `staticappsclient:stable`, so its
   SHA pins the wrapper, not the client image.
-- The staged API artifact is built from the lockfile (`npm ci -w api --omit=dev`), so
-  the tree that ships is the tree that was tested.
-- `scripts/bootstrap.sh <env>`: preflight checks, resource-provider registration, reads the
-  GitHub OIDC subject prefix (validated against the repository's immutable-subject setting),
-  writes the settings, deploys the stack (retried for custom-role replication lag), creates the
-  GitHub Environment restricted to `main`, and for prod stores the identity's client id, tenant
-  id and subscription id as GitHub secrets plus the `AZURE_BOOTSTRAPPED` and
-  `APPINSIGHTS_CONNECTION_STRING` variables. `scripts/provision.sh <env>` redeploys the stack
-  from the settings; `scripts/teardown.sh <env>` deletes the environment.
+- The staged API artifact is the esbuild bundle (`api/bundle.mjs` writes `dist/bundle.js`), with
+  `host.json` and `package.json` and no `node_modules`. The build job checks that it loads on its
+  own and names the built site's script file, so what ships is what was tested.
+- `scripts/bootstrap.sh <env>`: preflight checks, resource-provider registration, reads the GitHub
+  OIDC subject prefix (validated against the repository's immutable-subject setting), writes the
+  settings, deploys the stack (retried for custom-role replication lag), creates the GitHub
+  Environment restricted to `main`, and for prod stores the identity's client id, tenant id and
+  subscription id as GitHub secrets plus the `AZURE_BOOTSTRAPPED`, `APPINSIGHTS_CONNECTION_STRING`
+  and `SIGNIN_PROVIDERS` variables. For dev it stores the identifiers the e2e workflow reads as
+  variables of the GitHub Environment `dev`, and sets the repository variables `DEV_ENABLED` and
+  `DEV_SIGNIN_PROVIDERS`. `scripts/register-signin.sh` updates the sign-in variable when it
+  registers providers. `scripts/provision.sh <env>` redeploys the stack from the settings;
+  `scripts/teardown.sh <env>` deletes the environment.
 
 ## Security notes
 
@@ -783,7 +872,9 @@ docs/     this spec, RIPE research notes, runbook
 - Function App: HTTPS only, FTP and SCM basic-auth publishing off, reachable only through the
   site once linked.
 - Secrets: none in app settings. The Function App's settings (Bicep is the only writer; the
-  settings resource replaces the whole map) hold account names, endpoints, the identity's client
-  id and the App Insights connection string. GitHub holds three non-secret identifiers (client,
+  settings resource replaces the whole map) hold the host storage account and identity
+  (`AzureWebJobsStorage__*`), `TABLES_ENDPOINT`, the identity's client id, `ATLAS_API_BASE`,
+  `SIGNIN_PROVIDERS`, the App Insights connection string, and outside prod
+  `E2E_PROJECT_CLEANUP=1`. GitHub holds three non-secret identifiers (client,
   tenant, subscription); the SWA deployment token is fetched per run and masked. Azure login from
   CI is OIDC. Untrusted build steps never run in a job that holds the identity.

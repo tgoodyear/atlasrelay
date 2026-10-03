@@ -22,9 +22,11 @@ deployed from the same template. Environment names are 1 to 6 lowercase letters 
 | CI identity, federated with the GitHub Environment `prod` | `id-atlasrelay-prod-ci` | `infra/identity.bicep` |
 | Custom roles and their assignments to the CI identity | "Atlas Relay CI Deployer (prod)", "Atlas Relay CI API Deployer (prod)" | `infra/rbac.bicep` |
 | Public DNS zone (prod only) | `atlasrelay.org` | `infra/dns.bicep` |
+| Management lock `CanNotDelete` on the resource group (prod only; see [Prod's delete lock](#prods-delete-lock)) | `prod-cannot-delete` | not in Bicep |
 
 Every resource is tagged `project=atlasrelay` and `environment=<env>`. `dev` gets the same set
-with `dev` in the names, no zone, and a `dev` CNAME in the prod zone (`infra/dns-subdomain.bicep`).
+with `dev` in the names, no zone, no lock, no availability test (so no "Home page unavailable"
+alert), and a `dev` CNAME in the prod zone (`infra/dns-subdomain.bicep`).
 It also gets the full-flow test harness, which is never deployed in prod
 ([Full-flow tests on dev](#full-flow-tests-on-dev)):
 
@@ -34,6 +36,7 @@ It also gets the full-flow test harness, which is never deployed in prod
 | Key Vault for the test accounts, no public network access, with a private endpoint | `kv-atlasrelay-dev-<6 characters>`, `pe-atlasrelay-dev-kv` | `infra/testharness.bicep` |
 | Test identity: reads the vault's secrets, writes the results, renews the lock | `id-atlasrelay-dev-e2e` | `infra/testharness.bicep` |
 | Storage account for test results, containers `results` and `locks`, Entra ID only | `stare2edev<6 characters>` | `infra/testharness.bicep` |
+| Container registry for the test image, no admin user and no anonymous pull | `cratlasrelaydev<6 characters>` | `infra/testharness.bicep` |
 | Container Apps environment in `snet-cae`, and the test job | `cae-atlasrelay-dev`, `caj-atlasrelay-dev-e2e` | `infra/testharness.bicep` |
 | Custom roles for the CI identity, its read access to the results and its write access to the lock | "Atlas Relay e2e runner (dev)", "Atlas Relay e2e image builder (dev)" | `infra/testharness-rbac.bicep` |
 
@@ -48,6 +51,32 @@ It also gets the full-flow test harness, which is never deployed in prod
   `DENY_SETTINGS_MODE=none scripts/provision.sh <env>`; the next ordinary deployment restores
   the deny assignments.
 - Deployment stacks have no what-if.
+
+### Prod's delete lock
+
+`rg-atlasrelay-prod` also carries a management lock, `prod-cannot-delete` at level `CanNotDelete`.
+It was added with `az lock create` and is not declared in Bicep. It guards the storage accounts,
+because Table Storage has no soft delete: Azure can sometimes recover a deleted storage account
+within 14 days, but only on a best-effort basis. While it is in place no resource in the group can be deleted through Azure Resource Manager, by anyone or by
+the stack:
+
+- A resource removed from the templates stays in prod, and the deployment cannot delete it.
+- `az staticwebapp hostname delete` fails, so a custom domain binding can't be recreated
+  ([A hostname stuck at "Validating"](#a-hostname-stuck-at-validating)).
+- `scripts/teardown.sh prod` stops before it changes anything.
+
+Writes are not affected: deployments, settings, the site's content and the tables all work as
+before. Nor is data: the lock covers Azure resources only, so the API, and anyone with a data role
+on the tables, can still delete tables and rows (deleting a profile, the test cleanup route,
+`scripts/purge-test-data.sh`). To delete something in prod, remove the lock deliberately, do the
+deletion, and put the lock back:
+
+```bash
+az lock delete -n prod-cannot-delete -g rg-atlasrelay-prod --subscription <id>
+# ... the deletion ...
+az lock create -n prod-cannot-delete -g rg-atlasrelay-prod --subscription <id> --lock-type CanNotDelete \
+  --notes "Atlas Relay prod: protects the site's data. Remove deliberately before a planned teardown."
+```
 
 CI deploys no Bicep. The CI roles can read the resource group, the static web app and its linked
 backend, list the site's deployment token, and read the Function App and publish a package to it.
@@ -80,9 +109,10 @@ renames it rather than deleting it. It holds no secrets: the sign-in client secr
 
 ## First deployment
 
-Prerequisites: `az` 2.61 or later, signed in as an Owner of the subscription
-(`az login --tenant <tenant-id>`); `gh`, signed in as an admin of the
-repository; `jq`, `dig` and Node 24.11+.
+Prerequisites: `az` 2.61 or later, signed in with the `Owner` role on the subscription
+(`az login --tenant <tenant-id>`; `scripts/bootstrap.sh` checks for that role by name, because the
+stack creates custom roles and assigns them); `gh`, signed in as an admin of the repository; `jq`,
+`dig` and Node 24.11+.
 
 ```bash
 scripts/bootstrap.sh prod --subscription <id> --alert-email you@example.org --domain atlasrelay.org
@@ -98,8 +128,9 @@ It is idempotent. It:
 4. Creates the GitHub Environment `prod` and restricts it to the `main` branch. The CI identity
    trusts only jobs in that GitHub Environment.
 5. Sets the repository secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`
-   (identifiers, not credentials) and the variables `AZURE_BOOTSTRAPPED` and
-   `APPINSIGHTS_CONNECTION_STRING` (read by the Deploy workflow for browser telemetry).
+   (identifiers, not credentials) and the variables `AZURE_BOOTSTRAPPED`,
+   `APPINSIGHTS_CONNECTION_STRING` (read by the Deploy workflow for browser telemetry) and
+   `SIGNIN_PROVIDERS` (the sign-in providers prod's build offers; deleted when there are none).
 
 Then deploy the site with `gh workflow run deploy.yml --ref main`, or merge to `main`. Role
 assignments can take a few minutes to propagate; if that first run fails with
@@ -134,6 +165,10 @@ stack is the only writer of the zone.
 4. Once both hostnames are `Ready`, make the apex the default domain (see
    [Canonical host](#canonical-host)).
 
+`scripts/bind-custom-domain.sh prod --apex-only` binds the apex and nothing else. When the stack
+does not manage the zone yet (no `ATLASRELAY_DNS_ZONE`; pass `ZONE_NAME=<domain>`), it saves the
+token and prints the command that publishes it by hand.
+
 A static web app can hold a hostname only if no other static web app in the same slice holds it.
 The slice is the number in the site's default hostname, `<name>.<slice>.azurestaticapps.net`.
 
@@ -155,7 +190,8 @@ sit beside the CNAME, and DNS forbids a CNAME alongside any other record at the 
 `www` uses `cname-delegation`, which validates against the CNAME that is already there.
 
 The only fix is to recreate the binding. Bindings are not managed by the stack, so the stack's
-deny assignment does not stop this:
+deny assignment does not stop this. In prod, the resource group's delete lock blocks it: remove the
+lock first and put it back afterwards ([Prod's delete lock](#prods-delete-lock)).
 
 ```bash
 az staticwebapp hostname delete -n swa-atlasrelay-prod -g rg-atlasrelay-prod --subscription <id> \
@@ -216,6 +252,8 @@ token:
 
 ```bash
 npm ci && VITE_SITE_ENV=dev VITE_SIGNIN_PROVIDERS="$(scripts/settings.sh dev SIGNIN_PROVIDERS)" npm run build
+# the API bundle must name this build's script file (the Deploy workflow checks the same)
+grep -qF "$(grep -o '/assets/index-[A-Za-z0-9_-]*\.js' web/dist/shell/project.html)" api/dist/bundle.js
 rm -rf api-deploy api.zip && mkdir -p api-deploy/dist
 cp api/dist/bundle.js api-deploy/dist/ && cp api/host.json api/package.json api-deploy/
 (cd api-deploy && zip -qr ../api.zip .)
@@ -225,6 +263,11 @@ TOKEN=$(az staticwebapp secrets list -n swa-atlasrelay-dev -g rg-atlasrelay-dev 
   --subscription <id> --query properties.apiKey -o tsv)
 npx swa deploy web/dist --deployment-token "$TOKEN" --env production
 ```
+
+`VITE_SITE_ENV=dev` builds the test site: the banner, `noindex` everywhere, no sitemap
+([Dev environment and search engines](#dev-environment-and-search-engines)). `npx swa deploy` runs
+the Static Web Apps upload client, which is an x86-64 binary, so on Apple silicon it needs Rosetta.
+`scripts/run-e2e.sh` runs the same client in dev's registry instead and works on any machine.
 
 The full-flow tests also put their build on dev before they run (`scripts/run-e2e.sh dev`, or the
 workflow `e2e-dev.yml`), holding the lock described in
@@ -238,14 +281,14 @@ E2E_RESULTS_ACCOUNT)" -c locks -n full-flow --query properties.lease.state -o ts
 
 ## Sign-in registrations
 
-The site signs people in with its own app registrations at GitHub, Microsoft, Google and ORCID,
-one set for dev and another for prod. Static Web Apps also has built-in GitHub and Microsoft
-providers that need no registration, and a build without registrations uses those. Google and ORCID
-need registrations, and Microsoft's documentation says that "using any custom registrations
-disables all preconfigured providers"
-([custom authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)),
-so GitHub and Microsoft need their own too. [Sign-in providers](ARCHITECTURE.md#sign-in-providers)
-explains the design.
+The site signs people in with its own app registrations at GitHub, Microsoft, Google and ORCID, one
+set for dev and another for prod. Both environments are built with all four. Static Web Apps also
+has built-in GitHub and Microsoft providers that need no registration, and a build without
+registrations uses those. Google and ORCID need registrations, and Microsoft's documentation says
+that "using any custom registrations disables all preconfigured providers" ([custom
+authentication](https://learn.microsoft.com/azure/static-web-apps/authentication-custom)), so GitHub
+and Microsoft need their own too. [Sign-in providers](ARCHITECTURE.md#sign-in-providers) explains
+the design.
 
 Where things live:
 
@@ -454,7 +497,8 @@ full-flow tests on dev with real Microsoft sign-in, and a short list of manual c
 and its head, the 404 pages, `robots.txt`, the sitemap and a project page from it, the security
 headers, the public API, and that the private API routes answer 401. It sends only GET and HEAD
 requests, and it blocks the browser's App Insights requests so a run is not counted as traffic.
-It is safe against prod:
+It is safe against prod and written for it. On dev, which has no sitemap and a `robots.txt` that
+lists none, its sitemap check fails.
 
 ```bash
 npx -w web playwright install chromium   # once
@@ -469,7 +513,7 @@ The same file runs against the local stack in every full-flow run.
 runs the flow there. It uses the site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`), not
 dev.atlasrelay.org: a newly bound custom domain can answer the platform's 404 on some requests for
 hours, and a test run should not wait on that. It runs with the page steps the local full-flow
-tests use (`web/e2e/ui.ts`). It has three spec files:
+tests use (`web/e2e/ui.ts`). It has four spec files:
 
 - `full-flow.spec.ts`: the researcher saves a profile and posts a project, the donor pledges to
   transfer by hand and marks the credits sent, the researcher confirms them and posts results, and
@@ -483,20 +527,23 @@ tests use (`web/e2e/ui.ts`). It has three spec files:
   to appear, and whether both sides share a transaction id.
 - `ripe-transfer.spec.ts`: real RIPE Atlas transfers between two RIPE Atlas test accounts, through
   the site's "Transfer now with an API key" form. See [Real RIPE Atlas transfers](#real-ripe-atlas-transfers).
+- `sign-out.spec.ts`: the header's "Sign out" link ends the session: `/.auth/me` answers no one
+  and the dashboard asks to sign in ([Signing out](#signing-out)). It runs last, posts nothing and
+  deletes no profile.
 
-Each spec file deletes both profiles before and after its tests (`ripe-transfer.spec.ts` and
-`manual-verify.spec.ts` around each test). It also deletes the projects the run posted, through the
-test-only route `DELETE /api/test/projects/{id}`, whether or not the test passed, and prints
-`[cleanup] deleted N project(s): <ids>`. A run that could not delete one fails and names it. The
-route closes a project on the first call and deletes it on a later one, at least two minutes on, so
-no pledge request that started before the close can still be running. The two specs that move real
-credits close each test's project in a hook after the credit return and before the profiles go, and
-wait for the deletions once, in an `afterAll` hook, which runs even when an `afterEach` hook timed
-out (the credit return, at worst), which skips the hooks declared after it. The cleanup adds about
-two minutes to each spec file. The route exists only where `E2E_PROJECT_CLEANUP=1`,
-which the environment's stack sets on every environment except prod
-([Test cleanup](ARCHITECTURE.md#test-cleanup)). A run against an environment last deployed before
-that fails its cleanup with HTTP 404 until `scripts/provision.sh` deploys it again.
+Each of the first three spec files deletes both profiles before and after its tests
+(`ripe-transfer.spec.ts` and `manual-verify.spec.ts` around each test). It also deletes the projects
+the run posted, through the test-only route `DELETE /api/test/projects/{id}`, whether or not the
+test passed, and prints `[cleanup] deleted N project(s): <ids>`. A run that could not delete one
+fails and names it. The route closes a project on the first call and deletes it on a later one, at
+least two minutes on, so no pledge request that started before the close can still be running. The
+two specs that move real credits close each test's project in a hook after the credit return and
+before the profiles go, and wait for the deletions once, in an `afterAll` hook, which runs even when
+an `afterEach` hook timed out (the credit return, at worst), which skips the hooks declared after
+it. The cleanup adds about two minutes to each spec file. The route exists only where
+`E2E_PROJECT_CLEANUP=1`, which the environment's stack sets on every environment except prod ([Test
+cleanup](ARCHITECTURE.md#test-cleanup)). A run against an environment last deployed before that
+fails its cleanup with HTTP 404 until `scripts/provision.sh` deploys it again.
 
 Projects left by runs from before the tests cleaned up after themselves are removed with
 `scripts/purge-test-data.sh`, signed in as the operator (Storage Table Data Contributor on the data
@@ -588,13 +635,14 @@ build and 55 for the execution.
 
 #### Setting it up
 
-Once per dev environment, as the Owner:
+Once per dev environment, as a subscription Owner:
 
 1. Bootstrap dev and put a build on it ([Dev environment](#dev-environment)). For `dev`,
    `scripts/bootstrap.sh` also deploys the harness, gives you write access to the vault's secrets
    (the setting `ATLASRELAY_OPERATOR_PRINCIPAL_ID`), makes the GitHub Environment `dev` wait for your
    approval, stores the identifiers the workflow reads as variables of that environment, and sets
-   the repository variable `DEV_ENABLED=true`.
+   the repository variables `DEV_ENABLED=true` and `DEV_SIGNIN_PROVIDERS` (from the setting
+   `SIGNIN_PROVIDERS`).
 2. Create the test tenant and its two users. Creating a new Entra tenant from
    https://entra.microsoft.com now requires a paid license in the tenant you start from, so use a
    Microsoft 365 Developer Program sandbox instead (https://developer.microsoft.com/microsoft-365/dev-program):
@@ -705,6 +753,8 @@ To set it up:
    and asks before writing. It stores `ripe-donor-key`, `ripe-donor-account`, `ripe-recipient-key`
    and `ripe-recipient-account`, opening and closing the vault as `scripts/set-test-users.sh` does.
    The keys pass through the shell's memory, never the terminal, a file or a command line.
+   `--yes` stores without asking, and `--ip <address>` gives this machine's public IPv4 address
+   instead of looking it up.
 4. Seed the donor account: transfer a few thousand credits to it at
    https://atlas.ripe.net/credits/transfer/ if it holds fewer than a run sends. Runs net to zero,
    so this lasts.
@@ -724,14 +774,16 @@ change to `infra/` needs `scripts/provision.sh dev` first.
 gh workflow run e2e-dev.yml --ref main
 ```
 
-Only the owner can make it run:
+Only the GitHub account `tgoodyear` can make it run:
 
 - It has no pull request trigger of any kind, so neither a pull request nor a fork can start it.
-  Only the owner can merge to `main` (the "Protect main" ruleset).
+  Merging to `main` needs write access to the repository, and the "Protect main" ruleset requires a
+  pull request with the Build and test, Browser tests and Full-flow tests checks passing, with no
+  bypass actors.
 - Every job runs only when the repository is `tgoodyear/atlasrelay`, the actor is `tgoodyear` and
   the ref is `main`.
 - The job that gets an Azure token runs in the GitHub Environment `dev`, which only `main` may use
-  and which waits for the owner's approval, with no bypass for administrators. On the run's page,
+  and which waits for approval by `tgoodyear`, with no bypass for administrators. On the run's page,
   **Review deployments**, tick `dev`, **Approve and deploy**. The dev CI identity trusts only jobs
   in that environment (its federated credential's subject ends in `:environment:dev`).
 - While dev does not exist (`DEV_ENABLED` is not `true`), the workflow prints a notice and does
@@ -741,7 +793,7 @@ To let runs start without the approval, run `scripts/bootstrap.sh dev --no-appro
 reviewer in the repository's **Settings**, **Environments**, `dev` works too, but the next
 `scripts/bootstrap.sh dev` without `--no-approval` puts it back.
 
-To run a branch that is not on `main` yet, from your own machine as the Owner:
+To run a branch that is not on `main` yet, from your own machine as a subscription Owner:
 
 ```bash
 scripts/provision.sh dev    # when the branch changes the templates
@@ -749,12 +801,14 @@ scripts/run-e2e.sh dev
 ```
 
 `scripts/run-e2e.sh` runs the workflow's code (`scripts/lib/e2e-job.sh`) from your working tree,
-committed or not, but downloads nothing. It builds the site and the API (`npm ci`,
-`npm run build`) and the image (in the registry, tagged `local-<commit>-<time>`), takes the lock,
-deploys, starts the job, waits for the execution to end and releases the lock. The results go to
-`runs/local-<time>/` in the `results` container. With `--no-wait` it returns once the job has marked
-the lock as renewed by itself, and leaves the lock to the job. It refuses `prod`, and checks that the
-site and the Function App it deploys to carry the tag `environment=<env>`.
+committed or not, but downloads nothing. It builds the site and the API (`npm ci`, `npm run build`)
+and the image (in the registry, tagged `local-<commit>-<time>`), takes the lock, deploys, starts the
+job, waits for the execution to end and releases the lock. The results go to `runs/local-<time>/` in
+the `results` container. With `--no-wait` it returns once the job has marked the lock as renewed by
+itself, and leaves the lock to the job. It refuses `prod`, and checks that the site and the Function
+App it deploys to carry the tag `environment=<env>`. `--base-url <url>` tests a different address
+from the job's own, such as the site's `azurestaticapps.net` hostname while a new custom domain is
+still settling.
 
 A dev environment bootstrapped before the registry was added needs `scripts/provision.sh dev`
 once, and then the registry's name as a variable of the GitHub Environment `dev`, which
@@ -823,18 +877,22 @@ come back.
 
 ### Manual checks
 
-A transfer made by hand on atlas.ripe.net and GitHub sign-in are not automated. Check them by hand
+A transfer made by hand on atlas.ripe.net and real GitHub, Google and ORCID sign-in are not
+automated. Check them by hand
 on a dev environment (`scripts/bootstrap.sh dev`, then upload the build to test as described under
 [Dev environment](#dev-environment)), not on prod: they create projects, pledges and profiles, and
 a transfer moves real credits. Use two browsers, or one normal and one private window, for the
 researcher and the donor. Microsoft sign-in, the profile, a manual pledge, confirming it, posting
 results, and API transfers with real credits are covered by the full-flow tests on dev.
 
-1. **GitHub sign-in.** Click **Sign in**, sign in with a real GitHub account, and expect
-   `/dashboard` with your username in the header. **Sign out** returns to the home page, signed out.
-2. **Microsoft username.** Microsoft sends an email address as the username. Sign in with
-   **Continue with Microsoft**, post a project without changing the display name, and check that
-   the byline shows only the part before the `@`.
+1. **GitHub, Google and ORCID sign-in.** Click **Sign in**, then **Sign in with GitHub**, sign in
+   with a real account, and expect `/dashboard` with your name in the header. **Sign out** returns
+   to the home page, signed out. Do the same with **Sign in with Google** and **Sign in with
+   ORCID**. A new Google or ORCID account's display name comes from the provider's name claims,
+   never an email address or an ORCID iD.
+2. **Microsoft username.** Microsoft can send an email address as the username. Click
+   **Sign in with Microsoft**, post a project without changing the display name, and check that
+   the byline shows no email address.
 3. **Profile.** Save a display name and the RIPE NCC Access email of a real atlas.ripe.net
    account. That account is the researcher. Post a project asking for 1,000 credits.
 4. **Manual transfer.** As the donor, signed in with another account, pledge 100 credits by hand,
@@ -859,9 +917,13 @@ Removing a resource from the templates deletes it on that deployment. A new sett
 `scripts/check-params.sh` fails when the two disagree.
 
 `scripts/teardown.sh <env>` deletes an environment: its stack, resource group, custom roles and
-GitHub Environment, and purges the test vault of a non-prod environment. For prod it also deletes the zone and removes the repository secrets, so the
-Deploy workflow builds without deploying until prod is bootstrapped again. A new zone gets new
-name servers, and the registrar has to be updated.
+GitHub Environment, and purges the test vault of a non-prod environment. For prod it also deletes
+the zone and removes the repository secrets, so the Deploy workflow builds without deploying until
+prod is bootstrapped again. A new zone gets new name servers, and the registrar has to be updated.
+The sign-in vault stays recoverable for 7 days, and the sign-in registrations with the providers are
+not deleted. In prod, remove the delete lock first ([Prod's delete lock](#prods-delete-lock)):
+`scripts/teardown.sh` checks every resource group it would delete for a management lock and stops,
+before changing anything, if it finds one.
 
 ### Rebuilding a torn-down environment
 
@@ -910,7 +972,7 @@ rest.
 | Source | Tables | Contents |
 | --- | --- | --- |
 | Functions host | `AppRequests` | One row per API request: function name, status, duration. |
-| `api/src/lib/telemetry.ts` | `AppTraces` | JSON log lines with an `event` field: `dependency` for every RIPE Atlas and Table Storage call (operation, status, duration), `transfer` for the outcome of every API transfer, and `error`. |
+| `api/src/lib/telemetry.ts` | `AppTraces` | JSON log lines with an `event` field: `dependency` for every RIPE Atlas and Table Storage call (operation, status, duration), `transfer` for the outcome of every API transfer, `receipt-check` for each check of a manual pledge against RIPE Atlas, `project-page` when a project page has no original URL to read, `test-cleanup` for each project the test cleanup route deletes (test environments only), and `error`. |
 | `web/src/lib/telemetry.ts` | `AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, `AppEvents`, all with role `web` | Page views by route, with the referring site and any utm tags; page load timings; uncaught errors and unhandled promise rejections; the API calls each page makes; and the actions listed under [Traffic](#traffic). |
 | Availability test | `AppAvailabilityResults` | The home page, requested from 3 locations every 15 minutes. |
 
@@ -1000,7 +1062,7 @@ Actions are `AppEvents` rows. Each also carries `page`, the route it happened on
 | `pledge-started` | "Send credits" opens the pledge form | `projectId` |
 | `pledge-completed` | The API accepted a pledge: RIPE Atlas accepted an API transfer, or a manual pledge was recorded and the donor shown the address. Whether a manual donor then sends is not tracked. | `projectId`, `method` (`api` or `manual`), `amount` (`1-999`, `1000-9999`, ... `1000000+`) |
 | `project-posted` | A new project was saved | `projectId` |
-| `sign-in-clicked` | A `/.auth/login/...` link was followed | `provider` (`github` or `aad`) |
+| `sign-in-clicked` | A `/.auth/login/...` link was followed | `provider` (`github`, `aad`, `google` or `orcid`) |
 | `outbound-click` | A link to atlas.ripe.net was clicked or middle-clicked | `host`, `path` (up to three segments, numbers as `:n`) |
 
 A project page view is a page view named `/projects/:id`; its `Url` holds the project id, so there
@@ -1036,7 +1098,7 @@ that setting the stack deploys no action group and no alerts.
 For a transfer alert, `scripts/logs.sh transfers` gives the project and pledge ids. An `uncertain`
 transfer is the case in [A pledge stuck at "Sent, outcome unknown"](#operations). `unrecorded`
 means RIPE Atlas accepted the transfer and both attempts to write the confirmation failed; the
-donor was told not to send again, and the owner can confirm the pledge once the credits arrive.
+donor was told not to send again, and the researcher can confirm the pledge once the credits arrive.
 
 The "Failure Anomalies" rule that App Insights created by itself sends to its own action group,
 "Application Insights Smart Detection". That group notifies holders of the Monitoring Contributor
@@ -1088,15 +1150,15 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
 - **Data export**: `az storage entity query --table-name projects --account-name <storage account>
   --auth-mode login ...`, or Azure Storage Explorer signed in with the same account.
 - **Owner index rows**: the `projects` table holds two kinds of row. Projects are in partition
-  `project`; each owner also has a partition `owner-<user id>` with one row per project they
-  posted, which the open-project cap, the owner's dashboard and profile deletion read instead of
-  scanning the table. Filter exports on `PartitionKey eq 'project'`.
-- **Take a project down**: there is no admin console, so this is done against Table Storage.
-  Closing a project stops it accepting credits. Setting `moderationClosed` as well takes it off
-  every listing and the sitemap, and its page answers 404 to everyone. `GET /api/projects/<id>`
-  answers 404 too, except to the owner, so a signed-in owner still sees the project in the app
-  and can settle its pledges. It is reversible, so prefer it to deleting anything. Browsers and
-  proxies may keep the old page for up to a minute.
+  `project`; each account that posted a project also has a partition `owner-<user id>` with one row
+  per project it posted, which the open-project cap, the researcher's dashboard and profile
+  deletion read instead of scanning the table. Filter exports on `PartitionKey eq 'project'`.
+- **Take a project down**: there is no admin console, so this is done against Table Storage. Closing
+  a project stops it accepting credits. Setting `moderationClosed` as well takes it off every
+  listing and the sitemap, and its page answers 404 to everyone. `GET /api/projects/<id>` answers
+  404 too, except to the researcher who posted it, so they still see the project in the app when
+  signed in and can settle its pledges. It is reversible, so prefer it to deleting anything.
+  Browsers and proxies may keep the old page for up to a minute.
 
   ```bash
   az storage entity merge --table-name projects --account-name <storage account> --auth-mode login \
@@ -1104,27 +1166,28 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
               moderationClosed=true moderationClosed@odata.type=Edm.Boolean
   ```
 
-  Set both `status` and `moderationClosed`. With `status` alone the owner can reopen the project
-  from the edit form; `moderationClosed` makes the API refuse that, and only this command can
-  clear it (`moderationClosed=false`).
+  Set both `status` and `moderationClosed`. With `status` alone the researcher can reopen the
+  project from the edit form; `moderationClosed` makes the API refuse that, and only this command
+  can clear it (`moderationClosed=false`).
 
-  To remove the owner as well, delete their row from `users`, which also removes the stored RIPE
-  NCC Access email. Find the id from the project's `ownerId`, then:
+  To remove the researcher as well, delete their row from `users`, which also removes the stored
+  RIPE NCC Access email. Find the id from the project's `ownerId`, then:
 
   ```bash
   az storage entity show --table-name users --account-name <storage account> --auth-mode login \
-    --partition-key user --row-key <owner id>
+    --partition-key user --row-key <ownerId>
   az storage entity delete --table-name users --account-name <storage account> --auth-mode login \
-    --partition-key user --row-key <owner id>
+    --partition-key user --row-key <ownerId>
   ```
 
   Close every project they own first, using the command above: deleting the user alone would leave
-  projects advertised as pledgeable that nobody can pledge to, because the handler needs
-  the owner's address to name a recipient. Their projects and pledges stay, carrying only a display
-  name, because other people's records point at them. The internal account id stays on those rows,
-  so the same account signing in again with the same provider is reconnected to that history; deletion
-  is not a ban. Record what you did and why in the abuse issue, since there is no other audit
-  trail.
+  projects advertised as pledgeable that nobody can pledge to, because the handler needs the
+  researcher's address to name a recipient. Their projects and pledges stay, because other people's
+  records point at them. Deleting the row by hand leaves the display name on them; a researcher who
+  deletes their own profile on `/profile` has it replaced with `Anonymous`. The internal account id
+  stays on those rows, so the same account signing in again with the same provider is reconnected to
+  that history; deletion is not a ban. Record what you did and why in the abuse issue, since there
+  is no other audit trail.
 - **A pledge stuck at "Sent, outcome unknown"**: the API posted a transfer and got no usable
   answer (a timeout, a network failure or a 5xx from RIPE), so the site cannot tell whether the
   credits moved. Only the requester can settle it: confirm the pledge if the credits arrived,
@@ -1175,6 +1238,22 @@ file, replace the workspace's resource id with `__WORKSPACE_ID__`, and run
   project` or a `project-page` event with `outcome: no-original-url`. Either one on every request
   means the page heads are generic but the site still works. `robots.txt` still disallows
   `/projects/*/edit`.
+
+### Dev environment and search engines
+
+A build with `VITE_SITE_ENV` set to an environment other than `prod` (`web/src/lib/siteEnv.ts`) is
+a test site. `scripts/run-e2e.sh` and the `e2e-dev.yml` workflow build dev that way, and the
+Deploy workflow leaves it unset, which builds prod. A test site:
+
+- shows a banner on every page saying it is a test site whose credit transfers are real;
+- adds `X-Robots-Tag: noindex, nofollow` to every response from the site, and a
+  `noindex, nofollow` robots meta tag to every page;
+- serves a `robots.txt` with no sitemap that still lets crawlers in (a crawler only sees noindex on
+  a page it may fetch);
+- answers `/sitemap.xml` with 404;
+- leaves out the IndexNow key file.
+ The per-page
+`noindex` on the sign-in, dashboard, profile, edit and 404 pages is the same on both.
 - **Trailing slashes**: the docs say `trailingSlash: "never"` redirects `/how-it-works/` to
   `/how-it-works` with a 301. In production it does not: SWA answers the path with the slash
   with the same page and a 200, and the canonical tag names the path without it. The project page
