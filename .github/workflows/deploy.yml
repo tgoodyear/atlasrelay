@@ -6,25 +6,18 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'infra/**'
-      # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
-      # to it has to trigger this workflow.
+      # Only the shell scripts an operator runs by hand. scripts/indexnow.mjs runs in the indexnow
+      # job, so a change to it has to trigger this workflow.
       - 'scripts/*.sh'
       - 'scripts/lib/**'
       - '**.md'
       - '.azure/**'
       - '.github/workflows/infra.yml'
+  # Every pull request, whatever it changes: Build and test, Browser tests and Full-flow tests are
+  # required checks on main, so they must report on docs, infra and script changes too. A pull
+  # request never deploys (the deploy job's condition, and the prod environment accepts only main).
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - 'infra/**'
-      # Only the Owner's shell scripts. scripts/indexnow.mjs runs in the indexnow job, so a change
-      # to it has to trigger this workflow.
-      - 'scripts/*.sh'
-      - 'scripts/lib/**'
-      - '**.md'
-      - '.azure/**'
-      - '.github/workflows/infra.yml'
   workflow_dispatch:
 
 # One deployment at a time; PR builds cancel superseded runs.
@@ -211,7 +204,8 @@ jobs:
   deploy:
     name: Deploy to Azure
     needs: [build, browser, flows]
-    if: github.event_name != 'pull_request'
+    # Main only, as a second guard: the prod environment also accepts only main.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # The CI identity trusts jobs in this GitHub Environment only, and scripts/bootstrap.sh
     # restricts it to the main branch.
