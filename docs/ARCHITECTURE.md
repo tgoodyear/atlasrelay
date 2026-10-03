@@ -175,8 +175,8 @@ wins:
 A manual pledge records what the donor said they would send. The donor transfers on atlas.ripe.net,
 where the site cannot see it, and may send a different amount. When the researcher confirms, they
 may paste a key of their own with only "Get information about your credits". The API reads
-`GET /credits/transactions/?sort=-date&type=admin&page_size=100` once with it, keeps nothing of the key,
-and looks for the arrival.
+`GET /credits/transactions/?sort=-date&type=admin&page_size=100` once with it, keeps nothing of the
+key, and looks for the arrival.
 
 RIPE's rows carry `id`, `type`, a signed `amount`, `date` in epoch seconds, `reason`,
 `description` and balances. No documented field names the other account. In practice the
@@ -564,12 +564,12 @@ settings off.
 Prod's resource group also carries a management lock, `prod-cannot-delete` (`CanNotDelete`), which
 was added with `az lock create` and is not declared in Bicep. It guards the storage accounts, since
 Table Storage has no soft delete. While it is in place no resource in `rg-atlasrelay-prod` can be
-deleted through Azure Resource Manager, by anyone, the stack included: a resource removed from the templates stays, and so does a custom domain binding
-(`az staticwebapp hostname delete` fails). Writes are unaffected, and so is data: the lock does not stop the API or an operator with a data
-role from deleting tables or rows. Remove the lock on purpose before a
-planned deletion or teardown, and put it back afterwards; `scripts/teardown.sh` refuses to start
-while a lock is on the group (runbook,
-[Changing infrastructure](RUNBOOK.md#changing-infrastructure)).
+deleted through Azure Resource Manager, by anyone, the stack included: a resource removed from the
+templates stays, and so does a custom domain binding (`az staticwebapp hostname delete` fails).
+Writes are unaffected, and so is data: the lock does not stop the API or an operator with a data
+role from deleting tables or rows. Remove the lock on purpose before a planned deletion or teardown,
+and put it back afterwards; `scripts/teardown.sh` refuses to start while a lock is on the group
+(runbook, [Changing infrastructure](RUNBOOK.md#changing-infrastructure)).
 
 CI deploys no Bicep. Its roles can read the resource group, the site and its linked backend, list
 the deployment token the upload action needs, and read the Function App and publish a package to

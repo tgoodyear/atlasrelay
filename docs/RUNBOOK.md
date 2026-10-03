@@ -68,8 +68,8 @@ the stack:
 Writes are not affected: deployments, settings, the site's content and the tables all work as
 before. Nor is data: the lock covers Azure resources only, so the API, and anyone with a data role
 on the tables, can still delete tables and rows (deleting a profile, the test cleanup route,
-`scripts/purge-test-data.sh`). To delete something in prod, remove the lock deliberately, do the deletion, and put the
-lock back:
+`scripts/purge-test-data.sh`). To delete something in prod, remove the lock deliberately, do the
+deletion, and put the lock back:
 
 ```bash
 az lock delete -n prod-cannot-delete -g rg-atlasrelay-prod --subscription <id>
