@@ -101,7 +101,7 @@ different thing from a closed one that did not.
 | `method` | `api` (transfer executed by our function with the donor's key) or `manual` (donor transfers on atlas.ripe.net). |
 | `status` | `pledged` → `sent` → `confirmed`; or `cancelled`. An `api` pledge goes straight to `confirmed` because our server observed RIPE accept the transfer, which is recorded in `transferredAt`. |
 | `transferredAt` | When the API saw RIPE accept an API transfer. |
-| `transferUncertain` | An API transfer was sent and RIPE never answered, so nobody knows whether the credits moved. The pledge waits at `sent` for the researcher to settle it. Stays set after settlement. |
+| `transferUncertain` | Written before an API transfer is sent and cleared when RIPE's acceptance is recorded. Still set on a `sent` pledge means the outcome was never recorded: RIPE did not answer, or it accepted and the confirmation could not be saved. The pledge waits there for the researcher to settle it. A researcher's settlement leaves it set. |
 | `inFlight`, `inFlightSince` | Set while the request that wrote the row is still attempting the transfer, so nobody can confirm or cancel the pledge (and free the donor's slot) until the attempt resolves. |
 | `receivedAmount`, `amountVerified` | When the researcher checked a manual pledge with a key ([Checking a manual pledge](#checking-a-manual-pledge)): the amount that arrived, and whether it was read from RIPE Atlas. 0 and false when nobody checked. |
 | `transactionId` | Empty on new pledges. RIPE does not index a transaction until well after it accepts the transfer (measured live: absent immediately, present 40 to 70 seconds later), so it cannot be looked up inside the request, and this platform has no background worker to do it later. The transfer endpoint's own response carries only a generic list URL, identical for every transfer, so it is not a reference either. Older rows may hold a value. |
@@ -561,11 +561,12 @@ delete a managed resource outside the stack, Owners included. Neither setting ex
 principal: CI deletes nothing, and an Owner who needs to delete by hand deploys once with the deny
 settings off.
 
-Prod's resource group also carries a management lock, `prod-cannot-delete` (`CanNotDelete`), applied
-by hand and not declared in Bicep, because Table Storage has no soft delete and the data can't be
-recovered. While it is in place nothing in `rg-atlasrelay-prod` can be deleted by anyone, the stack
-included: a resource removed from the templates stays, and so does a custom domain binding
-(`az staticwebapp hostname delete` fails). Writes are unaffected. Remove the lock on purpose before a
+Prod's resource group also carries a management lock, `prod-cannot-delete` (`CanNotDelete`), which
+was added with `az lock create` and is not declared in Bicep. It guards the storage accounts, since
+Table Storage has no soft delete. While it is in place no resource in `rg-atlasrelay-prod` can be
+deleted through Azure Resource Manager, by anyone, the stack included: a resource removed from the templates stays, and so does a custom domain binding
+(`az staticwebapp hostname delete` fails). Writes are unaffected, and so is data: the lock does not stop the API or an operator with a data
+role from deleting tables or rows. Remove the lock on purpose before a
 planned deletion or teardown, and put it back afterwards; `scripts/teardown.sh` refuses to start
 while a lock is on the group (runbook,
 [Changing infrastructure](RUNBOOK.md#changing-infrastructure)).

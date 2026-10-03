@@ -22,7 +22,7 @@ deployed from the same template. Environment names are 1 to 6 lowercase letters 
 | CI identity, federated with the GitHub Environment `prod` | `id-atlasrelay-prod-ci` | `infra/identity.bicep` |
 | Custom roles and their assignments to the CI identity | "Atlas Relay CI Deployer (prod)", "Atlas Relay CI API Deployer (prod)" | `infra/rbac.bicep` |
 | Public DNS zone (prod only) | `atlasrelay.org` | `infra/dns.bicep` |
-| Management lock `CanNotDelete` on the resource group (prod only; set by hand, see [Prod's delete lock](#prods-delete-lock)) | `prod-cannot-delete` | not in Bicep |
+| Management lock `CanNotDelete` on the resource group (prod only; see [Prod's delete lock](#prods-delete-lock)) | `prod-cannot-delete` | not in Bicep |
 
 Every resource is tagged `project=atlasrelay` and `environment=<env>`. `dev` gets the same set
 with `dev` in the names, no zone, no lock, no availability test (so no "Home page unavailable"
@@ -55,9 +55,10 @@ It also gets the full-flow test harness, which is never deployed in prod
 ### Prod's delete lock
 
 `rg-atlasrelay-prod` also carries a management lock, `prod-cannot-delete` at level `CanNotDelete`.
-It was applied by hand and is not in Bicep, because Table Storage has no soft delete: a deleted
-storage account or table can't be brought back. While it is in place nothing in the group can be
-deleted, by anyone or by the stack:
+It was added with `az lock create` and is not declared in Bicep. It guards the storage accounts,
+because Table Storage has no soft delete: a deleted storage account can't be brought back. While it
+is in place no resource in the group can be deleted through Azure Resource Manager, by anyone or by
+the stack:
 
 - A resource removed from the templates stays in prod, and the deployment cannot delete it.
 - `az staticwebapp hostname delete` fails, so a custom domain binding can't be recreated
@@ -65,7 +66,9 @@ deleted, by anyone or by the stack:
 - `scripts/teardown.sh prod` stops before it changes anything.
 
 Writes are not affected: deployments, settings, the site's content and the tables all work as
-before. To delete something in prod, remove the lock deliberately, do the deletion, and put the
+before. Nor is data: the lock covers Azure resources only, so the API, and anyone with a data role
+on the tables, can still delete tables and rows (deleting a profile, the test cleanup route,
+`scripts/purge-test-data.sh`). To delete something in prod, remove the lock deliberately, do the deletion, and put the
 lock back:
 
 ```bash

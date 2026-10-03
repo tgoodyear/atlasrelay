@@ -117,8 +117,9 @@ its own federation, read or change app settings, change DNS, read or change stor
 anything. Infrastructure is
 deployed by a subscription Owner as a deployment stack whose deny settings block deleting its
 resources outside the stack.
-Prod's resource group also carries a `CanNotDelete` management lock, so nothing in it can be
-deleted, by the stack or by anyone else, until someone removes the lock on purpose.
+Prod's resource group also carries a `CanNotDelete` management lock, so no Azure resource in it can
+be deleted, by the stack or by anyone else, until someone removes the lock on purpose. The lock
+protects resources, not the rows in them: the API still deletes data where the site allows it.
 
 Changes reach `main` only through a pull request: the "Protect main" ruleset requires one, with
 the Build and test, Browser tests and Full-flow tests checks passing, and nobody can bypass it.

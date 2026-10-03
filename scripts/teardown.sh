@@ -67,7 +67,7 @@ for id in $ids; do
 done
 others=$(grep -v '^$' <<< "$others" || true)
 
-# A management lock (prod's CanNotDelete lock, put on by hand and not in Bicep) makes the group
+# A management lock (prod's CanNotDelete lock, which is not declared in Bicep) makes the group
 # delete below fail, after the repository secrets are gone and the stack is detached. Check first,
 # before anything changes, and leave removing the lock to a deliberate step. A lock on the
 # subscription itself is inherited by every group and blocks the delete too, but `az lock list -g`
