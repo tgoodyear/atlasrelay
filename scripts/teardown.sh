@@ -7,8 +7,7 @@
 #
 #   scripts/teardown.sh <env>
 #
-# Needs: az 2.61+ and gh, signed in, an account that can delete the resource group and the
-# environment's custom roles on the subscription, and admin on the repository. Stops before changing
+# Needs: az 2.61+ and gh, signed in, Owner on the subscription and admin on the repository. Stops before changing
 # anything if a management lock is on the environment's resource group (prod has one). Asks for the
 # environment's name before deleting anything.
 set -euo pipefail
