@@ -56,8 +56,8 @@ It also gets the full-flow test harness, which is never deployed in prod
 
 `rg-atlasrelay-prod` also carries a management lock, `prod-cannot-delete` at level `CanNotDelete`.
 It was added with `az lock create` and is not declared in Bicep. It guards the storage accounts,
-because Table Storage has no soft delete: a deleted storage account can't be brought back. While it
-is in place no resource in the group can be deleted through Azure Resource Manager, by anyone or by
+because Table Storage has no soft delete: Azure can sometimes recover a deleted storage account
+within 14 days, but only on a best-effort basis. While it is in place no resource in the group can be deleted through Azure Resource Manager, by anyone or by
 the stack:
 
 - A resource removed from the templates stays in prod, and the deployment cannot delete it.
