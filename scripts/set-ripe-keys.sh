@@ -33,7 +33,7 @@
 # (scripts/lib/test-vault.sh) pipes it to Key Vault. As with scripts/set-test-users.sh, the test
 # vault admits this machine's address only while the script writes, and closes however it ends.
 #
-# Needs: az, curl and jq, signed in as the Owner recorded as ATLASRELAY_OPERATOR_PRINCIPAL_ID.
+# Needs: az, curl and jq, signed in as the account recorded as ATLASRELAY_OPERATOR_PRINCIPAL_ID.
 set -euo pipefail
 usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 2; }
 [ $# -ge 1 ] || usage

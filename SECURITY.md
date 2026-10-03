@@ -19,21 +19,22 @@ credits, projects or email addresses to demonstrate a finding.
 
 ## Reporting abuse or asking for a takedown
 
-Nobody vets the projects posted here. Posting needs a sign-in (GitHub or Microsoft, and Google or
-ORCID once the site offers them) and a self-declared RIPE NCC Access email, and the site cannot
-tell a real research project from an invented one. The transfer page tells donors this.
+Nobody vets the projects posted here. Posting needs a sign-in (GitHub, Microsoft, Google or ORCID)
+and a self-declared RIPE NCC Access email, and the site cannot tell a real research project from
+an invented one. The transfer page tells donors this.
 
 If a project is fraudulent, misrepresents who is behind it, or should come down for another
 reason, open an issue labelled `abuse` with the project's URL and what is wrong with it. If
 naming the project publicly would make things worse, use private vulnerability reporting
 instead.
 
-There is one maintainer, so expect a response in days rather than hours. A fraudulent project
-is closed by the site, which stops it accepting credits and removes it from the listing and
-the sitemap. Its page answers "not found". The owner, once signed in, can still open it in the
-app to settle pledges, but cannot reopen it. The owner's profile and stored email can be deleted too, but that is
-not a ban: signing in again with the same account creates a new profile linked to the old
-projects and pledges.
+There is one maintainer, so expect a response in days rather than hours. There is no admin
+page: an operator takes a fraudulent project down by hand in the site's storage, which stops it
+accepting credits and removes it from the listing and the sitemap. Its page answers "not found".
+The researcher who posted it, once signed in, can still open it in the app to settle pledges, but
+cannot reopen it. Their profile and stored email can be deleted too, but that is not a ban:
+signing in again with the same account creates a new profile linked to the old projects and
+pledges.
 
 Credits already transferred cannot be recovered. They move directly between RIPE Atlas
 accounts, and neither this site nor the RIPE NCC can reverse a transfer on our request. If you
@@ -116,22 +117,27 @@ its own federation, read or change app settings, change DNS, read or change stor
 anything. Infrastructure is
 deployed by a subscription Owner as a deployment stack whose deny settings block deleting its
 resources outside the stack.
+Prod's resource group also carries a `CanNotDelete` management lock, so nothing in it can be
+deleted, by the stack or by anyone else, until someone removes the lock on purpose.
+
+Changes reach `main` only through a pull request: the "Protect main" ruleset requires one, with
+the Build and test, Browser tests and Full-flow tests checks passing, and nobody can bypass it.
+The repository only runs actions pinned to a full commit SHA.
 
 Sign-in uses the site's own app registrations at GitHub (a GitHub App), Microsoft (an Entra app
 registration), Google and ORCID, separate for dev and prod. Static Web Apps turns its built-in
 providers off once a site has any registration of its own, so GitHub and Microsoft need the site's
-own registrations too. GitHub, Google and ORCID each have a client secret, kept in the
-environment's sign-in Key Vault and nowhere else: not in the repository, the owner's settings
-file, the deployment parameters or history, or a log. `scripts/register-signin.sh` moves each
-secret from the provider into the vault on standard input, without printing it. The static web app
-reads the secrets with its system-assigned identity through Key Vault references in its app
-settings. Microsoft has no secret: the site signs in to Entra with a user-assigned identity that
-only it holds and that the app registration trusts through a federated identity credential; that
-identity has no Azure role. The vault accepts Azure RBAC only: the site's identity can read
-secrets and the operator can write them; the CI identity has no role on it and cannot read app
-settings. It keeps public network access, because Static Web Apps
-reads it from outside any virtual network. Purge protection is on, and every read and write is in
-the vault's audit log in the environment's Log Analytics workspace.
+own registrations too. GitHub, Google and ORCID each have a client secret, kept in the environment's
+sign-in Key Vault and nowhere else: not in the repository, the operator's local settings file, the
+deployment parameters or history, or a log. `scripts/register-signin.sh` moves each secret from the
+provider into the vault on standard input, without printing it. The static web app reads the secrets
+with its system-assigned identity through Key Vault references in its app settings. Microsoft has no
+secret: the site signs in to Entra with a user-assigned identity that only it holds and that the app
+registration trusts through a federated identity credential; that identity has no Azure role. The
+vault accepts Azure RBAC only: the site's identity can read secrets and the operator can write them;
+the CI identity has no role on it and cannot read app settings. It keeps public network access,
+because Static Web Apps reads it from outside any virtual network. Purge protection is on, and every
+read and write is in the vault's audit log in the environment's Log Analytics workspace.
 
 `staticwebapp.config.json`, which ships with the site, names the app settings and holds no values.
 But that file decides which settings the site sends where. Whoever can deploy the site (the CI
@@ -162,9 +168,9 @@ test accounts in a separate tenant sign in there, and one RIPE Atlas account sen
 another through the site, which sends them back with the RIPE Atlas API. The accounts' passwords, the two live RIPE Atlas API keys
 and the RIPE account emails are in a Key Vault with public network access disabled. Two
 principals can read them: a Container Apps job inside the environment's virtual network, through a
-private endpoint, as the job's own managed identity; and the Owner recorded as the environment's
-operator, who writes them (Key Vault Secrets Officer) and can reach the vault only while
-`scripts/set-test-users.sh` or `scripts/set-ripe-keys.sh` has opened it to their address. The
+private endpoint, as the job's own managed identity; and the subscription Owner recorded as the
+environment's operator, who writes them (Key Vault Secrets Officer) and can reach the vault only
+while `scripts/set-test-users.sh` or `scripts/set-ripe-keys.sh` has opened it to their address. The
 GitHub workflow that runs the tests deploys the commit's site and API to dev, builds the job's
 image in the environment's private container registry, starts the job and downloads its results;
 its identity has no role on the vault, and GitHub holds no test credentials. To deploy, it uses
@@ -183,13 +189,13 @@ The keys can move real credits. The workflow chooses the image that runs with th
 since it builds the image and starts the job with it. A key works only within the validity
 window set when it was created, and can be disabled or deleted on atlas.ripe.net at any time.
 
-Only the repository owner can make that workflow run. It has no pull request trigger of any kind,
-so a fork or a pull request cannot start it; every job checks the repository, the actor and the
-branch; and the job that gets an Azure token runs in the GitHub Environment `dev`, which only
-`main` may use and which waits for the owner's approval. The approval is on by default; the owner
-can turn it off with `scripts/bootstrap.sh dev --no-approval`, which leaves the other checks in
-place. The tests run in Azure rather than on a self-hosted runner, because a self-hosted runner in
-a public repository can be given work by a pull request from a fork.
+Only the GitHub account `tgoodyear` can make it run. It has no pull request trigger of any kind, so
+a fork or a pull request cannot start it; every job checks the repository, the actor and the branch;
+and the job that gets an Azure token runs in the GitHub Environment `dev`, which only `main` may use
+and which waits for approval by `tgoodyear`. The approval is on by default;
+`scripts/bootstrap.sh dev --no-approval` turns it off and leaves the other checks in place. The
+tests run in Azure rather than on a self-hosted runner, because a self-hosted runner in a public
+repository can be given work by a pull request from a fork.
 
 The tests delete the projects they post on dev through `DELETE /api/test/projects/{id}`. The site
 itself cannot delete a project, and this route is not part of it: no page calls it, and prod does
@@ -202,9 +208,10 @@ app settings passed in. Without the setting the function is never registered, an
 answers 404 before it reads anything, so prod answers as it would for any route that does not exist.
 `scripts/check-params.sh` checks the compiled templates for this on every infrastructure change.
 
-Where the route exists, it deletes a project only for a signed-in caller who owns it, and only if
-the project was marked as a test project when it was created. The API stores that marker only when
-the setting is on and the title starts with `E2E `, and no edit can add it later. On dev, anyone
-signed in can post a project titled that way and later delete it, with any pledges made to it; the
-marker allows nothing else. `scripts/purge-test-data.sh`, which removes what earlier runs left,
-works on a test environment's tables directly with the operator's own access, and refuses prod.
+Where the route exists, it deletes a project only for the signed-in researcher who posted it, and
+only if the project was marked as a test project when it was created. The API stores that marker
+only when the setting is on and the title starts with `E2E `, and no edit can add it later. On dev,
+anyone signed in can post a project titled that way and later delete it, with any pledges made to
+it; the marker allows nothing else. `scripts/purge-test-data.sh`, which removes what earlier runs
+left, works on a test environment's tables directly with the operator's own access, and refuses
+prod.

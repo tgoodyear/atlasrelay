@@ -96,8 +96,9 @@ export function mediaType(contentType: string | null): string {
  * exempting them. A body-less cross-site POST is not safe to exempt: fetch(url, { method: 'POST',
  * mode: 'no-cors' }) sends one with the user's cookies and no Content-Type at all. A body-less
  * DELETE is safe today only because browsers preflight DELETE, and one uniform rule is easier to
- * keep right than a list of exceptions. web/src/lib/api.ts and the test harnesses therefore send
- * Content-Type: application/json on every mutating call, body or not.
+ * keep right than a list of exceptions. Static Web Apps drops the Content-Type of a request with no
+ * body before it reaches the API, so web/src/lib/api.ts and the test harnesses send a JSON body on
+ * every mutating call, `{}` when there is nothing to send.
  */
 export function assertSameOriginWrite(req: Pick<HttpRequest, 'method' | 'headers'>): void {
   const method = req.method.toUpperCase();

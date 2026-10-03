@@ -68,7 +68,7 @@ receipt-matching is best-effort.
 Seen live (2026-09-18): the list is `{count, next, previous, results}`, newest first with
 `sort=-date`; `date` is an integer epoch in seconds; a transfer out is a negative `amount` and credits
 in are positive. In the sender's list, a transfer's row appeared 40 to 70 seconds after the
-transfer, not at once. The site checks manual pledges against the owner's list using `sort`,
+transfer, not at once. The site checks manual pledges against the researcher's list using `sort`,
 `type` and `page_size` only; the date filters are documented but have not been tried live.
 
 Seen live (2026-10-01, the dev full-flow run, two transfers of 100 and 90 credits):
@@ -78,7 +78,7 @@ Seen live (2026-10-01, the dev full-flow run, two transfers of 100 and 90 credit
 recorded; presumably the other account's RIPE NCC Access email). The two rows of one transfer
 have different transaction ids. The recipient's row was listed within 1 to 6
 seconds of the transfer, carrying the second the transfer was made. One run is not a guarantee, so
-the site still tells the owner a new transfer can take a minute or two to appear. No documented
+the site still tells the researcher a new transfer can take a minute or two to appear. No documented
 field names the other account. The `description` appears to, but its format is undocumented, so
 the site does not rely on it.
 
@@ -123,12 +123,12 @@ Findings:
    transfer recipient identifier), but it would not let us move credits on their
    behalf. Transfers still need an API key or a manual step on atlas.ripe.net.
 
-Conclusion for v1: sign users in with GitHub or Microsoft (built into Azure Static
-Web Apps), ask requesters for their RIPE NCC Access email, and make
-transfers happen either through a donor-supplied, single-use, transfer-scoped API key
-or manually on atlas.ripe.net. Design the code so a RIPE NCC Access OIDC provider can
-be plugged in later (Azure Static Web Apps Standard plan, custom OIDC provider) if
-RIPE NCC issues a client; that would let us auto-verify the recipient email.
+What the site does instead: it signs people in with GitHub, Microsoft, Google or ORCID
+([Sign-in providers](ARCHITECTURE.md#sign-in-providers)), asks researchers for their RIPE NCC Access
+email, and has transfers made either with a donor-supplied, single-use key or by hand on
+atlas.ripe.net. ORCID already uses the custom OpenID Connect provider support of the Static
+Web Apps Standard plan, which is where a RIPE NCC Access provider would go if RIPE NCC ever
+issued a client. That would let the site verify the recipient email.
 
 ## Scale, quotas and research impact (Nosyk et al., 2025)
 
@@ -167,9 +167,12 @@ How the site uses this: the project form asks requesters whether existing measur
 were considered and to check their own daily limit before asking for a large amount; the
 How it works page cites the paper and points to the direct-request route.
 
-## Things worth asking RIPE NCC
+## Open questions
 
-- Whether they would issue an OIDC client for this site (verified email claim).
+The public documentation does not answer these:
+
+- Whether RIPE NCC Access could ever issue an OIDC client to a site like this one
+  (verified email claim).
 - The exact permission id for credit transfers, and whether a key can be limited to a
   maximum transfer amount or a target recipient (grants do support `target`, but the
   target types for credit permissions are not documented).

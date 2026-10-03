@@ -4,6 +4,9 @@
 # full-flow test vault is purged so the environment can be bootstrapped again at once. For prod
 # that includes the DNS zone: a new zone gets new name servers, and the registrar has to be
 # updated before the domain resolves again. Local settings (.azure/<env>/.env) are kept, renamed.
+# The sign-in vault (kvs-...) has purge protection, so it stays recoverable for 7 days and the next
+# deployment of the environment recovers it; the sign-in app registrations with GitHub, Microsoft,
+# Google and ORCID are not deleted.
 #
 #   scripts/teardown.sh <env>
 #

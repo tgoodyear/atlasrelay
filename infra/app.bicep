@@ -35,7 +35,7 @@ param stagingEnvironmentPolicy string = 'Disabled'
 Leave off: the API and operators sign in with Entra ID and nothing reads the key.''')
 param storageSharedKeyAccess bool = false
 
-@description('Object id of the Owner who works on the tables by hand (moderation, exports). Empty: nobody.')
+@description('Object id of the operator who works on the tables by hand (moderation, exports). Empty: nobody.')
 param operatorPrincipalId string = ''
 
 @description('Tags applied to every resource')
@@ -91,7 +91,7 @@ resource tables 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-
   }
 ]
 
-// Storage Table Data Contributor, for the Owner who closes a project or exports data by hand
+// Storage Table Data Contributor, for the operator who closes a project or exports data by hand
 // (docs/RUNBOOK.md, Operations). Owner on the subscription grants no data access on its own.
 var tableDataContributor = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
 

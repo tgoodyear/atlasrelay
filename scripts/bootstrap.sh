@@ -12,11 +12,12 @@
 #                         environment adds <env>.<domain> to the prod zone
 #   --alert-email ADDR    where alerts go
 #   --no-approval         outside prod: let jobs in the GitHub Environment run without waiting for
-#                         the repository owner's approval (the default is to wait)
+#                         approval by the GitHub account the repository belongs to (the default
+#                         is to wait)
 #
 # Outside prod the stack also holds the full-flow test harness (infra/testharness.bicep), and the
-# GitHub Environment waits for the repository owner's approval before a job in it gets an Azure
-# token, unless --no-approval. docs/RUNBOOK.md, "Full-flow tests on dev".
+# GitHub Environment waits for approval by the GitHub account the repository belongs to before a
+# job in it gets an Azure token, unless --no-approval. docs/RUNBOOK.md, "Full-flow tests on dev".
 #
 # Needs: az 2.61+, gh and jq, signed in (az login --tenant ..., gh auth login), Owner on the
 # subscription and admin on the GitHub repository.
@@ -134,7 +135,8 @@ done
 
 step "GitHub Environment '$ENV_NAME' in $REPO"
 # The CI identity trusts jobs in this GitHub Environment, and only main may use it. Outside prod,
-# a job in it also waits for the repository owner's approval, administrators included, unless
+# a job in it also waits for approval by the account the repository belongs to, administrators
+# included, unless
 # --no-approval (the full-flow tests run there).
 if [ "$ENV_NAME" = prod ]; then
   gh api -X PUT "repos/$REPO/environments/$ENV_NAME" --input - > /dev/null << 'JSON'

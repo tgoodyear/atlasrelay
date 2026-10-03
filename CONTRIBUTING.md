@@ -26,7 +26,7 @@ providers instead of its own sign-in page (docs/ARCHITECTURE.md, "Sign-in provid
 ## Before you open a pull request
 
 ```bash
-npm test          # API typecheck and unit tests, web typecheck
+npm test          # API typecheck and unit tests, web typecheck and unit tests, e2e-real checks
 npm run build     # the Vite build, then the API bundle, which embeds two of the built pages
 ```
 
@@ -38,11 +38,11 @@ npx -w web playwright install chromium   # once
 npm run test:e2e -w web
 ```
 
-If you change the API, a page, or anything a donor or researcher does, run the full-flow tests.
-They start the whole application on your machine: Azurite with empty tables, the Functions host
-running the built API, the built site behind the Static Web Apps emulator, and a stub of the RIPE
-Atlas API (`web/e2e/flows/harness/ripe-stub.ts`) in place of atlas.ripe.net. Tests sign in
-through the emulator as made-up GitHub and Microsoft users, and every API key they use is a fake
+If you change the API, a page, or anything a donor or researcher does, run the full-flow tests. They
+start the whole application on your machine: Azurite with empty tables, the Functions host running
+the built API, the built site behind the Static Web Apps emulator, and a stub of the RIPE Atlas API
+(`web/e2e/flows/harness/ripe-stub.ts`) in place of atlas.ripe.net. Tests sign in through the
+emulator as made-up GitHub, Microsoft, Google and ORCID users, and every API key they use is a fake
 one starting `00000000-0000-4000-8000-`. They need a fresh build and `func`:
 
 ```bash
@@ -57,15 +57,17 @@ and click around, run `npm run e2e:stack -w web`, then open http://localhost:438
 
 The page steps the full-flow tests share live in `web/e2e/ui.ts`. The tests in `e2e-real/` use
 them too: they run the same flow on the dev environment with real Microsoft sign-in and real RIPE
-Atlas transfers, in Azure, after a merge or, for the Owner, from a branch with
-`scripts/run-e2e.sh` (docs/RUNBOOK.md, "Full-flow tests on dev"). A pull request cannot run them.
+Atlas transfers, in Azure. They run after a merge that changes `e2e-real/`, `web/e2e/ui.ts`,
+`scripts/lib/e2e-job.sh` or their workflow, and when someone starts the workflow by hand. A
+subscription Owner can also run them from a branch with `scripts/run-e2e.sh` (docs/RUNBOOK.md,
+"Full-flow tests on dev"). A pull request cannot run them.
 `npm test` covers their redaction (with fake RIPE Atlas keys, and a real browser trace when
 Chromium is installed), TOTP, RIPE Atlas client and summary code, and checks that the test image
 and `web/package.json` use the same Playwright version; the Full-flow test image workflow builds
 the image on a pull request that changes it.
 
 Infrastructure lives in `infra/*.bicep`. CI builds and lints it but deploys none of it: a
-subscription owner deploys each environment's stack with `scripts/provision.sh` after the merge
+subscription Owner deploys each environment's stack with `scripts/provision.sh` after the merge
 (see [docs/RUNBOOK.md](docs/RUNBOOK.md#changing-infrastructure)). Before pushing a change there,
 run `scripts/check-params.sh` and `az bicep lint --file` on the templates you touched.
 

@@ -15,7 +15,7 @@
 # interrupted. The values go to Key Vault's REST API on curl's standard input: never on a command
 # line, in a file or in the shell history.
 #
-# Needs: az, curl and jq, signed in as the Owner scripts/bootstrap.sh recorded as
+# Needs: az, curl and jq, signed in as the account scripts/bootstrap.sh recorded as
 # ATLASRELAY_OPERATOR_PRINCIPAL_ID (Key Vault Secrets Officer on the vault). scripts/lib/test-vault.sh
 # opens, writes and closes the vault. The RIPE Atlas keys for the real-transfer tests go in with
 # scripts/set-ripe-keys.sh.

@@ -22,7 +22,7 @@ param staticWebAppName string
 @description('Object id of the static web app\'s system-assigned identity')
 param staticWebAppPrincipalId string
 
-@description('Object id of the Owner who registers the apps and writes their secrets (scripts/register-signin.sh). Empty: nobody.')
+@description('Object id of the operator who registers the apps and writes their secrets (scripts/register-signin.sh). Empty: nobody.')
 param operatorPrincipalId string = ''
 
 @description('Client id of the user-assigned identity the site signs in to Microsoft Entra with (app.bicep)')

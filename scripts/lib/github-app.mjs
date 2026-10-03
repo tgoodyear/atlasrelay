@@ -3,7 +3,7 @@
 // for scripts/register-signin.sh. Nothing here prints or stores a secret:
 //
 //   1. Serves one page on 127.0.0.1 that posts the manifest to GitHub, and opens it.
-//   2. The owner checks the name and clicks "Create GitHub App" on github.com.
+//   2. The person running the script checks the name and clicks "Create GitHub App" on github.com.
 //   3. GitHub sends the browser back here with a one-time code, which is exchanged for the app's
 //      client id and client secret.
 //   4. The secret goes to `az keyvault secret set` on its standard input, the client id to stdout.
