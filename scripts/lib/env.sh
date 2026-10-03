@@ -80,6 +80,8 @@ stack_location() { local l; l=$(aget AZURE_LOCATION) || return 1; echo "${l:-wes
 # DENY_SETTINGS_MODE=none lifts the deny assignments for one deployment, so a managed resource can
 # be deleted by hand; the next ordinary deployment puts them back. ACTION_ON_UNMANAGE=detachAll
 # keeps a resource that was dropped from the templates instead of deleting it, for one deployment.
+# The deny assignments leave out deleting a management lock: prod's lock (infra/lock.bicep) is a
+# managed resource, and removing it on purpose (docs/RUNBOOK.md) must not need a deployment first.
 deploy_stack() (
   # Export exactly the settings infra/main.bicepparam reads, when they have a value; an unset one
   # takes its default there. Each is read on its own (aget), so the settings file never sets this
@@ -92,12 +94,13 @@ deploy_stack() (
     [ -z "$v" ] || export "$k=$v"
   done
   export AZURE_ENV_NAME=$ENV_NAME
-  local location
+  local location deny=${DENY_SETTINGS_MODE:-denyDelete} excluded=()
   location=$(stack_location) || exit 1
+  [ "$deny" = none ] || excluded=(--deny-settings-excluded-actions Microsoft.Authorization/locks/delete)
   az stack sub create --name "$STACK" --location "$location" "${AZ_SUB[@]}" \
     --parameters infra/main.bicepparam \
     --action-on-unmanage "${ACTION_ON_UNMANAGE:-deleteResources}" \
-    --deny-settings-mode "${DENY_SETTINGS_MODE:-denyDelete}" \
+    --deny-settings-mode "$deny" ${excluded[@]+"${excluded[@]}"} \
     --description "Atlas Relay $ENV_NAME (scripts/bootstrap.sh, scripts/provision.sh)" \
     --yes --only-show-errors -o none
 )

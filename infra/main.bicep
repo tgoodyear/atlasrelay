@@ -15,11 +15,13 @@
 //   dns-subdomain.bicep  <env>.<domain> CNAME in the prod zone (other environments)
 //   testharness.bicep    full-flow test job, private vault, network (other environments)
 //   testharness-rbac.bicep  what CI may do with the test job (other environments)
+//   lock.bicep        CanNotDelete lock on the resource group (prod only)
 //
 // The stack runs with --action-on-unmanage deleteResources (a resource dropped from this template
 // is deleted on the next deployment) and --deny-settings-mode denyDelete (nobody deletes a managed
-// resource outside the stack). CI deploys no Bicep: it publishes the API package to the Function
-// App and uploads the site with the deployment token its role lets it read.
+// resource outside the stack, except prod's lock, which an Owner can remove on purpose). CI
+// deploys no Bicep: it publishes the API package to the Function App and uploads the site with
+// the deployment token its role lets it read.
 targetScope = 'subscription'
 
 @description('Environment name: 1-6 lowercase letters and digits, e.g. prod or dev (AZURE_ENV_NAME).')
@@ -116,6 +118,11 @@ param swaApexToken string = ''
 test accounts into the site, with their passwords in a private Key Vault. Never in prod, whatever
 this says; main.bicepparam sets it for every other environment.''')
 param testHarness bool = toLower(environmentName) != 'prod'
+
+@description('''Put the CanNotDelete lock prod-cannot-delete on prod's resource group (lock.bicep). Never
+outside prod, whatever this says. Off only for the one deployment that deletes a resource in prod
+(docs/RUNBOOK.md, "Changing infrastructure"); main.bicepparam turns it on for prod.''')
+param resourceGroupLock bool = toLower(environmentName) == 'prod'
 
 // The providers the site's own registrations cover, as scripts/lib/env.sh (signin_providers) works
 // them out: none, or GitHub and Microsoft plus Google and ORCID where their client ids are set. The
@@ -322,6 +329,19 @@ module testharnessRbac 'testharness-rbac.bicep' = if (harness) {
     resultsContainerName: testharness!.outputs.resultsContainerName
     locksContainerName: testharness!.outputs.locksContainerName
     registryName: testharness!.outputs.registryName
+  }
+}
+
+// ---------- resource group lock (prod only) ----------
+
+// Table Storage has no soft delete. The lock was put on by hand on 2026-10-02; the same name, level
+// and notes let the stack adopt it rather than add a second one.
+module lock 'lock.bicep' = if (isProd && resourceGroupLock) {
+  name: 'lock'
+  scope: rg
+  params: {
+    name: 'prod-cannot-delete'
+    notes: 'Atlas Relay prod: protects the site\'s data (Table Storage has no soft delete). Remove deliberately before a planned teardown.'
   }
 }
 

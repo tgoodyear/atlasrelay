@@ -532,7 +532,7 @@ so the function sets the same security headers itself.
 
 Each environment is one deployment stack at subscription scope, `atlasrelay-<env>`, deployed from
 `infra/main.bicep` by `scripts/bootstrap.sh` or `scripts/provision.sh` (a subscription Owner).
-Everything below is declared in Bicep except prod's management lock, described after the table.
+Everything below is declared in Bicep, and so is prod's management lock, described after the table.
 The names below are prod's; `dev` has the same set with `dev` in place of `prod`, no zone, and a
 `dev` CNAME in the prod zone.
 
@@ -561,15 +561,21 @@ delete a managed resource outside the stack, Owners included. Neither setting ex
 principal: CI deletes nothing, and an Owner who needs to delete by hand deploys once with the deny
 settings off.
 
-Prod's resource group also carries a management lock, `prod-cannot-delete` (`CanNotDelete`), which
-was added with `az lock create` and is not declared in Bicep. It guards the storage accounts, since
-Table Storage has no soft delete. While it is in place no resource in `rg-atlasrelay-prod` can be
-deleted through Azure Resource Manager, by anyone, the stack included: a resource removed from the
-templates stays, and so does a custom domain binding (`az staticwebapp hostname delete` fails).
-Writes are unaffected, and so is data: the lock does not stop the API or an operator with a data
-role from deleting tables or rows. Remove the lock on purpose before a planned deletion or teardown,
-and put it back afterwards; `scripts/teardown.sh` refuses to start while a lock is on the group
-(runbook, [Changing infrastructure](RUNBOOK.md#changing-infrastructure)).
+Prod's resource group also carries a management lock, `prod-cannot-delete` (`CanNotDelete`),
+declared in Bicep (`infra/lock.bicep`, deployed when `isProd` and the `resourceGroupLock` parameter
+are both true; `infra/main.bicepparam` sets the parameter for prod). It guards the storage accounts, since Table
+Storage has no soft delete. While it is in place no resource in `rg-atlasrelay-prod` can be deleted
+through Azure Resource Manager, by anyone, the stack included: a deployment that removes a resource
+from the templates fails, and so does removing a custom domain binding
+(`az staticwebapp hostname delete`). Writes are unaffected, and so is data: the lock does not stop
+the API or an operator with a data role from deleting tables or rows. The deny settings leave out
+one action, `Microsoft.Authorization/locks/delete`, so an Owner can remove the lock on purpose
+without a deployment; every other managed resource keeps its protection. To remove a resource
+from prod's templates, an Owner removes the lock, deploys the change with the setting
+`ATLASRELAY_RESOURCE_GROUP_UNLOCKED=true` (which sets `resourceGroupLock` to false, so the
+deployment does not put the lock back first), then clears the setting and provisions again to
+restore the lock. `scripts/teardown.sh` refuses to start while a lock is on the group (runbook,
+[Prod's delete lock](RUNBOOK.md#prods-delete-lock), has the steps).
 
 CI deploys no Bicep. Its roles can read the resource group, the site and its linked backend, list
 the deployment token the upload action needs, and read the Function App and publish a package to

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks infra/main.bicepparam against the settings it reads, without Azure:
 # 1. It compiles for prod and for dev, with placeholder settings, so a parameter that main.bicep
-#    rejects (a bad default, an environment name the storage account can't hold) fails here.
+#    rejects (a bad default, an environment name the storage account can't hold) fails here. prod's
+#    resource group lock is on for prod and off for dev.
 # 2. Every setting it reads, and every stack output, is listed in .azure/env.example, and every
 #    setting listed there is read by it, written by the scripts (aset), or a stack output.
 # 3. The test cleanup route (E2E_PROJECT_CLEANUP) can never reach prod: prod's parameters turn the
@@ -23,6 +24,12 @@ for env in prod dev; do
   [ "$env" = prod ] && want=false
   [ "$harness" = "$want" ] ||
     { echo "infra/main.bicepparam sets testHarness to $harness for $env, not $want" >&2; status=1; }
+  # prod's resource group lock (infra/lock.bicep) is on for prod and off everywhere else.
+  lock=$(jq -r '.parametersJson | fromjson | .parameters.resourceGroupLock.value' <<< "$params")
+  want=false
+  [ "$env" = prod ] && want=true
+  [ "$lock" = "$want" ] ||
+    { echo "infra/main.bicepparam sets resourceGroupLock to $lock for $env, not $want" >&2; status=1; }
 done
 
 # The compiled template, so this checks what ARM evaluates rather than how the source is written.
