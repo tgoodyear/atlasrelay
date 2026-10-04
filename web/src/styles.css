@@ -128,11 +128,14 @@ img { max-width: 100%; }
 .btn-orcid:hover { background: #95bb2f; }
 /* Focus leaves the colours as they are and adds a ring: teal is 5.2:1 on the white card. */
 .btn-signin:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
-/* The provider's mark, then the text: 12px apart, as Microsoft's button layout has it, and 10px
-   on Google's, as Google's has it. */
-.btn-signin { gap: 0.75rem; }
-.btn-signin.btn-google { gap: 0.625rem; }
+/* The provider's mark, then the text, 12px apart as Microsoft's button layout has it. The buttons
+   stack in one column, so each starts at the same left edge rather than centring its content:
+   centred, every mark sat at a different x, as wide as its label. Google's 18px "G" is centred in
+   a 20px slot, like the other marks, so the marks share a centre line and the labels a left edge;
+   that leaves 13px between the "G" and its text. */
+.btn-signin { gap: 0.75rem; justify-content: flex-start; padding-inline: 1.25rem; }
 .signin-logo { flex: none; display: block; }
+.btn-google .signin-logo { margin-inline: 1px; }
 .sign-in-options { list-style: none; padding: 0; margin: 1rem auto 0; display: grid; gap: 0.6rem; max-width: 18rem; }
 .sign-in-options .btn { width: 100%; }
 
