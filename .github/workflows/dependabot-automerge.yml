@@ -1,50 +1,112 @@
 name: Dependabot auto-merge
 
-# Turns on auto-merge for Dependabot's npm pull requests that only move patch or minor versions, so
-# each merges itself once the required checks on main (Build and test, Browser tests, Full-flow
-# tests) pass. Majors, GitHub Actions bumps and anything touching @playwright/test wait for a person.
+# Merges Dependabot's npm pull requests that only move patch or minor versions, once Deploy has
+# passed on them (its Build and test, Browser tests and Full-flow tests jobs are main's required
+# checks), then starts Deploy on main. Majors, GitHub Actions bumps and anything touching
+# @playwright/test wait for a person.
 #
 # @playwright/test is left out because it has to move in four places at once (web/package.json,
 # e2e-real's package.json and lockfile, the e2e-real/Dockerfile base image and infra/testharness.bicep;
 # e2e-real/test/versions.test.mjs checks them), and the check that catches a mismatch, Full-flow
-# test image, is not a required one, so auto-merge would not wait for it.
+# test image, is not a required one.
 #
-# Auto-merge is turned on with DEPENDABOT_AUTOMERGE_TOKEN, a Dependabot secret (Settings → Secrets
-# and variables → Dependabot) holding a fine-grained token for this repository with Contents and
-# Pull requests read and write. Not GITHUB_TOKEN: a merge it starts does not trigger workflows, so
-# Deploy would not run on main afterwards. "Allow auto-merge" must also be on in the repository's
-# settings.
+# Only GITHUB_TOKEN is used, no stored token. A merge made with it does not start the push workflows,
+# so this workflow starts Deploy on main itself: workflow_dispatch is the one event GITHUB_TOKEN can
+# start. The merge goes through main's branch protection like any other.
+#
+# It runs on workflow_run, in main's context, and never checks out or runs the pull request's code;
+# it reads the update from the commit message Dependabot writes (fetch-metadata needs a
+# pull_request event, which has no write access on Dependabot's pull requests).
 on:
-  pull_request:
-    branches: [main]
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
 
 permissions: {}
 
+concurrency:
+  group: dependabot-automerge-${{ github.event.workflow_run.head_branch }}
+
 jobs:
-  automerge:
-    name: Enable auto-merge
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'tgoodyear/atlasrelay'
+  merge:
+    name: Merge and deploy
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.triggering_actor.login == 'dependabot[bot]' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/') &&
+      github.repository == 'tgoodyear/atlasrelay'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: read
-      pull-requests: read
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - name: Read the update
-        id: meta
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-
-      - name: Enable auto-merge
-        if: >-
-          steps.meta.outputs.package-ecosystem == 'npm_and_yarn' &&
-          (steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor') &&
-          !contains(steps.meta.outputs.dependency-names, '@playwright/test')
-        env:
-          GH_TOKEN: ${{ secrets.DEPENDABOT_AUTOMERGE_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+      - name: Check the pull request and its update
+        id: check
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::DEPENDABOT_AUTOMERGE_TOKEN is not set as a Dependabot secret; see the comment at the top of this workflow."
-            exit 1
+          set -euo pipefail
+          pr=$(gh pr list --head "$BRANCH" --base main --state open --json number,author,headRefOid,commits \
+            --jq '.[] | select((.author.login == "app/dependabot" or .author.login == "dependabot[bot]") and .headRefOid == env.SHA and (.commits | length) == 1) | .number')
+          if [ -z "$pr" ]; then
+            echo "No open pull request from Dependabot with one commit at $SHA on $BRANCH; leaving it."
+            exit 0
           fi
-          gh pr merge --auto --squash "$PR_URL"
+
+          author=$(gh api "repos/$GH_REPO/commits/$SHA" --jq '.author.login // ""')
+          if [ "$author" != "dependabot[bot]" ]; then
+            echo "Commit $SHA is not Dependabot's ($author); leaving #$pr."
+            exit 0
+          fi
+
+          # The block Dependabot puts at the end of its commit message, between "---" and "...".
+          meta=$(gh api "repos/$GH_REPO/commits/$SHA" --jq .commit.message | sed -n '/^updated-dependencies:$/,/^\.\.\.$/p')
+          names=$(printf '%s\n' "$meta" | sed -n 's/^- dependency-name: "\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
+          types=$(printf '%s\n' "$meta" | sed -n 's/^  update-type: //p')
+          echo "#$pr updates:"; printf '  %s\n' $names
+          # Dependabot's security updates of indirect dependencies give no update-type; for a single
+          # dependency, work it out from the "Bump <name> from <old> to <new>" subject. On 0.x a
+          # minor bump counts as a major one.
+          if [ -n "$names" ] && [ -z "$types" ] && [ "$(printf '%s\n' "$names" | wc -l)" = 1 ]; then
+            subject=$(gh api "repos/$GH_REPO/commits/$SHA" --jq .commit.message | sed -n 1p)
+            if [[ "$subject" =~ from\ ([0-9]+)\.([0-9]+)\.([0-9]+)\ to\ ([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              r=("${BASH_REMATCH[@]}")
+              if [ "${r[1]}" != "${r[4]}" ] || { [ "${r[1]}" = 0 ] && [ "${r[2]}" != "${r[5]}" ]; }; then
+                types=version-update:semver-major
+              elif [ "${r[2]}" != "${r[5]}" ]; then
+                types=version-update:semver-minor
+              else
+                types=version-update:semver-patch
+              fi
+            fi
+          fi
+          if [ -z "$names" ] || [ "$(printf '%s\n' "$names" | wc -l)" != "$(printf '%s\n' "$types" | grep -c .)" ]; then
+            echo "Could not read an update type for every dependency; leaving #$pr."
+            exit 0
+          fi
+          if printf '%s\n' "$types" | grep -qvE '^version-update:semver-(patch|minor)$'; then
+            echo "Not only patch and minor updates ($(printf '%s ' $types)); leaving #$pr."
+            exit 0
+          fi
+          if printf '%s\n' "$names" | grep -qx '@playwright/test'; then
+            echo "Touches @playwright/test; leaving #$pr."
+            exit 0
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Merge
+        if: steps.check.outputs.pr != ''
+        env:
+          PR: ${{ steps.check.outputs.pr }}
+        run: gh pr merge "$PR" --squash --match-head-commit "$SHA"
+
+      - name: Deploy main
+        if: steps.check.outputs.pr != ''
+        run: gh workflow run deploy.yml --ref main
