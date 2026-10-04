@@ -72,6 +72,14 @@ export async function checkSignInButtons(page: Page, labels: string[]): Promise<
   const widths = await Promise.all(links.map(async (l) => (await l.boundingBox())!.width));
   expect(new Set(widths.map(Math.round)).size).toBe(1);
 
+  // The marks share a centre line and the labels a left edge, down the column.
+  const centres = await Promise.all(links.map(async (l) => { const b = (await l.locator('svg').boundingBox())!; return b.x + b.width / 2; }));
+  const starts = await Promise.all(links.map(async (l) => (await l.locator('span').boundingBox())!.x));
+  for (const [i, label] of labels.entries()) {
+    expect(Math.abs(centres[i] - centres[0]), `${label} mark`).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(starts[i] - starts[0]), `${label} text`).toBeLessThanOrEqual(0.5);
+  }
+
   // AA text contrast (4.5:1) at rest, on hover and on keyboard focus. The background eases over
   // 0.15 s, so each reading waits for it.
   for (const [i, link] of links.entries()) {
