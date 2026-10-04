@@ -1,0 +1,50 @@
+name: Dependabot auto-merge
+
+# Turns on auto-merge for Dependabot's npm pull requests that only move patch or minor versions, so
+# each merges itself once the required checks on main (Build and test, Browser tests, Full-flow
+# tests) pass. Majors, GitHub Actions bumps and anything touching @playwright/test wait for a person.
+#
+# @playwright/test is left out because it has to move in four places at once (web/package.json,
+# e2e-real's package.json and lockfile, the e2e-real/Dockerfile base image and infra/testharness.bicep;
+# e2e-real/test/versions.test.mjs checks them), and the check that catches a mismatch, Full-flow
+# test image, is not a required one, so auto-merge would not wait for it.
+#
+# Auto-merge is turned on with DEPENDABOT_AUTOMERGE_TOKEN, a Dependabot secret (Settings → Secrets
+# and variables → Dependabot) holding a fine-grained token for this repository with Contents and
+# Pull requests read and write. Not GITHUB_TOKEN: a merge it starts does not trigger workflows, so
+# Deploy would not run on main afterwards. "Allow auto-merge" must also be on in the repository's
+# settings.
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  automerge:
+    name: Enable auto-merge
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'tgoodyear/atlasrelay'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Read the update
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Enable auto-merge
+        if: >-
+          steps.meta.outputs.package-ecosystem == 'npm_and_yarn' &&
+          (steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor') &&
+          !contains(steps.meta.outputs.dependency-names, '@playwright/test')
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_AUTOMERGE_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::DEPENDABOT_AUTOMERGE_TOKEN is not set as a Dependabot secret; see the comment at the top of this workflow."
+            exit 1
+          fi
+          gh pr merge --auto --squash "$PR_URL"
