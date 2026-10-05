@@ -66,39 +66,49 @@ jobs:
             exit 0
           fi
 
-          # The block Dependabot puts at the end of its commit message, between "---" and "...".
-          meta=$(gh api "repos/$GH_REPO/commits/$SHA" --jq .commit.message | sed -n '/^updated-dependencies:$/,/^\.\.\.$/p')
-          names=$(printf '%s\n' "$meta" | sed -n 's/^- dependency-name: "\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
-          types=$(printf '%s\n' "$meta" | sed -n 's/^  update-type: //p')
-          echo "#$pr updates:"; printf '  %s\n' $names
+          # The block Dependabot puts at the end of its commit message, between "---" and "...", as
+          # one "name|new version|update type" line per dependency.
+          message=$(gh api "repos/$GH_REPO/commits/$SHA" --jq .commit.message)
+          entries=$(printf '%s\n' "$message" | sed -n '/^updated-dependencies:$/,/^\.\.\.$/p' | awk '
+            function flush() { if (n != "") print n "|" v "|" t }
+            /^- dependency-name: / { flush(); n = $0; sub(/^- dependency-name: "?/, "", n); sub(/"$/, "", n); v = ""; t = "" }
+            /^  dependency-version: / { v = $2 }
+            /^  update-type: / { t = $2 }
+            END { flush() }')
+          if [ -z "$entries" ]; then
+            echo "No dependency metadata in the commit message; leaving #$pr."
+            exit 0
+          fi
+          echo "#$pr updates:"; printf '  %s\n' $entries
+
           # Dependabot's security updates of indirect dependencies give no update-type; for a single
-          # dependency, work it out from the "Bump <name> from <old> to <new>" subject. On 0.x a
-          # minor bump counts as a major one.
-          if [ -n "$names" ] && [ -z "$types" ] && [ "$(printf '%s\n' "$names" | wc -l)" = 1 ]; then
-            subject=$(gh api "repos/$GH_REPO/commits/$SHA" --jq .commit.message | sed -n 1p)
+          # dependency, work it out from the "Bump <name> from <old> to <new>" subject.
+          if [ "$(printf '%s\n' "$entries" | wc -l)" = 1 ] && [ -z "${entries##*|}" ]; then
+            subject=$(printf '%s\n' "$message" | sed -n 1p)
             if [[ "$subject" =~ from\ ([0-9]+)\.([0-9]+)\.([0-9]+)\ to\ ([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
               r=("${BASH_REMATCH[@]}")
-              if [ "${r[1]}" != "${r[4]}" ] || { [ "${r[1]}" = 0 ] && [ "${r[2]}" != "${r[5]}" ]; }; then
-                types=version-update:semver-major
-              elif [ "${r[2]}" != "${r[5]}" ]; then
-                types=version-update:semver-minor
-              else
-                types=version-update:semver-patch
+              if [ "${r[1]}" != "${r[4]}" ]; then t=version-update:semver-major
+              elif [ "${r[2]}" != "${r[5]}" ]; then t=version-update:semver-minor
+              else t=version-update:semver-patch
               fi
+              entries="$entries$t"
             fi
           fi
-          if [ -z "$names" ] || [ "$(printf '%s\n' "$names" | wc -l)" != "$(printf '%s\n' "$types" | grep -c .)" ]; then
-            echo "Could not read an update type for every dependency; leaving #$pr."
-            exit 0
-          fi
-          if printf '%s\n' "$types" | grep -qvE '^version-update:semver-(patch|minor)$'; then
-            echo "Not only patch and minor updates ($(printf '%s ' $types)); leaving #$pr."
-            exit 0
-          fi
-          if printf '%s\n' "$names" | grep -qx '@playwright/test'; then
-            echo "Touches @playwright/test; leaving #$pr."
-            exit 0
-          fi
+
+          while IFS='|' read -r name version type; do
+            # On 0.x a minor bump can break things, as a major one does.
+            if [ "$type" = version-update:semver-minor ] && [[ "$version" == 0.* ]]; then
+              type=version-update:semver-major
+            fi
+            case "$type" in
+              version-update:semver-patch | version-update:semver-minor) ;;
+              *) echo "$name is not a patch or minor update (${type:-no update type}); leaving #$pr."; exit 0 ;;
+            esac
+            if [ "$name" = @playwright/test ]; then
+              echo "Touches @playwright/test; leaving #$pr."
+              exit 0
+            fi
+          done <<< "$entries"
           echo "pr=$pr" >> "$GITHUB_OUTPUT"
 
       - name: Merge
