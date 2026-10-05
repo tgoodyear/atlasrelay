@@ -107,6 +107,18 @@ export function offeredProviders(value: string | undefined): Provider[] {
   return PROVIDERS.filter((p) => on.includes(p.id));
 }
 
+/**
+ * Whether a build signs in through the site's own registrations rather than the built-in ones. The
+ * app passes its own build's value (lib/offered.ts); a value the build refuses reads as built-in.
+ */
+export function ownRegistrations(value: string | undefined): boolean {
+  try {
+    return parseSignIn(value).mode === 'custom';
+  } catch {
+    return false;
+  }
+}
+
 /** "GitHub or Microsoft", "GitHub, Microsoft, Google or ORCID": the providers, for a sentence. */
 export function providerList(providers: readonly Provider[]): string {
   const names = providers.map((p) => p.label);

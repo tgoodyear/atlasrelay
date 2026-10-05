@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { META, PRIVACY_TEXT } from '../lib/pages';
-import { OFFERED } from '../lib/offered';
+import { OFFERED, OWN_REGISTRATIONS } from '../lib/offered';
 import { providerList } from '../lib/signin';
 import { usePageMeta } from '../lib/usePageMeta';
 
@@ -71,11 +71,19 @@ export default function Privacy() {
           </p>
           <ul className="muted">
             <li>GitHub passes on your username, and your display name starts as that username.</li>
-            <li>
-              Microsoft: the site asks for your name and account name, not your email address. The
-              account name it passes on can still be shaped like an email address. Your
-              display name starts as your name, or as the part of the account name before any @.
-            </li>
+            {OWN_REGISTRATIONS ? (
+              <li>
+                Microsoft: the site asks for your name and account name, not your email address. The
+                account name it passes on can still be shaped like an email address. Your
+                display name starts as your name, or as the part of the account name before any @.
+              </li>
+            ) : (
+              <li>
+                Microsoft: the site uses Azure's built-in Microsoft sign-in, which asks for your name
+                and email address. The account name it passes on can be your email address. Your
+                display name starts as your name, or as the part of the account name before any @.
+              </li>
+            )}
             {offers('google') && (
               <li>
                 Google: the site uses Azure's default request to Google, which asked for your name and
@@ -161,7 +169,7 @@ export default function Privacy() {
             <a href="https://github.com/tgoodyear/atlasrelay/blob/main/SECURITY.md" target="_blank" rel="noreferrer">SECURITY.md</a>{' '}
             describes. You can delete your profile yourself, as described above.
           </p>
-          <p className="small muted">Last updated 30 September 2026.</p>
+          <p className="small muted">Last updated 5 October 2026.</p>
         </div></div>
       </div>
     </div>
