@@ -49,7 +49,6 @@ az_sub
 az account show "${AZ_SUB[@]}" -o none 2> /dev/null ||
   die "run: az login --tenant <tenant> (the environment is in subscription $(aget AZURE_SUBSCRIPTION_ID))"
 REPO=$(aget ATLASRELAY_GITHUB_REPO); REPO=${REPO:-tgoodyear/atlasrelay}
-GRAPH=https://graph.microsoft.com/v1.0
 
 # The hostnames people sign in on. Static Web Apps sends each provider the callback on the hostname
 # the sign-in started from, so every one of them needs its redirect URI registered (seen on dev,
@@ -128,7 +127,7 @@ has_secret() {
 # the address, and the sign-in asks for openid and profile only (web/src/lib/signin.ts).
 GRAPH_APP=00000003-0000-0000-c000-000000000000
 register_aad() {
-  local app_id object_id body logo logo_dir token principal fic existing
+  local app_id object_id body logo logo_dir token
   echo "== Microsoft: $NAME"
   app_id=$(aget ATLASRELAY_MICROSOFT_CLIENT_ID)
   object_id=""
@@ -200,23 +199,9 @@ register_aad() {
     echo "  service principal created"
   fi
   # No client secret: the app trusts the site's user-assigned identity (infra/app.bicep) through a
-  # federated identity credential, and the site signs in with that identity's token
-  # (https://learn.microsoft.com/azure/static-web-apps/authentication-custom, "Use a managed
-  # identity instead of a secret").
-  principal=$(aget SIGNIN_IDENTITY_PRINCIPAL_ID)
-  [ -n "$principal" ] || die "no SIGNIN_IDENTITY_PRINCIPAL_ID; run scripts/provision.sh $ENV_NAME first"
-  fic=$(jq -n --arg n "static-web-apps-$ENV_NAME" --arg i "https://login.microsoftonline.com/$(aget AZURE_TENANT_ID)/v2.0" --arg s "$principal" \
-    '{name: $n, issuer: $i, subject: $s, audiences: ["api://AzureADTokenExchange"], description: "Sign-in identity of the static web app (id-atlasrelay-*-signin)"}')
-  existing=$(az rest --method get --url "$GRAPH/applications/$object_id/federatedIdentityCredentials" \
-    --query "value[?name=='static-web-apps-$ENV_NAME'].id | [0]" -o tsv)
-  if [ -n "$existing" ]; then
-    az rest --method patch --url "$GRAPH/applications/$object_id/federatedIdentityCredentials/$existing" \
-      --headers Content-Type=application/json --body "$(jq 'del(.name)' <<< "$fic")" -o none
-  else
-    az rest --method post --url "$GRAPH/applications/$object_id/federatedIdentityCredentials" \
-      --headers Content-Type=application/json --body "$fic" -o none
-  fi
-  echo "  trusts the site's sign-in identity ($principal); no client secret"
+  # federated identity credential (scripts/lib/env.sh, sync_aad_trust).
+  sync_aad_trust || die "could not have the Entra app trust the site's sign-in identity"
+  echo "  trusts the site's sign-in identity ($(aget SIGNIN_IDENTITY_PRINCIPAL_ID)); no client secret"
   if [ "$(az rest --method get --url "$GRAPH/applications/$object_id" --query 'length(passwordCredentials)' -o tsv)" != 0 ]; then
     PENDING+=("Entra app \"$NAME\" ($app_id) still has a client secret. Once Microsoft sign-in works on a build that signs in with the identity, remove it (Certificates & secrets) and delete $(signin_secret_name aad) from $VAULT")
   fi

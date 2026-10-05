@@ -474,8 +474,8 @@ AzureDiagnostics
 
 Purge protection is on, so nobody can purge the vault or its secrets during the 7-day retention
 period. `scripts/teardown.sh` leaves the deleted vault recoverable, and the next deployment of the
-environment recovers it, secrets included, but not its role assignments: see "Rebuilding a torn-down
-environment".
+environment recovers it, secrets included. Its role assignments don't come back with it; the
+deployment puts the operator's back first (see "Rebuilding a torn-down environment").
 
 ### Turning them off
 
@@ -945,26 +945,25 @@ lock and the teardown puts it back.
 ### Rebuilding a torn-down environment
 
 Within the sign-in vault's 7-day retention, bootstrapping or provisioning the environment again
-recovers the vault with its secrets and client ids, and records its name. Two things don't come
-back, so a rebuild with sign-in registrations takes these steps by hand:
+recovers the vault with its secrets and client ids, and records its name. Two things don't come back
+on their own, and the deployment (`scripts/lib/env.sh`) puts both back:
 
-1. **Your access to the vault.** Its role assignments went with the resource group, so the run stops
-   with `can't read signin-…-client-id` (or `can't list the secrets`). Grant yourself the role at
-   the resource group, not the vault: the stack creates the vault's own assignment, and one made by
-   hand at the same scope would collide with it.
-   ```bash
-   az role assignment create --role "Key Vault Secrets Officer" \
-     --assignee "$(scripts/settings.sh <env> ATLASRELAY_OPERATOR_PRINCIPAL_ID)" \
-     --scope "/subscriptions/$(scripts/settings.sh <env> AZURE_SUBSCRIPTION_ID)/resourceGroups/rg-atlasrelay-<env>"
-   ```
-   Wait a minute or two for it to apply, then run `scripts/provision.sh <env>` again.
-2. **Microsoft's trust in the site.** The sign-in identity is new, and the Entra app's federated
-   credential still names the old one, so Microsoft sign-in fails until
-   `scripts/register-signin.sh <env> aad` points it at the new identity. Run it right after the
-   provision.
-
-Then remove the assignment from step 1 (`az role assignment delete` with the same arguments): the
-stack's own assignment on the vault is in place by then. Automating both steps is a follow-up.
+1. **Your access to the vault.** Its role assignments went with the resource group
+   ([soft-delete overview](https://learn.microsoft.com/azure/key-vault/general/soft-delete-overview)),
+   and the client ids have to be read from it before the stack can be deployed. When the vault
+   refuses you, `signin_vault_access` deploys `infra/signin-operator.bicep` on its own (deployment
+   `signin-operator-recovery`), granting `ATLASRELAY_OPERATOR_PRINCIPAL_ID` Key Vault Secrets
+   Officer on the vault, and waits up to five minutes for the role to apply. The stack deploys the
+   same module, so the assignment has the stack's name and the stack takes it over: there is no
+   second assignment to remove. Only the recorded operator can do this; anyone else signed in is
+   told so before anything changes.
+2. **Microsoft's trust in the site.** The sign-in identity `id-atlasrelay-<env>-signin` is new, and
+   the Entra app's federated credential `static-web-apps-<env>` still names the old one. After every
+   deployment with a Microsoft registration, `sync_aad_trust` points the credential at the
+   identity the stack reports (`SIGNIN_IDENTITY_PRINCIPAL_ID`) when it names another one. Microsoft
+   sign-in fails between the stack's deployment and that update, a minute at most. It needs the
+   same Microsoft Graph access as `scripts/register-signin.sh`; if it fails, the run stops and says
+   to run `scripts/register-signin.sh <env> aad`.
 
 ## History
 
