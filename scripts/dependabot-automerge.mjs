@@ -68,6 +68,8 @@ export function judge(message) {
   }
 
   for (const { name, version, type } of updates) {
+    // The 0.x rule needs the new version's major number; without one, leave it.
+    if (!/^\d+\./.test(version)) return { ok: false, reason: `${name} has no readable new version (${version || 'none'})` };
     const effective = type === MINOR && version.startsWith('0.') ? MAJOR : type;
     if (effective !== PATCH && effective !== MINOR) {
       const why = type === MINOR ? 'a minor bump on 0.x' : type || 'no update type';

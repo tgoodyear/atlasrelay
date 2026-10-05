@@ -61,5 +61,7 @@ test('leaves majors, 0.x minors, Playwright and unreadable updates to a person',
   left(SECURITY.replaceAll('1.14.4', '0.14.4').replaceAll('1.14.5', '0.15.0'));
   left(SECURITY.replace('Bump @grpc/grpc-js from 1.14.4 to 1.14.5', 'Bump @grpc/grpc-js'));
   left('Bump vite from 7.1.0 to 7.1.2');
+  left(group(['esbuild', '7.1.2', 'minor']).replace('  dependency-version: 7.1.2\n', ''));
+  left(group(['esbuild', 'latest', 'minor']));
   assert.equal(judge(SECURITY.replaceAll('1.14.4', '0.14.4').replaceAll('1.14.5', '0.14.5')).ok, true);
 });
