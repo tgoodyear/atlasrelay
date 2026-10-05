@@ -107,14 +107,21 @@ test('a vault the operator can read, or one that is not there, is left alone', {
 });
 
 test('the role is not granted for someone other than the recorded operator', { skip: !hasJq }, () => {
-  const t = setup(OPERATOR, { forbidden: '', me: 'someone-else' });
-  try {
-    const r = t.run('signin_vault_access');
-    assert.notEqual(r.status, 0);
-    assert.match(r.err, /belongs to the operator op-1, not to you \(someone-else\)/);
-    assert.equal(r.calls.filter((c) => c.startsWith('deployment')).length, 0);
-  } finally {
-    t.cleanup();
+  // Another user, and a sign-in that names no user (a service principal: az ad signed-in-user show
+  // answers nothing).
+  for (const [files, message] of [
+    [{ forbidden: '', me: 'someone-else' }, /belongs to the operator op-1, not to you \(someone-else\)/],
+    [{ forbidden: '' }, /names no signed-in user to check against its operator op-1/],
+  ]) {
+    const t = setup(OPERATOR, files);
+    try {
+      const r = t.run('signin_vault_access');
+      assert.notEqual(r.status, 0);
+      assert.match(r.err, message);
+      assert.equal(r.calls.filter((c) => c.startsWith('deployment')).length, 0);
+    } finally {
+      t.cleanup();
+    }
   }
 });
 
