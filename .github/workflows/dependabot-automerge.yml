@@ -1,0 +1,70 @@
+name: Dependabot auto-merge
+
+# Merges Dependabot's npm pull requests that only move patch or minor versions, once Deploy has
+# passed on them (its Build and test, Browser tests and Full-flow tests jobs are main's required
+# checks), then starts Deploy on main. Majors, GitHub Actions bumps and anything touching
+# @playwright/test wait for a person.
+#
+# Which updates qualify, and why, is in scripts/dependabot-automerge.mjs, which this runs.
+#
+# Only GITHUB_TOKEN is used, no stored token. A merge made with it does not start the push workflows,
+# so this workflow starts Deploy on main itself: workflow_dispatch is the one event GITHUB_TOKEN can
+# start. The merge goes through main's branch protection like any other.
+#
+# It runs on workflow_run, in main's context. The script comes from main; nothing from the pull
+# request is checked out or run.
+on:
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.workflow_run.head_branch }}
+
+jobs:
+  merge:
+    name: Merge and deploy
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.triggering_actor.login == 'dependabot[bot]' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/') &&
+      github.repository == 'tgoodyear/atlasrelay'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # main's scripts, not the pull request's: on workflow_run the default ref is main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Check the pull request and its update
+        id: check
+        run: node scripts/dependabot-automerge.mjs
+
+      - name: Merge
+        if: steps.check.outputs.pr != ''
+        env:
+          PR: ${{ steps.check.outputs.pr }}
+        run: gh pr merge "$PR" --squash --match-head-commit "$SHA"
+
+      - name: Deploy main
+        if: steps.check.outputs.pr != ''
+        run: gh workflow run deploy.yml --ref main
