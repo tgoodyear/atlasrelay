@@ -5,18 +5,14 @@ name: Dependabot auto-merge
 # checks), then starts Deploy on main. Majors, GitHub Actions bumps and anything touching
 # @playwright/test wait for a person.
 #
-# @playwright/test is left out because it has to move in four places at once (web/package.json,
-# e2e-real's package.json and lockfile, the e2e-real/Dockerfile base image and infra/testharness.bicep;
-# e2e-real/test/versions.test.mjs checks them), and the check that catches a mismatch, Full-flow
-# test image, is not a required one.
+# Which updates qualify, and why, is in scripts/dependabot-automerge.mjs, which this runs.
 #
 # Only GITHUB_TOKEN is used, no stored token. A merge made with it does not start the push workflows,
 # so this workflow starts Deploy on main itself: workflow_dispatch is the one event GITHUB_TOKEN can
 # start. The merge goes through main's branch protection like any other.
 #
-# It runs on workflow_run, in main's context, and never checks out or runs the pull request's code;
-# it reads the update from the commit message Dependabot writes (fetch-metadata needs a
-# pull_request event, which has no write access on Dependabot's pull requests).
+# It runs on workflow_run, in main's context. The script comes from main; nothing from the pull
+# request is checked out or run.
 on:
   workflow_run:
     workflows: [Deploy]
@@ -49,67 +45,19 @@ jobs:
       BRANCH: ${{ github.event.workflow_run.head_branch }}
       SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
+      # main's scripts, not the pull request's: on workflow_run the default ref is main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
       - name: Check the pull request and its update
         id: check
-        run: |
-          set -euo pipefail
-          pr=$(gh pr list --head "$BRANCH" --base main --state open --json number,author,headRefOid,commits \
-            --jq '.[] | select((.author.login == "app/dependabot" or .author.login == "dependabot[bot]") and .headRefOid == env.SHA and (.commits | length) == 1) | .number')
-          if [ -z "$pr" ]; then
-            echo "No open pull request from Dependabot with one commit at $SHA on $BRANCH; leaving it."
-            exit 0
-          fi
-
-          author=$(gh api "repos/$GH_REPO/commits/$SHA" --jq '.author.login // ""')
-          if [ "$author" != "dependabot[bot]" ]; then
-            echo "Commit $SHA is not Dependabot's ($author); leaving #$pr."
-            exit 0
-          fi
-
-          # The block Dependabot puts at the end of its commit message, between "---" and "...", as
-          # one "name|new version|update type" line per dependency.
-          message=$(gh api "repos/$GH_REPO/commits/$SHA" --jq .commit.message)
-          entries=$(printf '%s\n' "$message" | sed -n '/^updated-dependencies:$/,/^\.\.\.$/p' | awk '
-            function flush() { if (n != "") print n "|" v "|" t }
-            /^- dependency-name: / { flush(); n = $0; sub(/^- dependency-name: "?/, "", n); sub(/"$/, "", n); v = ""; t = "" }
-            /^  dependency-version: / { v = $2 }
-            /^  update-type: / { t = $2 }
-            END { flush() }')
-          if [ -z "$entries" ]; then
-            echo "No dependency metadata in the commit message; leaving #$pr."
-            exit 0
-          fi
-          echo "#$pr updates:"; printf '  %s\n' $entries
-
-          # Dependabot's security updates of indirect dependencies give no update-type; for a single
-          # dependency, work it out from the "Bump <name> from <old> to <new>" subject.
-          if [ "$(printf '%s\n' "$entries" | wc -l)" = 1 ] && [ -z "${entries##*|}" ]; then
-            subject=$(printf '%s\n' "$message" | sed -n 1p)
-            if [[ "$subject" =~ from\ ([0-9]+)\.([0-9]+)\.([0-9]+)\ to\ ([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-              r=("${BASH_REMATCH[@]}")
-              if [ "${r[1]}" != "${r[4]}" ]; then t=version-update:semver-major
-              elif [ "${r[2]}" != "${r[5]}" ]; then t=version-update:semver-minor
-              else t=version-update:semver-patch
-              fi
-              entries="$entries$t"
-            fi
-          fi
-
-          while IFS='|' read -r name version type; do
-            # On 0.x a minor bump can break things, as a major one does.
-            if [ "$type" = version-update:semver-minor ] && [[ "$version" == 0.* ]]; then
-              type=version-update:semver-major
-            fi
-            case "$type" in
-              version-update:semver-patch | version-update:semver-minor) ;;
-              *) echo "$name is not a patch or minor update (${type:-no update type}); leaving #$pr."; exit 0 ;;
-            esac
-            if [ "$name" = @playwright/test ]; then
-              echo "Touches @playwright/test; leaving #$pr."
-              exit 0
-            fi
-          done <<< "$entries"
-          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+        run: node scripts/dependabot-automerge.mjs
 
       - name: Merge
         if: steps.check.outputs.pr != ''

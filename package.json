@@ -9,8 +9,9 @@
   ],
   "scripts": {
     "build": "npm run build -w web && npm run build -w api",
-    "test": "npm run test -w api && npm run typecheck -w web && npm run test -w web && npm run test:e2e-real",
+    "test": "npm run test -w api && npm run typecheck -w web && npm run test -w web && npm run test:e2e-real && npm run test:scripts",
     "test:e2e-real": "tsc --noEmit -p e2e-real && node --test \"e2e-real/test/*.test.mjs\"",
+    "test:scripts": "node --test \"scripts/test/*.test.mjs\"",
     "dev": "concurrently -k -n azurite,api,web,swa -c blue,green,magenta,cyan \"npm run azurite\" \"npm run api\" \"npm run dev -w web\" \"npm run swa\"",
     "azurite": "azurite --silent --location .azurite --skipApiVersionCheck",
     "api": "npm run build -w api -- --dev && cd api && func start --port 7071",
