@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { canonicalUrl, DEFAULT_DESCRIPTION, documentTitle, HOME_TITLE, META, renderShell, ROOT_END, ROOT_START, SHELLS, SITE_ORIGIN, type Shell } from '../src/lib/pages.ts';
 import * as server from '../../api/src/lib/projectHtml.ts';
 import { nameFromClaims, shouldPrefill, usableName } from '../src/lib/displayName.ts';
-import { loginUrl, offeredProviders, parseSignIn, PROVIDERS, providerLabel, providerList, safeReturnPath, signInConfig } from '../src/lib/signin.ts';
+import { loginUrl, offeredProviders, ownRegistrations, parseSignIn, PROVIDERS, providerLabel, providerList, safeReturnPath, signInConfig } from '../src/lib/signin.ts';
 import { LOGOS } from '../src/lib/providerLogos.ts';
 import ProviderLogo from '../src/components/ProviderLogo.tsx';
 import { extractLocs, findKey } from '../../scripts/indexnow.mjs';
@@ -441,6 +441,11 @@ test('sign-in buttons match the build, and return paths stay on the site', () =>
   assert.equal(providerLabel('orcid'), 'ORCID');
   assert.equal(providerList(offeredProviders('')), 'GitHub or Microsoft');
   assert.equal(providerList(offeredProviders('github,aad,google,orcid')), 'GitHub, Microsoft, Google or ORCID');
+  // The Privacy page words Microsoft's email line by this: only the site's own registration leaves email out.
+  assert.equal(ownRegistrations(undefined), false);
+  assert.equal(ownRegistrations(''), false);
+  assert.equal(ownRegistrations('github,aad'), true);
+  assert.equal(ownRegistrations('google'), false);
   assert.equal(providerLabel('aad'), 'Microsoft');
   assert.equal(providerLabel('facebook'), 'another provider');
   assert.equal(safeReturnPath('/projects/abc'), '/projects/abc');
