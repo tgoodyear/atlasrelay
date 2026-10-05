@@ -540,7 +540,7 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | --- | --- | --- |
 | Resource group `rg-atlasrelay-prod` (westus2) | `infra/main.bicep` | |
 | Static Web App `swa-atlasrelay-prod` (staging environments disabled); system-assigned managed identity and the user-assigned sign-in identity below; its only app settings are the sign-in registrations (`SIGNIN_*`: client ids, and Key Vault references for the secrets; for Microsoft, `OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID` in place of a secret) | `infra/app.bicep` | Standard |
-| Sign-in vault `kvs-atlasrelay-prod-<4 characters>` (RBAC only, purge protection, audit log to the workspace): the sign-in client secrets and copies of the client ids; Key Vault Secrets User for the site, Secrets Officer for the operator | `infra/signin.bicep` | Standard vault |
+| Sign-in vault `kvs-atlasrelay-prod-<4 characters>` (RBAC only, purge protection, audit log to the workspace): the sign-in client secrets and copies of the client ids; Key Vault Secrets User for the site, Secrets Officer for the operator | `infra/signin.bicep`, `infra/signin-operator.bicep` | Standard vault |
 | Storage account `statlasrelayprod<6 characters>` with tables `users`, `projects`, `pledges`, `claims`; shared keys refused | `infra/app.bicep` | Standard LRS |
 | Function App `func-atlasrelay-prod-<6 characters>` (Node 24) on plan `plan-atlasrelay-prod-api`, linked to the site as its backend, with its app settings | `infra/api.bicep` | Flex Consumption, on demand only |
 | User-assigned managed identity `id-atlasrelay-prod-api`, the Function App's identity for storage | `infra/api.bicep` | |
@@ -548,7 +548,7 @@ The names below are prod's; `dev` has the same set with `dev` in place of `prod`
 | Log Analytics `log-atlasrelay-prod` (0.1 GB/day cap; App Insights tables kept 90 days, other tables 30) + App Insights `appi-atlasrelay-prod` | `infra/platform.bicep` | Pay-as-you-go |
 | Action group `ag-atlasrelay-prod`, five log search alerts, availability test `webtest-atlasrelay-prod-home` and its alert, workbook "Atlas Relay" | `infra/monitoring.bicep` | |
 | User-assigned managed identity `id-atlasrelay-prod-ci` + federated credential for the GitHub Environment `prod` | `infra/identity.bicep` | |
-| User-assigned managed identity `id-atlasrelay-prod-signin`, held by the site only; the Entra app registration trusts it (federated credential added by `scripts/register-signin.sh`). No Azure role | `infra/app.bicep` | |
+| User-assigned managed identity `id-atlasrelay-prod-signin`, held by the site only; the Entra app registration trusts it (federated credential added by `scripts/register-signin.sh`, and pointed at a new identity by every deployment). No Azure role | `infra/app.bicep` | |
 | Custom role "Atlas Relay CI Deployer (prod)": read the resource group, the static site and its linked backend, and list the site's deployment token; assigned to the CI identity on the group | `infra/rbac.bicep` | |
 | Custom role "Atlas Relay CI API Deployer (prod)": read the Function App and publish a package to it; assigned to the CI identity on the Function App only | `infra/rbac.bicep` | |
 | Public DNS zone `atlasrelay.org` with the apex A record, a `www` CNAME to the site, the apex TXT set (SPF, the Static Web Apps apex token, and the Google Search Console and Microsoft Entra domain verification records) and mail-rejection records (prod only) | `infra/dns.bicep` | Azure DNS |

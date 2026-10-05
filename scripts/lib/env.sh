@@ -237,7 +237,74 @@ recover_signin_vault() {
   # The settings of a torn-down environment are renamed away, so record the vault's name again:
   # sync_client_ids reads the client ids from it next.
   [ -n "$(aget SIGNIN_KEY_VAULT_NAME)" ] || aset SIGNIN_KEY_VAULT_NAME "$vault"
-  echo "note: a recovered vault comes back without its role assignments; if reading it fails below, see docs/RUNBOOK.md, \"Rebuilding a torn-down environment\""
+}
+# A recovered vault comes back without its role assignments
+# (https://learn.microsoft.com/azure/key-vault/general/soft-delete-overview), so the operator can't
+# read the client ids from it, and the deployment that would give the role back can't start
+# without them. When the vault refuses the operator, this grants the role with
+# infra/signin-operator.bicep, the module the stack grants it with: the assignment gets the stack's
+# name, and the next deployment takes it over instead of colliding with it. Then it waits for the
+# role to apply. Any other failure to read the vault is left to sync_client_ids to report.
+signin_vault_access() {
+  local vault operator me out attempt
+  vault=$(aget SIGNIN_KEY_VAULT_NAME) || return 1
+  [ -n "$vault" ] || return 0
+  out=$(az keyvault secret list --vault-name "$vault" "${AZ_SUB[@]}" --query '[0].name' -o tsv 2>&1) && return 0
+  grep -qi 'Forbidden' <<< "$out" || return 0
+  operator=$(aget ATLASRELAY_OPERATOR_PRINCIPAL_ID) || return 1
+  [ -n "$operator" ] ||
+    { echo "error: $vault refuses you, and no ATLASRELAY_OPERATOR_PRINCIPAL_ID names whom to give its role" >&2; return 1; }
+  # The role goes to the recorded operator, so it only helps when that is who is signed in.
+  me=$(az ad signed-in-user show --query id -o tsv 2> /dev/null || true)
+  if [ -n "$me" ] && [ "$me" != "$operator" ]; then
+    echo "error: $vault refuses you, and its role belongs to the operator $operator, not to you ($me); sign in as the operator" >&2
+    return 1
+  fi
+  echo "granting the operator Key Vault Secrets Officer on $vault"
+  az deployment group create --resource-group "rg-atlasrelay-$ENV_NAME" --name signin-operator-recovery "${AZ_SUB[@]}" \
+    --template-file infra/signin-operator.bicep \
+    --parameters vaultName="$vault" operatorPrincipalId="$operator" --only-show-errors -o none || return 1
+  for attempt in $(seq 1 10); do
+    sleep 30
+    if az keyvault secret list --vault-name "$vault" "${AZ_SUB[@]}" --query '[0].name' -o none 2> /dev/null; then
+      echo "  $vault can be read"
+      return 0
+    fi
+    [ "$attempt" = 10 ] || echo "  waiting for the role to apply"
+  done
+  echo "error: $vault still refuses you five minutes after the role was granted; run again in a few minutes" >&2
+  return 1
+}
+GRAPH=https://graph.microsoft.com/v1.0
+# The Entra app trusts the site's sign-in identity (infra/app.bicep) through a federated identity
+# credential named static-web-apps-<env>, and the site signs in to Microsoft with that identity's
+# token instead of a client secret
+# (https://learn.microsoft.com/azure/static-web-apps/authentication-custom, "Use a managed
+# identity instead of a secret"). A rebuilt environment has a new identity, which Microsoft sign-in
+# refuses until the credential names it, so every deployment checks the credential and updates it
+# when it names another one. Nothing to do without a Microsoft registration.
+sync_aad_trust() {
+  local app_id object_id principal fic existing
+  app_id=$(aget ATLASRELAY_MICROSOFT_CLIENT_ID) || return 1
+  [ -n "$app_id" ] || return 0
+  principal=$(aget SIGNIN_IDENTITY_PRINCIPAL_ID) || return 1
+  [ -n "$principal" ] || { echo "error: no SIGNIN_IDENTITY_PRINCIPAL_ID; run scripts/provision.sh $ENV_NAME first" >&2; return 1; }
+  object_id=$(az rest --method get --url "$GRAPH/applications(appId='$app_id')" --query id -o tsv) ||
+    { echo "error: can't read the Entra app $app_id; sign in to its tenant (az login --tenant ...)" >&2; return 1; }
+  fic=$(jq -n --arg n "static-web-apps-$ENV_NAME" --arg i "https://login.microsoftonline.com/$(aget AZURE_TENANT_ID)/v2.0" --arg s "$principal" \
+    '{name: $n, issuer: $i, subject: $s, audiences: ["api://AzureADTokenExchange"], description: "Sign-in identity of the static web app (id-atlasrelay-*-signin)"}') ||
+    return 1
+  existing=$(az rest --method get --url "$GRAPH/applications/$object_id/federatedIdentityCredentials" \
+    --query "value[?name=='static-web-apps-$ENV_NAME'] | [0]" -o json) || return 1
+  if [ -z "$existing" ] || [ "$(jq -r 'type' <<< "$existing")" != object ]; then
+    az rest --method post --url "$GRAPH/applications/$object_id/federatedIdentityCredentials" \
+      --headers Content-Type=application/json --body "$fic" -o none || return 1
+    echo "Microsoft sign-in now trusts the site's sign-in identity ($principal)"
+  elif ! jq -e --argjson want "$fic" '.issuer == $want.issuer and .subject == $want.subject and .audiences == $want.audiences' <<< "$existing" > /dev/null; then
+    az rest --method patch --url "$GRAPH/applications/$object_id/federatedIdentityCredentials/$(jq -r .id <<< "$existing")" \
+      --headers Content-Type=application/json --body "$(jq 'del(.name)' <<< "$fic")" -o none || return 1
+    echo "Microsoft sign-in now trusts the site's sign-in identity ($principal) instead of $(jq -r .subject <<< "$existing")"
+  fi
 }
 # The sign-in providers the deployed site has app settings for, from Azure (names only; the values
 # are dropped here). Empty when the site does not exist yet.
@@ -266,6 +333,7 @@ provision() {
   esac
   sync_budget_start || die "could not work out the budget's start date"
   recover_signin_vault || die "could not recover the deleted sign-in vault"
+  signin_vault_access || die "could not get access to the sign-in vault"
   sync_client_ids || die "could not read the client ids from the sign-in vault"
   local providers previous p
   providers=$(signin_providers) || die "the sign-in settings are incomplete"
@@ -284,6 +352,7 @@ provision() {
       # What the site's build needs to offer exactly these providers. It changes nothing on its
       # own: the Deploy workflow reads it from the repository variable SIGNIN_PROVIDERS.
       aset SIGNIN_PROVIDERS "$providers" || die "could not save SIGNIN_PROVIDERS"
+      sync_aad_trust || die "Microsoft sign-in may not trust the site's sign-in identity; run scripts/register-signin.sh $ENV_NAME aad"
       return 0
     fi
     [ "$attempt" = 3 ] && die "provisioning failed three times"
