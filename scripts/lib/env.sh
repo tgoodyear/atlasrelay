@@ -254,9 +254,13 @@ signin_vault_access() {
   operator=$(aget ATLASRELAY_OPERATOR_PRINCIPAL_ID) || return 1
   [ -n "$operator" ] ||
     { echo "error: $vault refuses you, and no ATLASRELAY_OPERATOR_PRINCIPAL_ID names whom to give its role" >&2; return 1; }
-  # The role goes to the recorded operator, so it only helps when that is who is signed in.
+  # The role goes to the recorded operator, so it only helps when that is who is signed in, and
+  # nothing changes for anyone else, or for a sign-in that names no user (a service principal).
   me=$(az ad signed-in-user show --query id -o tsv 2> /dev/null || true)
-  if [ -n "$me" ] && [ "$me" != "$operator" ]; then
+  if [ -z "$me" ]; then
+    echo "error: $vault refuses you, and az names no signed-in user to check against its operator $operator; sign in as the operator (az login)" >&2
+    return 1
+  elif [ "$me" != "$operator" ]; then
     echo "error: $vault refuses you, and its role belongs to the operator $operator, not to you ($me); sign in as the operator" >&2
     return 1
   fi

@@ -955,8 +955,8 @@ on their own, and the deployment (`scripts/lib/env.sh`) puts both back:
    `signin-operator-recovery`), granting `ATLASRELAY_OPERATOR_PRINCIPAL_ID` Key Vault Secrets
    Officer on the vault, and waits up to five minutes for the role to apply. The stack deploys the
    same module, so the assignment has the stack's name and the stack takes it over: there is no
-   second assignment to remove. Only the recorded operator can do this; anyone else signed in is
-   told so before anything changes.
+   second assignment to remove. Only the recorded operator can do this: anyone else, or a sign-in
+   that names no user (a service principal), is told so before anything changes.
 2. **Microsoft's trust in the site.** The sign-in identity `id-atlasrelay-<env>-signin` is new, and
    the Entra app's federated credential `static-web-apps-<env>` still names the old one. After every
    deployment with a Microsoft registration, `sync_aad_trust` points the credential at the
