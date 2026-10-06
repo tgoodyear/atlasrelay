@@ -329,9 +329,12 @@ Every redirect URI has the form `https://<host>/.auth/login/<provider>/callback`
 providers `github`, `aad`, `google` and `orcid`. For prod the host is `atlasrelay.org`; make the
 apex the default domain first ([Canonical host](#canonical-host)) so that `www` and the
 `azurestaticapps.net` name redirect to it; `scripts/register-signin.sh prod` checks both. For dev
-there are two hosts, and each needs its redirect URI, because Static Web Apps sends the provider
-the callback on the hostname the sign-in started from: the site's own hostname
-(`scripts/settings.sh dev SWA_HOSTNAME`), which the full-flow tests use, and `dev.atlasrelay.org`.
+the host is `dev.atlasrelay.org`, which the full-flow tests sign in on once it is bound. Static
+Web Apps sends the provider the callback on the hostname the sign-in started from, so signing in
+on the site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`) needs that host's redirect URI
+too; `scripts/register-signin.sh dev` registers both. That hostname changes when the site is
+rebuilt, and nothing needs it once `dev.atlasrelay.org` is bound
+([Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment)).
 
 ### Registering
 
@@ -525,10 +528,13 @@ The same file runs against the local stack in every full-flow run.
 ### Full-flow tests on dev
 
 `e2e-real/` signs two test accounts into the dev site through the real Microsoft sign-in page and
-runs the flow there. It uses the site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`), not
-dev.atlasrelay.org: a newly bound custom domain can answer the platform's 404 on some requests for
-hours, and a test run should not wait on that. It runs with the page steps the local full-flow
-tests use (`web/e2e/ui.ts`). It has four spec files:
+runs the flow there. It signs in on dev.atlasrelay.org, whose redirect URIs survive a rebuild, once
+that domain has served the build under test on ten requests in a row (`e2e_site_address` in
+`scripts/lib/e2e-job.sh`): a newly bound custom domain can answer the platform's 404 on some
+requests for a while. If it hasn't within five minutes, or no domain is bound, the run uses the
+site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`) and warns that Microsoft sign-in there
+needs that host's redirect URI (`scripts/register-signin.sh dev aad`). It runs with the page steps
+the local full-flow tests use (`web/e2e/ui.ts`). It has four spec files:
 
 - `full-flow.spec.ts`: the researcher saves a profile and posts a project, the donor pledges to
   transfer by hand and marks the credits sent, the researcher confirms them and posts results, and
@@ -668,7 +674,7 @@ Once per dev environment, as a subscription Owner:
      random password.
    - The test accounts sign in with a password and a TOTP code. Give each a TOTP seed
      ([Test account TOTP seeds](#test-account-totp-seeds)).
-   - Sign in once with each test user at `https://<SWA_HOSTNAME>/login/microsoft` in a private
+   - Sign in once with each test user at `https://dev.atlasrelay.org/login/microsoft` in a private
      window. Microsoft may ask for a new password (set one, and use that below) and whether the
      site may read the profile (accept).
 3. Store the accounts in the vault:
@@ -822,8 +828,8 @@ job, waits for the execution to end and releases the lock. The results go to `ru
 the `results` container. With `--no-wait` it returns once the job has marked the lock as renewed by
 itself, and leaves the lock to the job. It refuses `prod`, and checks that the site and the Function
 App it deploys to carry the tag `environment=<env>`. `--base-url <url>` tests a different address
-from the job's own, such as the site's `azurestaticapps.net` hostname while a new custom domain is
-still settling.
+from the one the run picks (dev.atlasrelay.org once it serves the build, else the site's
+`azurestaticapps.net` hostname).
 
 A dev environment bootstrapped before the registry was added needs `scripts/provision.sh dev`
 once, and then the registry's name as a variable of the GitHub Environment `dev`, which
@@ -964,6 +970,21 @@ on their own, and the deployment (`scripts/lib/env.sh`) puts both back:
    sign-in fails between the stack's deployment and that update, a minute at most. It needs the
    same Microsoft Graph access as `scripts/register-signin.sh`; if it fails, the run stops and says
    to run `scripts/register-signin.sh <env> aad`.
+
+The rebuilt site also gets a new default hostname (`<name>.<slice>.azurestaticapps.net`), which none
+of the sign-in apps' redirect URIs name. Sign-in there fails until it is registered, and only
+Microsoft's can be registered without a console visit. Nothing needs it, though: the custom
+domain's redirect URIs are unchanged, so sign-in works there once it is bound again, and the
+full-flow tests sign in there too ([Full-flow tests on dev](#full-flow-tests-on-dev)). The stack
+points the domain's CNAME at the new site; then:
+
+```bash
+scripts/bind-custom-domain.sh <env>
+```
+
+To sign in on the new default hostname anyway, `scripts/register-signin.sh <env> aad` adds its
+Microsoft redirect URI; GitHub, Google and ORCID need it added in their consoles
+([Sign-in registrations](#sign-in-registrations)).
 
 ## History
 
