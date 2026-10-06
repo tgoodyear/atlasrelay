@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Delete one Atlas Relay environment: its deployment stack with every resource it manages, its
-# resource group and custom roles, and its GitHub Environment. The data goes with it, and the
-# full-flow test vault is purged so the environment can be bootstrapped again at once. For prod
+# resource group, custom roles and budget, and its GitHub Environment. The data goes with it, and
+# the full-flow test vault is purged so the environment can be bootstrapped again at once. For prod
 # that includes the DNS zone: a new zone gets new name servers, and the registrar has to be
 # updated before the domain resolves again. Local settings (.azure/<env>/.env) are kept, renamed.
 # The sign-in vault (kvs-...) has purge protection, so it stays recoverable for 7 days and the next
@@ -17,6 +17,10 @@ set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: scripts/teardown.sh <env>" >&2; exit 2; }
 ENV_NAME=$1
 die() { echo "error: $*" >&2; exit 1; }
+# What a lookup of something already deleted answers. A custom role removed with its group answers
+# RoleDefinitionDoesNotExist, and a budget that is gone can answer with the code 404
+# (sync_budget_start in scripts/lib/env.sh matches the same).
+not_found() { grep -qiE 'NotFound|could not be found|RoleDefinitionDoesNotExist|"code": *"404"' <<< "$1"; }
 cd "$(dirname "$0")/.."
 . scripts/lib/env.sh
 need_stack_az
@@ -34,7 +38,7 @@ resume="$(dirname "$ENV_FILE")/teardown-$SUBSCRIPTION.ids"
 stack=true
 if out=$(az stack sub show -n "$STACK" "${AZ_SUB[@]}" -o none 2>&1); then
   ids=$(az stack sub show -n "$STACK" "${AZ_SUB[@]}" --query "resources[].id" -o tsv)
-elif ! grep -qiE 'NotFound|could not be found' <<< "$out"; then
+elif ! not_found "$out"; then
   die "can't check the deployment stack $STACK: $out"
 elif [ -s "$resume" ]; then
   echo "resuming an interrupted teardown of $ENV_NAME (stack already detached)"
@@ -45,6 +49,10 @@ fi
 groups=$(grep -Ei '^/subscriptions/[^/]+/resourceGroups/[^/]+$' <<< "$ids" | sed 's|.*/||' || true)
 # The custom role is declared in the group but stored with the subscription, so it outlives it.
 roles=$(grep -i '/providers/Microsoft.Authorization/roleDefinitions/' <<< "$ids" || true)
+# The budget outlives it too: after the group delete it stays listed under the subscription, and
+# a stale one keeps its old start date for the next bootstrap (sync_budget_start in
+# scripts/lib/env.sh).
+budgets=$(grep -i '/providers/Microsoft.Consumption/budgets/' <<< "$ids" || true)
 # A deleted vault stays soft-deleted for a week under its name, which the next bootstrap reuses.
 # The sign-in vault (kvs-..., infra/signin.bicep) has purge protection: nobody can purge it, and the
 # next deployment of the environment recovers it with its secrets (scripts/lib/env.sh).
@@ -114,6 +122,7 @@ done
 echo "This deletes environment $ENV_NAME from subscription $SUBSCRIPTION:"
 sed 's/^/  resource group (everything in it) /' <<< "$groups"
 [ -z "$roles" ] || sed 's/^/  /' <<< "$roles"
+[ -z "$budgets" ] || sed 's/^/  /' <<< "$budgets"
 [ -z "$others" ] || sed 's/^/  /' <<< "$others"
 [ -z "$kept" ] || { echo "It leaves these in place, in a group with a management lock:"; sed 's/^/  /' <<< "$kept"; }
 echo "and the GitHub Environment $ENV_NAME in $REPO."
@@ -158,11 +167,21 @@ fi
 # other reason than "not found" stops here.
 for id in $others; do
   if ! out=$(az resource show --ids "$id" -o none 2>&1); then
-    grep -qiE 'NotFound|could not be found' <<< "$out" || die "can't check $id: $out"
+    not_found "$out" || die "can't check $id: $out"
     continue
   fi
   echo "deleting $id"
   az resource delete --ids "$id" -o none
+done
+# The budget goes before its group, while the group is still there to look it up in.
+for id in $budgets; do
+  url="https://management.azure.com$id?api-version=2023-11-01"
+  if ! out=$(az rest --method get --url "$url" -o none 2>&1); then
+    not_found "$out" || die "can't check $id: $out"
+    continue
+  fi
+  echo "deleting $id"
+  az rest --method delete --url "$url" -o none
 done
 for g in $groups; do
   exists=$(az group exists -n "$g" "${AZ_SUB[@]}") || die "can't check resource group $g"
@@ -189,7 +208,7 @@ for v in $vaults; do
 done
 for id in $roles; do
   if ! out=$(az resource show --ids "$id" -o none 2>&1); then
-    grep -qiE 'NotFound|could not be found' <<< "$out" || die "can't check $id: $out"
+    not_found "$out" || die "can't check $id: $out"
     continue
   fi
   echo "deleting $id"

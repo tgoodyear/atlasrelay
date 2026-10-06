@@ -1033,10 +1033,11 @@ resource group's delete lock is on ([Prod's delete lock](#prods-delete-lock) has
 A new setting goes in `infra/main.bicepparam` as a `readEnvironmentVariable` and in
 `.azure/env.example`; `scripts/check-params.sh` fails when the two disagree.
 
-`scripts/teardown.sh <env>` deletes an environment: its stack, resource group, custom roles and
-GitHub Environment, and purges the test vault of a non-prod environment. For prod it also deletes
-the zone and removes the repository secrets, so the Deploy workflow builds without deploying until
-prod is bootstrapped again. A new zone gets new name servers, and the registrar has to be updated.
+`scripts/teardown.sh <env>` deletes an environment: its stack, resource group, custom roles,
+budget and GitHub Environment, and purges the test vault of a non-prod environment. For prod it
+also deletes the zone and removes the repository secrets, so the Deploy workflow builds without
+deploying until prod is bootstrapped again. A new zone gets new name servers, and the registrar
+has to be updated.
 The sign-in vault stays recoverable for 7 days, and the sign-in registrations with the providers are
 not deleted. In prod, remove the delete lock first ([Prod's delete lock](#prods-delete-lock)):
 `scripts/teardown.sh` checks every resource group it would delete for a management lock and stops,
