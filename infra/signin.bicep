@@ -97,7 +97,6 @@ resource vaultAudit 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' =
 
 // Built-in roles. https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/security
 var keyVaultSecretsUser = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
-var keyVaultSecretsOfficer = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
 
 resource siteReadsSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(vault.id, staticWebAppName, keyVaultSecretsUser)
@@ -110,14 +109,12 @@ resource siteReadsSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
-resource operatorWritesSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(operatorPrincipalId)) {
-  name: guid(vault.id, operatorPrincipalId, keyVaultSecretsOfficer)
-  scope: vault
-  properties: {
-    roleDefinitionId: keyVaultSecretsOfficer
-    principalId: operatorPrincipalId
-    principalType: 'User'
-    description: 'Operator: writes the sign-in client secrets (scripts/register-signin.sh)'
+// In a module of its own, which scripts/lib/env.sh also deploys alone for a recovered vault.
+module operatorWritesSecrets 'signin-operator.bicep' = if (!empty(operatorPrincipalId)) {
+  name: 'signin-operator'
+  params: {
+    vaultName: vault.name
+    operatorPrincipalId: operatorPrincipalId
   }
 }
 
