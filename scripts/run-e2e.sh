@@ -7,8 +7,9 @@
 #
 #   --no-wait        return once the test job is running and renews the lock itself, without
 #                    waiting for it to finish
-#   --base-url URL   test this address instead of the job's own, e.g. the site's default
-#                    azurestaticapps.net hostname while a new custom domain is still settling
+#   --base-url URL   test this address instead of the one the run picks: the custom domain
+#                    (dev.atlasrelay.org) once it serves the build, else the site's default
+#                    azurestaticapps.net hostname (scripts/lib/e2e-job.sh, e2e_site_address)
 #
 # It builds the site and the API (npm ci, npm run build) and the test image (in the environment's
 # registry, with ACR Tasks, tagged local-<commit>-<time>) from the files in this working tree,
