@@ -159,6 +159,22 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
+// Who read or wrote which secret (the test accounts, the test RIPE Atlas keys), kept with the
+// rest of the environment's logs, like the sign-in vault's.
+resource vaultAudit 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'audit'
+  scope: vault
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      {
+        category: 'AuditEvent'
+        enabled: true
+      }
+    ]
+  }
+}
+
 resource vaultEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${baseName}-kv'
   location: location
