@@ -3,7 +3,7 @@
 # by hand. scripts/dev-down.sh takes it down again afterwards. docs/RUNBOOK.md, "Dev on demand".
 #
 #   scripts/dev-up.sh [--env NAME] [--seed-vault VAULT] [--seed-subscription ID] [--no-approval]
-#                     [--ip ADDRESS]
+#                     [--alert-email ADDRESS] [--ip ADDRESS]
 #
 #   --env NAME               the environment (default dev; never prod)
 #   --seed-vault VAULT       where scripts/dev-down.sh saved its secrets (default: the setting
@@ -11,12 +11,15 @@
 #   --seed-subscription ID   the seed vault's subscription (default: the environment's)
 #   --no-approval            let jobs in the GitHub Environment run without waiting for approval
 #                            (scripts/bootstrap.sh)
+#   --alert-email ADDRESS    deploy the alerts and the budget, sending to this address. Without it
+#                            dev has none: the tests set alerts off on purpose
 #   --ip ADDRESS             this machine's public IPv4 address (default: looked up at api.ipify.org)
 #
 # 1. With no settings file, takes the environment's inputs from the newest one scripts/teardown.sh
 #    renamed (.azure/<env>/.env.deleted-<time>): subscription, location, repository, DNS zone,
-#    alert address, operator and seed vault. The stack's outputs and the sign-in client ids are not
-#    copied; the deployment and the sign-in vault supply them.
+#    operator, seed vault, and any sign-in client id set to empty (a provider turned off). The alert
+#    address, the stack's outputs and the other client ids are not copied; the deployment and the
+#    sign-in vault supply the last two.
 # 2. scripts/bootstrap.sh: the stack, the GitHub Environment and DEV_ENABLED. Within 7 days of the
 #    teardown it recovers the sign-in vault with its secrets; later, it creates an empty one.
 # 3. scripts/dev-secrets.sh --restore: the test accounts and RIPE Atlas keys into the new test
@@ -39,6 +42,7 @@ while [ $# -gt 0 ]; do
     --env) ENV_NAME=${2:-}; shift 2 ;;
     --seed-vault|--seed-subscription) [ $# -ge 2 ] || usage; SEED_ARGS+=("$1" "$2"); shift 2 ;;
     --no-approval) BOOT_ARGS+=(--no-approval); shift ;;
+    --alert-email) [ $# -ge 2 ] || usage; BOOT_ARGS+=(--alert-email "$2"); shift 2 ;;
     --ip) [ $# -ge 2 ] || usage; IP_ARGS+=(--ip "$2"); shift 2 ;;
     *) usage ;;
   esac
@@ -53,8 +57,14 @@ cd "$(dirname "$0")/.."
 
 # The inputs a stand-up needs from the last settings file. Everything else is a stack output, or a
 # client id the sign-in vault holds.
+# Not the alert address: a stand-up is for tests, which set off alerts on purpose (pass
+# --alert-email for alerts and a budget). A sign-in client id set to empty is carried as empty, since
+# that is how a provider is turned off (scripts/lib/env.sh, sync_client_ids); one with a value is
+# not, and comes from the sign-in vault.
 CARRIED="AZURE_SUBSCRIPTION_ID AZURE_LOCATION ATLASRELAY_GITHUB_REPO ATLASRELAY_DNS_ZONE
-ATLASRELAY_DNS_TTL ATLASRELAY_ALERT_EMAIL ATLASRELAY_OPERATOR_PRINCIPAL_ID E2E_SEED_VAULT"
+ATLASRELAY_DNS_TTL ATLASRELAY_OPERATOR_PRINCIPAL_ID E2E_SEED_VAULT"
+CLIENT_IDS="ATLASRELAY_GITHUB_CLIENT_ID ATLASRELAY_MICROSOFT_CLIENT_ID ATLASRELAY_GOOGLE_CLIENT_ID
+ATLASRELAY_ORCID_CLIENT_ID"
 if [ ! -s "$ENV_FILE" ]; then
   # Names end in a UTC time stamp, so the last in sort order is the newest.
   last=$(find "$(dirname "$ENV_FILE")" -maxdepth 1 -name '.env.deleted-*' 2> /dev/null | sort | tail -n 1)
@@ -63,6 +73,12 @@ if [ ! -s "$ENV_FILE" ]; then
   for k in $CARRIED; do
     v=$(ENV_FILE=$last aget "$k")
     [ -z "$v" ] || { aset "$k" "$v"; echo "  $k"; }
+  done
+  for k in $CLIENT_IDS; do
+    if grep -q "^$k=" "$last" && [ -z "$(ENV_FILE=$last aget "$k")" ]; then
+      aset "$k" ""
+      echo "  $k (empty: that provider stays off)"
+    fi
   done
 fi
 [ -n "$(aget AZURE_SUBSCRIPTION_ID)" ] || die "$ENV_FILE names no subscription"

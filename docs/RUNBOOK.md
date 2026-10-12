@@ -325,6 +325,8 @@ were copied from ([Real RIPE Atlas transfers](#real-ripe-atlas-transfers)). Its 
   provider's client id and secret (`signin-*`). The teardown starts only if the copy succeeded.
 - `scripts/dev-secrets.sh --env dev --restore`, which `scripts/dev-up.sh` runs after the bootstrap,
   writes them back: every test secret, and each sign-in secret the sign-in vault lacks.
+- A save also writes `dev-backup-manifest`, the names it copied. A restore copies only those, so a
+  secret removed from dev since an older backup is not brought back.
 - Both open the seed vault and the test vault to this machine's address only while they copy, and
   close them however the script ends, as `scripts/set-ripe-keys.sh` does. Values pass through the
   shell's memory only.
@@ -333,7 +335,7 @@ After changing a password, a TOTP seed or a key in dev, run `scripts/dev-secrets
 --save` (or take dev down), so the seed vault has the new one.
 
 **Standing up.** `scripts/dev-up.sh` takes dev's inputs from the settings file the teardown renamed
-(`.azure/dev/.env.deleted-<time>`), runs `scripts/bootstrap.sh dev`, restores the secrets, deploys
+(`.azure/dev/.env.deleted-<time>`), except the alert address, runs `scripts/bootstrap.sh dev`, restores the secrets, deploys
 the site with its sign-in registrations, and runs `scripts/register-signin.sh dev aad`. The site's
 `azurestaticapps.net` hostname is new each time, and that last step registers it with Microsoft, so
 the full-flow tests can sign in on it. GitHub, Google and ORCID are registered for
@@ -341,6 +343,10 @@ the full-flow tests can sign in on it. GitHub, Google and ORCID are registered f
 sign-ins by hand. Within 7 days of a teardown the bootstrap recovers the old sign-in vault instead
 of creating one; see [Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment) for
 the steps that may still need doing by hand.
+
+A stood-up dev has no alerts and no budget: the tests set alerts off on purpose (failed sign-ins,
+refused transfers), and dev is up for hours at a time. `scripts/dev-up.sh --alert-email <address>`
+deploys them as before, with the 5 log alerts listed under [Alerts](#alerts).
 
 **The CNAME.** The stack manages `dev.atlasrelay.org`, a CNAME in prod's zone. Prod's delete lock
 stops anyone deleting it, and `scripts/teardown.sh` never removes another group's lock, so the
@@ -373,11 +379,11 @@ hostname.
 | Container registry (Basic) | `cratlasrelaydevuw45ww` |
 | Identities | `id-atlasrelay-dev-ci`, `-api`, `-signin`, `-e2e` |
 | Log Analytics, Application Insights, workbook | `log-atlasrelay-dev`, `appi-atlasrelay-dev` |
-| Action group and 5 log alerts (dev has no availability test) | `ag-atlasrelay-dev`, `alert-atlasrelay-dev-*` |
+| Action group, 5 log alerts and the budget (dev has no availability test); a stand-up leaves them out | `ag-atlasrelay-dev`, `alert-atlasrelay-dev-*`, `budget-atlasrelay-dev` |
 | CNAME in prod's zone | `dev.atlasrelay.org` |
 
 Its settings (`.azure/dev/.env`), besides the stack's outputs: `AZURE_LOCATION=westus2`,
-`ATLASRELAY_DNS_ZONE=atlasrelay.org`, an alert address, the operator, all four sign-in
+`ATLASRELAY_DNS_ZONE=atlasrelay.org`, an alert address (not carried over), the operator, all four sign-in
 registrations (`SIGNIN_PROVIDERS=github,aad,google,orcid`, client ids in the sign-in vault) and
 `E2E_SEED_VAULT=atlasrelay-test-kv`. The GitHub Environment `dev` waits for approval by
 `tgoodyear`. `scripts/dev-up.sh` recreates all of it from the renamed settings file and the seed

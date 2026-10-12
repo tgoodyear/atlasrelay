@@ -20,6 +20,8 @@
 #   - from the sign-in vault (SIGNIN_KEY_VAULT_NAME): each provider's client id and client secret
 #     (scripts/register-signin.sh). A restore writes only those the sign-in vault lacks, so a vault
 #     recovered with its secrets, or one with a newer secret, is left as it is.
+# A save also writes <env>-backup-manifest, the names it copied, and a restore copies only those:
+# a secret removed from the environment is not brought back from an older backup.
 #
 # The seed vault must refuse every network (default action Deny, bypass None, public network access
 # Enabled, no address or network rules, no private endpoints), as scripts/set-ripe-keys.sh asks of
@@ -79,8 +81,10 @@ PREFIX="$ENV_NAME-backup-"
 test_vault_open "$IP"
 # test_vault_open's trap closes the test vault. This one closes the seed vault first, and is set
 # before the seed vault opens: the add can be interrupted, or fail after Azure has applied it.
+# errexit is off in here, so a failed close can't stop the trap before the test vault is closed.
 on_exit() {
   local status=$?
+  set +e
   seed_vault_close || status=1
   (exit "$status")
   _test_vault_close
@@ -118,31 +122,46 @@ test_names=$(names "$KV" "$ENV_SUB")
 signin_names=""
 [ -z "$SIGNIN" ] || signin_names=$(names "$SIGNIN" "$ENV_SUB")
 copied=0
+# The names the last save copied, so a restore never brings back a secret that was removed since
+# (an older backup of it stays in the seed vault). Backups from before the list existed have none,
+# and then every backup found is restored.
+MANIFEST="${PREFIX}manifest"
+saved=""
 if [ "$MODE" = save ]; then
   for n in $TEST_NAMES; do
     grep -Fxq "$n" <<< "$test_names" || { echo "  $KV has no $n"; continue; }
     value "$KV" "$ENV_SUB" "$n" secret
     put_secret_in "$SEED" "$PREFIX$n" "$secret"
+    saved="$saved $n"
     copied=$((copied + 1))
   done
   for n in $SIGNIN_NAMES; do
     grep -Fxq "$n" <<< "$signin_names" || continue
     value "$SIGNIN" "$ENV_SUB" "$n" secret
     put_secret_in "$SEED" "$PREFIX$n" "$secret"
+    saved="$saved $n"
     copied=$((copied + 1))
   done
   unset secret
+  # Last, so an interrupted save leaves the previous list, which names only complete backups.
+  put_secret_in "$SEED" "$MANIFEST" "${saved# }"
   echo "saved $copied secrets of $ENV_NAME in $SEED"
 else
+  listed() { [ -z "$manifest" ] || [[ " $manifest " == *" $1 "* ]]; }
+  manifest=""
+  if grep -Fxq "$MANIFEST" <<< "$seed_names"; then
+    value "$SEED" "$SEED_SUB" "$MANIFEST" manifest
+    [ -n "$manifest" ] || die "$SEED/$MANIFEST is empty; the last save copied nothing"
+  fi
   for n in $TEST_NAMES; do
-    grep -Fxq "$PREFIX$n" <<< "$seed_names" || continue
+    grep -Fxq "$PREFIX$n" <<< "$seed_names" && listed "$n" || continue
     value "$SEED" "$SEED_SUB" "$PREFIX$n" secret
     put_secret "$n" "$secret"
     copied=$((copied + 1))
   done
   if [ -n "$SIGNIN" ]; then
     for n in $SIGNIN_NAMES; do
-      grep -Fxq "$PREFIX$n" <<< "$seed_names" || continue
+      grep -Fxq "$PREFIX$n" <<< "$seed_names" && listed "$n" || continue
       grep -Fxq "$n" <<< "$signin_names" && continue
       value "$SEED" "$SEED_SUB" "$PREFIX$n" secret
       signin_put "$n" "$secret"
@@ -152,7 +171,7 @@ else
   unset secret
   echo "restored $copied secrets of $ENV_NAME from $SEED"
   for n in e2e-researcher-password e2e-donor-password ripe-donor-key ripe-recipient-key; do
-    grep -Fxq "$PREFIX$n" <<< "$seed_names" ||
+    grep -Fxq "$PREFIX$n" <<< "$seed_names" && listed "$n" ||
       echo "note: $SEED has no $PREFIX$n; store it with scripts/set-test-users.sh or scripts/set-ripe-keys.sh"
   done
 fi
