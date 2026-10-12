@@ -11,12 +11,16 @@
 #   scripts/teardown.sh <env>
 #
 # Needs: az 2.61+ and gh, signed in, Owner on the subscription and admin on the repository. Stops before changing
-# anything if a management lock is on the environment's resource group (prod has one). Asks for the
-# environment's name before deleting anything.
+# anything if a management lock is on the environment's resource group (prod has one). A non-prod
+# environment's CNAME in prod's zone, under prod's delete lock, is emptied rather than deleted. Asks
+# for the environment's name before deleting anything.
 set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: scripts/teardown.sh <env>" >&2; exit 2; }
 ENV_NAME=$1
 die() { echo "error: $*" >&2; exit 1; }
+# What a lookup of something already deleted answers. A custom role removed with its group answers
+# RoleDefinitionDoesNotExist.
+not_found() { grep -qiE 'NotFound|could not be found|RoleDefinitionDoesNotExist' <<< "$1"; }
 cd "$(dirname "$0")/.."
 . scripts/lib/env.sh
 need_stack_az
@@ -34,7 +38,7 @@ resume="$(dirname "$ENV_FILE")/teardown-$SUBSCRIPTION.ids"
 stack=true
 if out=$(az stack sub show -n "$STACK" "${AZ_SUB[@]}" -o none 2>&1); then
   ids=$(az stack sub show -n "$STACK" "${AZ_SUB[@]}" --query "resources[].id" -o tsv)
-elif ! grep -qiE 'NotFound|could not be found' <<< "$out"; then
+elif ! not_found "$out"; then
   die "can't check the deployment stack $STACK: $out"
 elif [ -s "$resume" ]; then
   echo "resuming an interrupted teardown of $ENV_NAME (stack already detached)"
@@ -91,12 +95,38 @@ Nothing has been changed. Remove each lock on purpose first, e.g.
   az lock delete --ids <id> ${AZ_SUB[*]}
 then run this again."
 done
+# The resources managed outside the environment's group sit in another environment's group, such
+# as a non-prod environment's CNAME in prod's zone. A delete lock there (prod's, always on) stays:
+# a CNAME under it is emptied instead, before the site it points at goes, so the name never points
+# at a deleted site. The next bootstrap's stack takes the record set over again, and
+# scripts/bind-custom-domain.sh points it at the new site. Anything else under a lock, or anything
+# under a ReadOnly lock, stops here.
+emptied=""
+for g in $(sed -n 's|^/subscriptions/[^/]*/resourceGroups/\([^/]*\)/.*|\1|Ip' <<< "$others" | sort -fu); do
+  if ! levels=$(az lock list -g "$g" "${AZ_SUB[@]}" --query "[].level" -o tsv 2>&1); then
+    grep -qiE 'ResourceGroupNotFound|could not be found' <<< "$levels" && continue
+    die "can't list the management locks on $g: $levels"
+  fi
+  [ -n "$levels" ] || continue
+  for id in $(grep -iF "/resourceGroups/$g/" <<< "$others"); do
+    if grep -qvx CanNotDelete <<< "$levels" ||
+      ! grep -qiE '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/dnsZones/[^/]+/CNAME/[^/]+$' <<< "$id"; then
+      die "$id is in resource group $g, which has management locks ($(tr '\n' ' ' <<< "$levels")), so it can't be removed.
+Nothing has been changed."
+    fi
+    emptied="$emptied$id"$'\n'
+  done
+done
+emptied=$(grep -v '^$' <<< "$emptied" || true)
 
 echo "This deletes environment $ENV_NAME from subscription $SUBSCRIPTION:"
 sed 's/^/  resource group (everything in it) /' <<< "$groups"
 [ -z "$roles" ] || sed 's/^/  /' <<< "$roles"
-[ -z "$others" ] || sed 's/^/  /' <<< "$others"
+[ -z "$others" ] || grep -vxF -f <(printf '%s\n' "$emptied") <<< "$others" | sed 's/^/  /' || true
 echo "and the GitHub Environment $ENV_NAME in $REPO."
+for id in $emptied; do
+  echo "The record ${id##*/} in the DNS zone $(cut -d/ -f9 <<< "$id") is emptied, not deleted: its resource group $(cut -d/ -f5 <<< "$id") has a delete lock. The next bootstrap of $ENV_NAME takes it over again, and scripts/bind-custom-domain.sh $ENV_NAME points it at the new site."
+done
 [ -z "$vaults" ] || echo "The Key Vault $(tr '\n' ' ' <<< "$vaults")is purged after it is deleted, with the test accounts in it."
 [ -z "$signin_vault" ] || echo "The sign-in vault $signin_vault stays recoverable, with its secrets, for 7 days; bootstrapping $ENV_NAME again in that time recovers it. The app registrations with GitHub, Microsoft, Google and ORCID are not deleted."
 [ "$ENV_NAME" != dev ] || echo "The repository variable DEV_ENABLED is removed, so the full-flow test workflow skips."
@@ -138,7 +168,16 @@ fi
 # other reason than "not found" stops here.
 for id in $others; do
   if ! out=$(az resource show --ids "$id" -o none 2>&1); then
-    grep -qiE 'NotFound|could not be found' <<< "$out" || die "can't check $id: $out"
+    not_found "$out" || die "can't check $id: $out"
+    continue
+  fi
+  if grep -qixF "$id" <<< "$emptied"; then
+    dns=(-g "$(cut -d/ -f5 <<< "$id")" -z "$(cut -d/ -f9 <<< "$id")" -n "${id##*/}" "${AZ_SUB[@]}")
+    target=$(az network dns record-set cname show "${dns[@]}" --query CNAMERecord.cname -o tsv) ||
+      die "can't read $id"
+    [ -n "$target" ] || continue
+    echo "emptying $id (was $target)"
+    az network dns record-set cname remove-record "${dns[@]}" -c "$target" --keep-empty-record-set -o none
     continue
   fi
   echo "deleting $id"
@@ -169,7 +208,7 @@ for v in $vaults; do
 done
 for id in $roles; do
   if ! out=$(az resource show --ids "$id" -o none 2>&1); then
-    grep -qiE 'NotFound|could not be found' <<< "$out" || die "can't check $id: $out"
+    not_found "$out" || die "can't check $id: $out"
     continue
   fi
   echo "deleting $id"

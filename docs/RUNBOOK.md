@@ -66,6 +66,8 @@ the stack:
 - `az staticwebapp hostname delete` fails, so a custom domain binding can't be recreated
   ([A hostname stuck at "Validating"](#a-hostname-stuck-at-validating)).
 - `scripts/teardown.sh prod` stops before it changes anything.
+- `scripts/teardown.sh <env>` for any other environment can't delete the environment's CNAME in
+  the prod zone, so it empties the record instead (see [Changing infrastructure](#changing-infrastructure)).
 
 Writes are not affected: deployments, settings, the site's content and the tables all work as
 before. Nor is data: the lock covers Azure resources only, so the API, and anyone with a data role
@@ -292,7 +294,8 @@ first: `az storage blob show --auth-mode login --account-name "$(scripts/setting
 E2E_RESULTS_ACCOUNT)" -c locks -n full-flow --query properties.lease.state -o tsv` prints
 `leased` while one is.
 
-`scripts/teardown.sh dev` removes it again, the CNAME and the test harness included.
+`scripts/teardown.sh dev` removes it again, the test harness included. The CNAME is emptied rather
+than deleted while prod's delete lock is on.
 
 ## Sign-in registrations
 
@@ -941,6 +944,14 @@ not deleted. In prod, remove the delete lock first ([Prod's delete lock](#prods-
 `scripts/teardown.sh` checks every resource group it would delete for a management lock and stops,
 before changing anything, if it finds one. Any `scripts/provision.sh prod` between removing the
 lock and the teardown puts it back.
+
+A non-prod environment's CNAME (`<env>.<domain>`) sits in the prod zone, under prod's lock, so
+tearing the environment down doesn't need prod's lock removed. `scripts/teardown.sh` empties the
+record instead of deleting it, before it deletes the site the record points at, so the name never
+points at a deleted site. The empty record set stays in the zone. The environment's next bootstrap
+takes it over again, and `scripts/bind-custom-domain.sh <env>` points it at the new site. If the
+prod group has a `ReadOnly` lock, or its lock covers anything else the environment manages, the
+teardown stops before changing anything.
 
 ### Rebuilding a torn-down environment
 
