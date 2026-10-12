@@ -66,6 +66,22 @@ for id in $ids; do
   [ "$inside" = true ] || others="$others$id"$'\n'
 done
 others=$(grep -v '^$' <<< "$others" || true)
+# Such a resource in a group with a management lock, such as dev's CNAME in prod's zone under
+# prod's CanNotDelete lock, can't be deleted, and this never removes another group's lock. It is
+# left in place, detached from the stack with the rest; the next bootstrap of the environment takes
+# it over again.
+kept=""
+for id in $others; do
+  g=$(sed -E 's|^/subscriptions/[^/]+/resourceGroups/([^/]+)/.*|\1|I' <<< "$id")
+  [ "$g" != "$id" ] || continue
+  if ! locks=$(az lock list -g "$g" "${AZ_SUB[@]}" --query "[].name" -o tsv 2>&1); then
+    grep -qiE 'ResourceGroupNotFound|could not be found' <<< "$locks" && continue
+    die "can't list the management locks on $g: $locks"
+  fi
+  [ -n "$locks" ] && kept="$kept$id"$'\n'
+done
+kept=$(grep -v '^$' <<< "$kept" || true)
+[ -z "$kept" ] || others=$(grep -vFx -f <(printf '%s\n' "$kept") <<< "$others" || true)
 
 # A management lock (prod's CanNotDelete lock, infra/lock.bicep) makes the group
 # delete below fail, after the repository secrets are gone and the stack is detached. Check first,
@@ -96,6 +112,7 @@ echo "This deletes environment $ENV_NAME from subscription $SUBSCRIPTION:"
 sed 's/^/  resource group (everything in it) /' <<< "$groups"
 [ -z "$roles" ] || sed 's/^/  /' <<< "$roles"
 [ -z "$others" ] || sed 's/^/  /' <<< "$others"
+[ -z "$kept" ] || { echo "It leaves these in place, in a group with a management lock:"; sed 's/^/  /' <<< "$kept"; }
 echo "and the GitHub Environment $ENV_NAME in $REPO."
 [ -z "$vaults" ] || echo "The Key Vault $(tr '\n' ' ' <<< "$vaults")is purged after it is deleted, with the test accounts in it."
 [ -z "$signin_vault" ] || echo "The sign-in vault $signin_vault stays recoverable, with its secrets, for 7 days; bootstrapping $ENV_NAME again in that time recovers it. The app registrations with GitHub, Microsoft, Google and ORCID are not deleted."

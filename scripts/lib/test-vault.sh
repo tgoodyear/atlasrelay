@@ -8,6 +8,15 @@
 #   test_vault_open [ADDRESS]   admit this machine's address (default: looked up at api.ipify.org),
 #                               and close the vault again however the script ends
 #   put_secret NAME VALUE       store one secret
+#   put_secret_in VAULT NAME VALUE   store one secret in another vault opened with seed_vault_open
+#
+# scripts/dev-secrets.sh also copies to and from a seed vault outside the environment:
+#
+#   seed_vault_open VAULT SUBSCRIPTION ADDRESS   check the vault refuses every network, then admit
+#                                                that one address; the caller sets the trap that
+#                                                runs seed_vault_close
+#   seed_vault_close                             remove the address again and check the vault is
+#                                                closed
 #
 # While open, the vault admits that one address and no other. The trap set by test_vault_open
 # disables public access, removes every address rule and checks both, whether the script succeeded,
@@ -79,21 +88,65 @@ test_vault_open() {
     --query accessToken -o tsv) || die "can't get a Key Vault token"
 }
 
+# A vault outside the environment that refuses every network: what scripts/set-ripe-keys.sh asks
+# of its source vault. "<default action> <bypass> <public network access> <ip rules> <vnet rules>
+# <private endpoints>"
+SEED_CLOSED="Deny None Enabled 0 0 0"
+_seed_acl() {
+  az keyvault show --name "$SEED_VAULT" --subscription "$SEED_SUBSCRIPTION" \
+    --query "[properties.networkAcls.defaultAction, properties.networkAcls.bypass, properties.publicNetworkAccess, length(properties.networkAcls.ipRules || \`[]\`), length(properties.networkAcls.virtualNetworkRules || \`[]\`), length(properties.privateEndpointConnections || \`[]\`)]" \
+    -o tsv | tr '\t\n' '  ' | sed 's/ *$//'
+}
+
+seed_vault_open() {
+  SEED_VAULT=$1 SEED_SUBSCRIPTION=$2 SEED_IP=$3
+  local acl
+  acl=$(_seed_acl) || die "can't read $SEED_VAULT's network settings"
+  [ "$acl" = "$SEED_CLOSED" ] ||
+    die "$SEED_VAULT must refuse every network first (default action Deny, bypass None, public network access Enabled, no address or network rules, no private endpoints); it has: $acl"
+  echo "opening $SEED_VAULT to $SEED_IP for this run"
+  az keyvault network-rule add --name "$SEED_VAULT" --subscription "$SEED_SUBSCRIPTION" \
+    --ip-address "$SEED_IP/32" -o none || die "can't add a network rule to $SEED_VAULT"
+  # A new rule takes a moment to apply.
+  local attempt
+  for attempt in $(seq 1 18); do
+    az keyvault secret list --vault-name "$SEED_VAULT" --subscription "$SEED_SUBSCRIPTION" \
+      --query "[0].name" -o none 2> /dev/null && return 0
+    echo "  waiting for $SEED_VAULT to admit $SEED_IP ($attempt/18)"
+    sleep 10
+  done
+  die "$SEED_VAULT still refuses $SEED_IP"
+}
+
+# Safe to call when seed_vault_open never ran or stopped early.
+seed_vault_close() {
+  [ -n "${SEED_VAULT:-}" ] || return 0
+  az keyvault network-rule remove --name "$SEED_VAULT" --subscription "$SEED_SUBSCRIPTION" \
+    --ip-address "$SEED_IP/32" -o none 2> /dev/null || true
+  if [ "$(_seed_acl 2> /dev/null)" = "$SEED_CLOSED" ]; then
+    echo "$SEED_VAULT: closed again"
+    return 0
+  fi
+  echo "WARNING: $SEED_VAULT still has a network rule; remove $SEED_IP/32 from it by hand" >&2
+  return 1
+}
+
 # put_secret NAME VALUE. The value reaches curl through a pipe from printf (a shell builtin), and
 # the token through a header file on a file descriptor. The response echoes the value back, so it
 # is kept only long enough to read the status. A new network rule or role assignment can take a
 # minute or two to apply, so a 403 is retried.
-put_secret() {
-  local name=$1 value=$2 attempt resp code
+put_secret() { put_secret_in "$KV" "$1" "$2"; }
+put_secret_in() {
+  local vault=$1 name=$2 value=$3 attempt resp code
   [ -n "$value" ] || die "refusing to store an empty $name"
   for attempt in $(seq 1 18); do
     resp=$(printf '%s' "$value" | jq -Rs '{value: ., contentType: "text/plain"}' |
       curl -sS -X PUT --data-binary @- \
         -H @<(printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$TEST_VAULT_TOKEN") \
-        -w '\n%{http_code}' "https://$KV.vault.azure.net/secrets/$name?api-version=7.4") || resp=$'\n000'
+        -w '\n%{http_code}' "https://$vault.vault.azure.net/secrets/$name?api-version=7.4") || resp=$'\n000'
     code=${resp##*$'\n'}
     case "$code" in
-      2??) echo "  stored $name"; return 0 ;;
+      2??) echo "  stored $name in $vault"; return 0 ;;
       403|000) ;;
       *) die "storing $name: HTTP $code $(jq -r '.error.code // empty' <<< "${resp%$'\n'*}" 2> /dev/null)" ;;
     esac
