@@ -1101,7 +1101,9 @@ server-side count of page requests to compare with.
 
 Every alert emails the address in the setting `ATLASRELAY_ALERT_EMAIL`
 (`scripts/bootstrap.sh --alert-email`), through the action group `ag-atlasrelay-prod`. Without
-that setting the stack deploys no action group and no alerts.
+that setting the stack deploys no action group and no alerts. The log alerts run every 15
+minutes, so one fires up to 15 minutes after its condition starts; the home page alert checks every
+minute.
 
 | Alert | Fires when | Severity |
 | --- | --- | --- |
