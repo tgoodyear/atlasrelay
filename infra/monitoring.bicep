@@ -109,16 +109,17 @@ AppExceptions
 '''
 
 // Every rule runs every 15 minutes: a log alert rule bills per evaluation frequency, and one at
-// 15 minutes costs a third of one at 5 (usnewsmap.com#308). Each window is unchanged, at least the
-// frequency, so each count threshold still covers the same span.
+// 15 minutes costs a third of one at 5 (usnewsmap.com#308). Each window is at least twice the
+// frequency, so consecutive windows overlap and a burst that straddles one window's edge is still
+// counted whole in the next.
 var rules = [
   {
     name: 'api-server-errors'
     displayName: 'Atlas Relay: API server errors'
-    description: 'At least 3 API requests answered 5xx in 15 minutes, and at least 10% of requests. scripts/logs.sh api-errors shows which functions and codes.'
+    description: 'At least 3 API requests answered 5xx in 30 minutes, and at least 10% of requests. scripts/logs.sh api-errors shows which functions and codes.'
     severity: 2
     frequency: 'PT15M'
-    window: 'PT15M'
+    window: 'PT30M'
     query: apiServerErrors
   }
   {
@@ -127,7 +128,7 @@ var rules = [
     description: 'An API transfer ended with an unknown outcome or was accepted by RIPE Atlas but not recorded. scripts/logs.sh transfers lists them; docs/RUNBOOK.md says what to do.'
     severity: 1
     frequency: 'PT15M'
-    window: 'PT15M'
+    window: 'PT30M'
     query: transferNeedsAttention
   }
   {

@@ -1109,7 +1109,7 @@ minute.
 | --- | --- | --- |
 | Home page unavailable | The availability test fails from both of its locations. | 1 |
 | API transfer outcome unknown or unrecorded | Any API transfer ends `uncertain` or `unrecorded`. | 1 |
-| API server errors | At least 3 requests answer 5xx in 15 minutes, and at least 10% of requests. | 2 |
+| API server errors | At least 3 requests answer 5xx in 30 minutes, and at least 10% of requests. | 2 |
 | RIPE Atlas API not answering | At least 2 RIPE Atlas calls time out, fail to connect or return 5xx in 30 minutes. | 3 |
 | API error log lines | At least 3 API error lines or exceptions in 30 minutes. | 3 |
 | Browser errors | At least 5 uncaught browser errors from at least 2 page loads in an hour. | 3 |
