@@ -340,9 +340,11 @@ the site with its sign-in registrations, and runs `scripts/register-signin.sh de
 `azurestaticapps.net` hostname is new each time, and that last step registers it with Microsoft, so
 the full-flow tests can sign in on it. GitHub, Google and ORCID are registered for
 `dev.atlasrelay.org` only: bind it with `scripts/bind-custom-domain.sh dev` before checking those
-sign-ins by hand. Within 7 days of a teardown the bootstrap recovers the old sign-in vault instead
-of creating one; see [Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment) for
-the steps that may still need doing by hand.
+sign-ins by hand. Within 7 days of a teardown, `scripts/dev-up.sh` recovers the old sign-in vault
+instead of letting the stack create one, and does step 1 of
+[Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment) itself: a temporary
+Key Vault Secrets Officer assignment on the group, removed once the stack has made its own. Step 2
+is `scripts/register-signin.sh dev aad`, which it runs anyway.
 
 A stood-up dev has no alerts and no budget: the tests set alerts off on purpose (failed sign-ins,
 refused transfers), and dev is up for hours at a time. `scripts/dev-up.sh --alert-email <address>`

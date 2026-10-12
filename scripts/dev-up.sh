@@ -21,7 +21,9 @@
 #    address, the stack's outputs and the other client ids are not copied; the deployment and the
 #    sign-in vault supply the last two.
 # 2. scripts/bootstrap.sh: the stack, the GitHub Environment and DEV_ENABLED. Within 7 days of the
-#    teardown it recovers the sign-in vault with its secrets; later, it creates an empty one.
+#    teardown, the sign-in vault is recovered first, with its secrets, and the operator can read it
+#    through a temporary role assignment on the group (removed at the end); later, the stack creates
+#    an empty vault.
 # 3. scripts/dev-secrets.sh --restore: the test accounts and RIPE Atlas keys into the new test
 #    vault, and any sign-in client id or secret the sign-in vault lacks.
 # 4. scripts/provision.sh, so the site gets the sign-in registrations from the vault, then
@@ -83,6 +85,50 @@ if [ ! -s "$ENV_FILE" ]; then
 fi
 [ -n "$(aget AZURE_SUBSCRIPTION_ID)" ] || die "$ENV_FILE names no subscription"
 
+# Within 7 days of a teardown the sign-in vault is only soft-deleted. The bootstrap recovers it, but
+# a vault comes back without its role assignments, and the bootstrap then stops reading its client
+# ids (docs/RUNBOOK.md, "Rebuilding a torn-down environment"). So recover it here and grant the
+# operator Key Vault Secrets Officer on the group for the bootstrap's sake; the stack then creates
+# its own assignment on the vault, and the temporary one is removed at the end, or on failure.
+az_sub
+SUB=$(aget AZURE_SUBSCRIPTION_ID)
+GRANT_SCOPE="/subscriptions/$SUB/resourceGroups/rg-atlasrelay-$ENV_NAME"
+OPERATOR=$(aget ATLASRELAY_OPERATOR_PRINCIPAL_ID)
+granted=false
+ungrant() {
+  [ "$granted" = true ] || return 0
+  if az role assignment delete --role "Key Vault Secrets Officer" --assignee "$OPERATOR" --scope "$GRANT_SCOPE" \
+    "${AZ_SUB[@]}" -o none; then
+    echo "removed the temporary Key Vault Secrets Officer assignment on $GRANT_SCOPE"
+    granted=false
+  else
+    echo "WARNING: remove the operator's Key Vault Secrets Officer assignment on $GRANT_SCOPE by hand" >&2
+  fi
+}
+trap ungrant EXIT
+deleted=$(az keyvault list-deleted "${AZ_SUB[@]}" --resource-type vault \
+  --query "[?starts_with(name, 'kvs-atlasrelay-$ENV_NAME-')].name | [0]" -o tsv) ||
+  die "can't list the deleted Key Vaults"
+if [ -n "$deleted" ]; then
+  [ -n "$OPERATOR" ] || die "no ATLASRELAY_OPERATOR_PRINCIPAL_ID to grant access to $deleted"
+  step "Recovering the sign-in vault $deleted"
+  if [ "$(az group exists -n "rg-atlasrelay-$ENV_NAME" "${AZ_SUB[@]}")" != true ]; then
+    az group create -n "rg-atlasrelay-$ENV_NAME" -l "$(stack_location)" "${AZ_SUB[@]}" -o none
+  fi
+  az keyvault recover --name "$deleted" "${AZ_SUB[@]}" -o none
+  aset SIGNIN_KEY_VAULT_NAME "$deleted"
+  granted=true
+  az role assignment create --role "Key Vault Secrets Officer" --assignee-object-id "$OPERATOR" \
+    --assignee-principal-type User --scope "$GRANT_SCOPE" "${AZ_SUB[@]}" -o none
+  for attempt in $(seq 1 30); do
+    az keyvault secret list --vault-name "$deleted" "${AZ_SUB[@]}" --query '[0].name' -o none 2> /dev/null && break
+    [ "$attempt" = 30 ] && die "$deleted is still not readable after 5 minutes; run scripts/dev-up.sh again"
+    echo "  waiting for the role to apply ($attempt/30)"
+    sleep 10
+  done
+  echo "  $deleted can be read"
+fi
+
 step "scripts/bootstrap.sh $ENV_NAME"
 scripts/bootstrap.sh "$ENV_NAME" ${BOOT_ARGS[@]+"${BOOT_ARGS[@]}"}
 
@@ -98,6 +144,8 @@ else
   echo "no Microsoft registration in the sign-in vault: the site uses the built-in GitHub and Microsoft sign-in"
   echo "(scripts/register-signin.sh $ENV_NAME to register them; docs/RUNBOOK.md, \"Sign-in registrations\")"
 fi
+
+ungrant
 
 step "Done"
 echo "$ENV_NAME is up at https://$(aget SWA_HOSTNAME)."
