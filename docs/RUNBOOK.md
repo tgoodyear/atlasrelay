@@ -345,8 +345,8 @@ the steps that may still need doing by hand.
 **The CNAME.** The stack manages `dev.atlasrelay.org`, a CNAME in prod's zone. Prod's delete lock
 stops anyone deleting it, and `scripts/teardown.sh` never removes another group's lock, so the
 teardown leaves the record in place, detached from the stack. While dev is down it names the
-deleted site's hostname. Static Web Apps picks those hostnames at random, so no one else can claim
-it. The next stand-up's stack takes the record over and points it at the new site.
+deleted site's hostname. Static Web Apps assigns those hostnames itself, and a new site can't ask
+for one. The next stand-up's stack takes the record over and points it at the new site.
 
 **The full-flow tests.** While dev is down the repository variable `DEV_ENABLED` is unset, so
 `e2e-dev.yml`, after a push to main that changes the tests, prints a notice and passes without
