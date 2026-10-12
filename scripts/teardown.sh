@@ -88,9 +88,12 @@ kept=$(grep -v '^$' <<< "$kept" || true)
 # before anything changes, and leave removing the lock to a deliberate step. A lock on the
 # subscription itself is inherited by every group and blocks the delete too, but `az lock list -g`
 # doesn't show it, so check that scope as well.
-if ! sublocks=$(az lock list "${AZ_SUB[@]}" --query "[?!contains(id, '/resourceGroups/')].{name:name, level:level, id:id}" -o tsv 2>&1); then
+# Azure writes the segment as resourceGroups or resourcegroups, and JMESPath can't compare without
+# case, so the locks inside a group are dropped here instead.
+if ! sublocks=$(az lock list "${AZ_SUB[@]}" --query "[].[name, level, id]" -o tsv 2>&1); then
   die "can't list the management locks on subscription $SUBSCRIPTION: $sublocks"
 fi
+sublocks=$(grep -vi '/resourcegroups/' <<< "$sublocks" || true)
 [ -z "$sublocks" ] || die "subscription $SUBSCRIPTION has management locks, which every resource group inherits:
 $(sed 's/^/  /' <<< "$sublocks")
 Nothing has been changed. Remove each lock on purpose first, e.g.
