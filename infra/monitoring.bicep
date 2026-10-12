@@ -199,11 +199,12 @@ resource alert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [
 
 // The portal lists a test under the component its hidden-link tag names.
 var linkTag = { 'hidden-link:${appInsightsId}': 'Resource' }
-// West US (San Jose), East US (Virginia), West Europe (Amsterdam).
-var testLocations = ['us-ca-sjc-azr', 'us-va-ash-azr', 'emea-nl-ams-azr']
+// East US (Virginia) and West Europe (Amsterdam): two continents, so the two don't share a network
+// path to the site. Two locations, not three, to cut the test's cost by a third (usnewsmap.com#308).
+var testLocations = ['us-va-ash-azr', 'emea-nl-ams-azr']
 var testName = 'webtest-${baseName}-home'
 
-// One page every 15 minutes from 3 locations. The home page is static, so this checks DNS, TLS,
+// One page every 15 minutes from 2 locations. The home page is static, so this checks DNS, TLS,
 // the certificate and that Static Web Apps is serving this site's files (the content match rejects
 // the platform's placeholder page, which also answers 200). The API is covered by the alerts above.
 resource webtest 'Microsoft.Insights/webtests@2022-06-15' = if (!empty(availabilityTestUrl)) {
@@ -245,7 +246,7 @@ resource unavailable 'Microsoft.Insights/metricAlerts@2018-03-01' = if (alerts &
   location: 'global'
   tags: union(tags, linkTag)
   properties: {
-    description: 'The home page (${availabilityTestUrl}) failed from at least 2 of 3 locations. Check the Availability page of appi-${baseName}, then scripts/logs.sh availability.'
+    description: 'The home page (${availabilityTestUrl}) failed from both test locations. Check the Availability page of appi-${baseName}, then scripts/logs.sh availability.'
     severity: 1
     enabled: true
     scopes: [webtest!.id, appInsightsId]
@@ -256,7 +257,10 @@ resource unavailable 'Microsoft.Insights/metricAlerts@2018-03-01' = if (alerts &
       'odata.type': 'Microsoft.Azure.Monitor.WebtestLocationAvailabilityCriteria'
       webTestId: webtest!.id
       componentId: appInsightsId
-      failedLocationCount: 2
+      // Both locations. Each counts as failed only after its retry fails, and an outage of the site
+      // (DNS, the certificate, Static Web Apps) fails from everywhere, so requiring both keeps a
+      // network problem near one test location from paging, as 2 of 3 did before.
+      failedLocationCount: length(testLocations)
     }
     autoMitigate: true
     actions: [

@@ -991,7 +991,7 @@ rest.
 | Functions host | `AppRequests` | One row per API request: function name, status, duration. |
 | `api/src/lib/telemetry.ts` | `AppTraces` | JSON log lines with an `event` field: `dependency` for every RIPE Atlas and Table Storage call (operation, status, duration), `transfer` for the outcome of every API transfer, `receipt-check` for each check of a manual pledge against RIPE Atlas, `project-page` when a project page has no original URL to read, `test-cleanup` for each project the test cleanup route deletes (test environments only), and `error`. |
 | `web/src/lib/telemetry.ts` | `AppPageViews`, `AppBrowserTimings`, `AppExceptions`, `AppDependencies`, `AppEvents`, all with role `web` | Page views by route, with the referring site and any utm tags; page load timings; uncaught errors and unhandled promise rejections; the API calls each page makes; and the actions listed under [Traffic](#traffic). |
-| Availability test | `AppAvailabilityResults` | The home page, requested from 3 locations every 15 minutes. |
+| Availability test | `AppAvailabilityResults` | The home page, requested from 2 locations (East US and West Europe) every 15 minutes. |
 
 Nothing sent contains a request or response body, a RIPE Atlas API key, an email address, a user
 id or a query string. The API replaces anything shaped like a UUID (every RIPE Atlas key is one)
@@ -1105,7 +1105,7 @@ that setting the stack deploys no action group and no alerts.
 
 | Alert | Fires when | Severity |
 | --- | --- | --- |
-| Home page unavailable | The availability test fails from 2 of its 3 locations. | 1 |
+| Home page unavailable | The availability test fails from both of its locations. | 1 |
 | API transfer outcome unknown or unrecorded | Any API transfer ends `uncertain` or `unrecorded`. | 1 |
 | API server errors | At least 3 requests answer 5xx in 15 minutes, and at least 10% of requests. | 2 |
 | RIPE Atlas API not answering | At least 2 RIPE Atlas calls time out, fail to connect or return 5xx in 30 minutes. | 3 |
