@@ -94,15 +94,16 @@ az_sub
 SUB=$(aget AZURE_SUBSCRIPTION_ID)
 GRANT_SCOPE="/subscriptions/$SUB/resourceGroups/rg-atlasrelay-$ENV_NAME"
 OPERATOR=$(aget ATLASRELAY_OPERATOR_PRINCIPAL_ID)
-granted=false
+# The id of the assignment this run created, and only that one is removed: an assignment that was
+# there before is left alone.
+grant_id=""
 ungrant() {
-  [ "$granted" = true ] || return 0
-  if az role assignment delete --role "Key Vault Secrets Officer" --assignee "$OPERATOR" --scope "$GRANT_SCOPE" \
-    "${AZ_SUB[@]}" -o none; then
+  [ -n "$grant_id" ] || return 0
+  if az role assignment delete --ids "$grant_id" "${AZ_SUB[@]}" -o none; then
     echo "removed the temporary Key Vault Secrets Officer assignment on $GRANT_SCOPE"
-    granted=false
+    grant_id=""
   else
-    echo "WARNING: remove the operator's Key Vault Secrets Officer assignment on $GRANT_SCOPE by hand" >&2
+    echo "WARNING: remove the role assignment $grant_id by hand" >&2
   fi
 }
 trap ungrant EXIT
@@ -117,9 +118,14 @@ if [ -n "$deleted" ]; then
   fi
   az keyvault recover --name "$deleted" "${AZ_SUB[@]}" -o none
   aset SIGNIN_KEY_VAULT_NAME "$deleted"
-  granted=true
-  az role assignment create --role "Key Vault Secrets Officer" --assignee-object-id "$OPERATOR" \
-    --assignee-principal-type User --scope "$GRANT_SCOPE" "${AZ_SUB[@]}" -o none
+  existing=$(az role assignment list --role "Key Vault Secrets Officer" --assignee "$OPERATOR" \
+    --scope "$GRANT_SCOPE" "${AZ_SUB[@]}" --query "[?scope=='$GRANT_SCOPE'].id | [0]" -o tsv) ||
+    die "can't list the role assignments on $GRANT_SCOPE"
+  if [ -z "$existing" ]; then
+    grant_id=$(az role assignment create --role "Key Vault Secrets Officer" --assignee-object-id "$OPERATOR" \
+      --assignee-principal-type User --scope "$GRANT_SCOPE" "${AZ_SUB[@]}" --query id -o tsv) ||
+      die "can't grant the operator Key Vault Secrets Officer on $GRANT_SCOPE"
+  fi
   for attempt in $(seq 1 30); do
     az keyvault secret list --vault-name "$deleted" "${AZ_SUB[@]}" --query '[0].name' -o none 2> /dev/null && break
     [ "$attempt" = 30 ] && die "$deleted is still not readable after 5 minutes; run scripts/dev-up.sh again"
