@@ -3,8 +3,8 @@
 ## Environments
 
 Everything in Azure is one deployment stack per environment, `atlasrelay-<env>`, at subscription
-scope, declared in `infra/main.bicep`. `prod` serves atlasrelay.org. `dev` is optional and is
-deployed from the same template. Environment names are 1 to 6 lowercase letters and digits, starting with a letter.
+scope, declared in `infra/main.bicep`. `prod` serves atlasrelay.org. `dev` is optional, is
+deployed from the same template, and is down between uses ([Dev on demand](#dev-on-demand)). Environment names are 1 to 6 lowercase letters and digits, starting with a letter.
 
 | Resource | prod | Declared in |
 | --- | --- | --- |
@@ -292,7 +292,98 @@ first: `az storage blob show --auth-mode login --account-name "$(scripts/setting
 E2E_RESULTS_ACCOUNT)" -c locks -n full-flow --query properties.lease.state -o tsv` prints
 `leased` while one is.
 
-`scripts/teardown.sh dev` removes it again, the CNAME and the test harness included.
+`scripts/teardown.sh dev` removes it again, with the test harness. The `dev` CNAME is in prod's
+zone, under prod's delete lock, so it stays where it is (below).
+
+### Dev on demand
+
+dev is down between uses. Kept running, it cost about $45.60 a month (Cost Management, October
+2026; tgoodyear/usnewsmap.com#308), mostly for things that bill by the hour whether or not a test
+runs: the Container Apps environment's load balancer (about $18.25), the Standard static web app
+($9), the test vault's private endpoint and its DNS zone (about $7.80) and the Basic container
+registry (about $5). Stand it up for a test run or a check by hand, then take it down again:
+
+```bash
+npm ci                          # once per working tree: register-signin.sh draws the Entra app's logo
+scripts/dev-up.sh               # about 15 minutes
+gh workflow run e2e-dev.yml --ref main    # or scripts/run-e2e.sh dev, or a check by hand
+scripts/dev-down.sh             # saves the secrets, then scripts/teardown.sh dev
+```
+
+Both run as the operator (`ATLASRELAY_OPERATOR_PRINCIPAL_ID`) with Owner on the subscription and
+admin on the repository, as `scripts/bootstrap.sh` does. Neither ever acts on prod.
+
+**The secrets.** A teardown purges the test vault and deletes the sign-in vault, which stays
+recoverable for 7 days only. What dev needs from them is kept in a seed vault outside dev, which
+refuses every network: `atlasrelay-test-kv` in `rg-atlasrelay-test`, the vault the RIPE Atlas keys
+were copied from ([Real RIPE Atlas transfers](#real-ripe-atlas-transfers)). Its name is the setting
+`E2E_SEED_VAULT`; pass `--seed-vault <name>` the first time.
+
+- `scripts/dev-secrets.sh --env dev --save`, which `scripts/dev-down.sh` runs first, copies each
+  secret to the seed vault as `dev-backup-<name>`: the test accounts, their passwords and TOTP seeds
+  (`e2e-researcher-*`, `e2e-donor-*`), the RIPE Atlas keys and accounts (`ripe-*`), and each sign-in
+  provider's client id and secret (`signin-*`). The teardown starts only if the copy succeeded.
+- `scripts/dev-secrets.sh --env dev --restore`, which `scripts/dev-up.sh` runs after the bootstrap,
+  writes them back: every test secret, and each sign-in secret the sign-in vault lacks.
+- Both open the seed vault and the test vault to this machine's address only while they copy, and
+  close them however the script ends, as `scripts/set-ripe-keys.sh` does. Values pass through the
+  shell's memory only.
+
+After changing a password, a TOTP seed or a key in dev, run `scripts/dev-secrets.sh --env dev
+--save` (or take dev down), so the seed vault has the new one.
+
+**Standing up.** `scripts/dev-up.sh` takes dev's inputs from the settings file the teardown renamed
+(`.azure/dev/.env.deleted-<time>`), runs `scripts/bootstrap.sh dev`, restores the secrets, deploys
+the site with its sign-in registrations, and runs `scripts/register-signin.sh dev aad`. The site's
+`azurestaticapps.net` hostname is new each time, and that last step registers it with Microsoft, so
+the full-flow tests can sign in on it. GitHub, Google and ORCID are registered for
+`dev.atlasrelay.org` only: bind it with `scripts/bind-custom-domain.sh dev` before checking those
+sign-ins by hand. Within 7 days of a teardown the bootstrap recovers the old sign-in vault instead
+of creating one; see [Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment) for
+the steps that may still need doing by hand.
+
+**The CNAME.** The stack manages `dev.atlasrelay.org`, a CNAME in prod's zone. Prod's delete lock
+stops anyone deleting it, and `scripts/teardown.sh` never removes another group's lock, so the
+teardown leaves the record in place, detached from the stack. While dev is down it names the
+deleted site's hostname. Static Web Apps picks those hostnames at random, so no one else can claim
+it. The next stand-up's stack takes the record over and points it at the new site.
+
+**The full-flow tests.** While dev is down the repository variable `DEV_ENABLED` is unset, so
+`e2e-dev.yml`, after a push to main that changes the tests, prints a notice and passes without
+testing anything. It is not a required check, and nothing else in CI uses dev. CI can't stand dev
+up itself: every infrastructure change is a stack deployment by a subscription Owner, and dev's
+CI identity is created by that stack and holds roles in dev's group only. So after such a push,
+stand dev up and start the workflow by hand.
+
+**What dev held** when it was last taken down (2026-10-12), all in `rg-atlasrelay-dev` (westus2),
+stack `atlasrelay-dev`, from `infra/main.bicep` with `environmentName = dev`. The names are
+derived from the subscription and group, so a stand-up gives the same ones, except the site's
+hostname.
+
+| Resource | Name |
+| --- | --- |
+| Static Web App (Standard), custom domain `dev.atlasrelay.org` | `swa-atlasrelay-dev` |
+| Function App (Flex Consumption) and plan | `func-atlasrelay-dev-stwvez`, `plan-atlasrelay-dev-api` |
+| Storage: data, Functions host, test results | `statlasrelaydevuw45ww`, `stfnatlasrelaydevstwv`, `stare2edevuw45ww` |
+| Sign-in vault, purge protection, 7 days' retention | `kvs-atlasrelay-dev-7npsk` |
+| Test vault, no public access, private endpoint | `kv-atlasrelay-dev-uw45ww`, `pe-atlasrelay-dev-kv` |
+| Network and private DNS zone | `vnet-atlasrelay-dev` (`snet-cae`, `snet-pe`), `privatelink.vaultcore.azure.net` |
+| Container Apps environment (Consumption, internal, in `snet-cae`) and its managed group with the load balancer `capp-svc-lb` | `cae-atlasrelay-dev`, `ME_cae-atlasrelay-dev_rg-atlasrelay-dev_westus2` |
+| Test job | `caj-atlasrelay-dev-e2e` |
+| Container registry (Basic) | `cratlasrelaydevuw45ww` |
+| Identities | `id-atlasrelay-dev-ci`, `-api`, `-signin`, `-e2e` |
+| Log Analytics, Application Insights, workbook | `log-atlasrelay-dev`, `appi-atlasrelay-dev` |
+| Action group and 5 log alerts (dev has no availability test) | `ag-atlasrelay-dev`, `alert-atlasrelay-dev-*` |
+| CNAME in prod's zone | `dev.atlasrelay.org` |
+
+Its settings (`.azure/dev/.env`), besides the stack's outputs: `AZURE_LOCATION=westus2`,
+`ATLASRELAY_DNS_ZONE=atlasrelay.org`, an alert address, the operator, all four sign-in
+registrations (`SIGNIN_PROVIDERS=github,aad,google,orcid`, client ids in the sign-in vault) and
+`E2E_SEED_VAULT=atlasrelay-test-kv`. The GitHub Environment `dev` waits for approval by
+`tgoodyear`. `scripts/dev-up.sh` recreates all of it from the renamed settings file and the seed
+vault. Without that file, start from `scripts/bootstrap.sh dev --domain atlasrelay.org
+--alert-email <address>`, then `scripts/dev-secrets.sh --env dev --restore --seed-vault
+atlasrelay-test-kv`, `scripts/provision.sh dev` and `scripts/register-signin.sh dev aad`.
 
 ## Sign-in registrations
 
@@ -802,7 +893,8 @@ Only the GitHub account `tgoodyear` can make it run:
   **Review deployments**, tick `dev`, **Approve and deploy**. The dev CI identity trusts only jobs
   in that environment (its federated credential's subject ends in `:environment:dev`).
 - While dev does not exist (`DEV_ENABLED` is not `true`), the workflow prints a notice and does
-  nothing else.
+  nothing else. dev is down between uses, so stand it up with `scripts/dev-up.sh` first
+  ([Dev on demand](#dev-on-demand)).
 
 To let runs start without the approval, run `scripts/bootstrap.sh dev --no-approval`. Removing the
 reviewer in the repository's **Settings**, **Environments**, `dev` works too, but the next
@@ -883,7 +975,8 @@ line, so they stay out of the shell history.
 
 #### Removing it
 
-`scripts/teardown.sh dev` removes the harness with the rest of dev: the network, the vault (purged
+`scripts/dev-down.sh` saves the secrets and then runs `scripts/teardown.sh dev`
+([Dev on demand](#dev-on-demand)). The teardown removes the harness with the rest of dev: the network, the vault (purged
 after it is deleted, so the same name can be used again at once), the registry, the job, the
 environment and the results. It deletes the repository variable `DEV_ENABLED` first and the GitHub
 Environment `dev` with its variables. The test tenant and the RIPE Atlas keys are outside Azure and

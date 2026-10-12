@@ -25,7 +25,8 @@ name: Full-flow tests on dev
 #   dev's resource group only, so it cannot deploy anywhere else.
 # - The build runs in a job of its own, without an Azure identity.
 # - While dev does not exist (the repository variable DEV_ENABLED is not true), it only prints a
-#   notice.
+#   notice. dev is down between uses (docs/RUNBOOK.md, "Dev on demand"), so that is the usual case
+#   for a push; stand dev up and run the workflow by hand.
 on:
   push:
     branches: [main]
@@ -52,7 +53,7 @@ jobs:
     permissions: {}
     steps:
       - name: Skip
-        run: echo "::notice::The dev environment does not exist (repository variable DEV_ENABLED is not true), so there is nothing to test. scripts/bootstrap.sh dev sets it."
+        run: echo "::notice::dev is down (repository variable DEV_ENABLED is not true), so these tests did not run. dev is torn down between uses to save its running cost; stand it up with scripts/dev-up.sh, run this workflow again, and take it down with scripts/dev-down.sh (docs/RUNBOOK.md, \"Dev on demand\")."
 
   # Untrusted code (npm lifecycle scripts) runs here, without any Azure identity, as in the Deploy
   # workflow. The run job deploys what this builds.
