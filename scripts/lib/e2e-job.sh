@@ -379,12 +379,41 @@ e2e_deploy() {
   for _ in $(seq 1 30); do
     if curl -fsS --max-time 20 "https://$host/?e2e=$RANDOM" 2> /dev/null | grep -qF "$script"; then
       echo "https://$host serves this build"
+      E2E_SITE_URL=$(e2e_site_address "$host" "$(jq -r '.properties.customDomains[0] // empty' <<< "$site")" "$script")
       return 0
     fi
     _e2e_sleep 10
   done
   _e2e_error "https://$host does not serve this build 5 minutes after the upload"
   return 1
+}
+
+# e2e_site_address DEFAULT_HOST CUSTOM_HOST SCRIPT
+# Prints the address the tests sign in on. The sign-in apps' redirect URIs name the custom domain
+# (dev.atlasrelay.org), which a rebuilt site keeps, while a rebuilt site's default hostname is new
+# and in none of them (docs/RUNBOOK.md, "Rebuilding a torn-down environment"). A newly bound domain
+# can answer the platform's 404 on some requests for a while, so the custom domain counts only once
+# it has served this build (SCRIPT) on ten requests in a row, within five minutes. Otherwise, or
+# with no custom domain, the default hostname, where Microsoft sign-in needs its own redirect URI.
+e2e_site_address() {
+  local host=$1 custom=$2 script=$3 ok=0
+  if [ -n "$custom" ]; then
+    for _ in $(seq 1 60); do
+      if curl -fsS --max-time 20 "https://$custom/?e2e=$RANDOM" 2> /dev/null | grep -qF "$script"; then
+        ok=$((ok + 1))
+        if [ "$ok" -ge 10 ]; then
+          echo "https://$custom serves this build; the tests sign in there" >&2
+          echo "https://$custom"
+          return 0
+        fi
+      else
+        ok=0
+      fi
+      _e2e_sleep 5
+    done
+    echo "warning: https://$custom does not serve this build reliably yet, so the tests use https://$host; Microsoft sign-in there needs its redirect URI (scripts/register-signin.sh ${E2E_ENV:-<env>} aad)" >&2
+  fi
+  echo "https://$host"
 }
 
 # ---------- the run ----------
@@ -433,14 +462,17 @@ e2e_lock_adopted() {
 #   E2E_RUN_ID E2E_SHA E2E_IMAGE_TAG
 #   E2E_SITE_DIR   the built site, e.g. web/dist
 #   E2E_API_ZIP    the staged API (e2e_stage_api)
-#   E2E_BASE_URL   optional: the address the tests use instead of the job's own
+#   E2E_BASE_URL   optional: the address the tests use instead of the one e2e_deploy picks
+#                  (e2e_site_address: the custom domain once it serves the build, else the
+#                  site's default hostname)
 #   E2E_WAIT       false: return once the test job renews the lock itself (default true)
-# Sets E2E_IMAGE, E2E_JOB_URL, E2E_EXECUTION and E2E_STATUS, and in a workflow writes them (as
-# image, job_url, execution, status, run_id) to GITHUB_OUTPUT. Returns 0 only if the execution
+# Sets E2E_SITE_URL (the address e2e_deploy picked), and E2E_IMAGE, E2E_JOB_URL, E2E_EXECUTION and
+# E2E_STATUS, which in a workflow it also writes (as image, job_url, execution, status, run_id) to
+# GITHUB_OUTPUT. Returns 0 only if the execution
 # succeeded (or, with E2E_WAIT=false, took the lock over) and the lock was held throughout.
 e2e_run() {
   local blob_url deadline status=""
-  E2E_EXECUTION="" E2E_STATUS="" E2E_JOB_URL="" E2E_IMAGE=""
+  E2E_EXECUTION="" E2E_STATUS="" E2E_JOB_URL="" E2E_IMAGE="" E2E_SITE_URL=""
   e2e_check_target "$E2E_ENV" "$E2E_RG" "$E2E_SWA" "$E2E_JOB" || return 1
   for f in "$E2E_SITE_DIR/index.html" "$E2E_API_ZIP"; do
     [ -s "$f" ] || { _e2e_error "$f is missing; build the site and stage the API first"; return 1; }
@@ -484,7 +516,7 @@ e2e_run() {
   e2e_az_refresh || return 1
   e2e_lock_held || return 1
   E2E_START_SENT=1
-  E2E_EXECUTION=$(e2e_start_job "$E2E_JOB_URL" "$E2E_IMAGE" "$E2E_RUN_ID" "$E2E_SHA" "${E2E_BASE_URL:-}" "$E2E_LOCK_LEASE") || return 1
+  E2E_EXECUTION=$(e2e_start_job "$E2E_JOB_URL" "$E2E_IMAGE" "$E2E_RUN_ID" "$E2E_SHA" "${E2E_BASE_URL:-$E2E_SITE_URL}" "$E2E_LOCK_LEASE") || return 1
   _e2e_output execution "$E2E_EXECUTION"
   echo "started $E2E_EXECUTION (run $E2E_RUN_ID)"
 

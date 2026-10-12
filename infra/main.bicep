@@ -4,6 +4,7 @@
 //
 //   app.bicep         storage + tables, static web app (Standard)
 //   signin.bicep      sign-in vault for the client secrets, the site's app settings pointing into it
+//   signin-operator.bicep  the operator's role on that vault (also deployed alone for a recovered vault)
 //   api.bicep         Function App (Flex Consumption) with its managed identity and host storage,
 //                     linked to the static web app as its API
 //   platform.bicep    Log Analytics + App Insights (App* tables kept 90 days), the monthly budget

@@ -329,9 +329,12 @@ Every redirect URI has the form `https://<host>/.auth/login/<provider>/callback`
 providers `github`, `aad`, `google` and `orcid`. For prod the host is `atlasrelay.org`; make the
 apex the default domain first ([Canonical host](#canonical-host)) so that `www` and the
 `azurestaticapps.net` name redirect to it; `scripts/register-signin.sh prod` checks both. For dev
-there are two hosts, and each needs its redirect URI, because Static Web Apps sends the provider
-the callback on the hostname the sign-in started from: the site's own hostname
-(`scripts/settings.sh dev SWA_HOSTNAME`), which the full-flow tests use, and `dev.atlasrelay.org`.
+the host is `dev.atlasrelay.org`, which the full-flow tests sign in on once it is bound. Static
+Web Apps sends the provider the callback on the hostname the sign-in started from, so signing in
+on the site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`) needs that host's redirect URI
+too; `scripts/register-signin.sh dev` registers both. That hostname changes when the site is
+rebuilt, and nothing needs it once `dev.atlasrelay.org` is bound
+([Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment)).
 
 ### Registering
 
@@ -474,8 +477,8 @@ AzureDiagnostics
 
 Purge protection is on, so nobody can purge the vault or its secrets during the 7-day retention
 period. `scripts/teardown.sh` leaves the deleted vault recoverable, and the next deployment of the
-environment recovers it, secrets included, but not its role assignments: see "Rebuilding a torn-down
-environment".
+environment recovers it, secrets included. Its role assignments don't come back with it; the
+deployment puts the operator's back first (see "Rebuilding a torn-down environment").
 
 ### Turning them off
 
@@ -525,10 +528,13 @@ The same file runs against the local stack in every full-flow run.
 ### Full-flow tests on dev
 
 `e2e-real/` signs two test accounts into the dev site through the real Microsoft sign-in page and
-runs the flow there. It uses the site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`), not
-dev.atlasrelay.org: a newly bound custom domain can answer the platform's 404 on some requests for
-hours, and a test run should not wait on that. It runs with the page steps the local full-flow
-tests use (`web/e2e/ui.ts`). It has four spec files:
+runs the flow there. It signs in on dev.atlasrelay.org, whose redirect URIs survive a rebuild, once
+that domain has served the build under test on ten requests in a row (`e2e_site_address` in
+`scripts/lib/e2e-job.sh`): a newly bound custom domain can answer the platform's 404 on some
+requests for a while. If it hasn't within five minutes, or no domain is bound, the run uses the
+site's own hostname (`scripts/settings.sh dev SWA_HOSTNAME`) and warns that Microsoft sign-in there
+needs that host's redirect URI (`scripts/register-signin.sh dev aad`). It runs with the page steps
+the local full-flow tests use (`web/e2e/ui.ts`). It has four spec files:
 
 - `full-flow.spec.ts`: the researcher saves a profile and posts a project, the donor pledges to
   transfer by hand and marks the credits sent, the researcher confirms them and posts results, and
@@ -668,7 +674,7 @@ Once per dev environment, as a subscription Owner:
      random password.
    - The test accounts sign in with a password and a TOTP code. Give each a TOTP seed
      ([Test account TOTP seeds](#test-account-totp-seeds)).
-   - Sign in once with each test user at `https://<SWA_HOSTNAME>/login/microsoft` in a private
+   - Sign in once with each test user at `https://dev.atlasrelay.org/login/microsoft` in a private
      window. Microsoft may ask for a new password (set one, and use that below) and whether the
      site may read the profile (accept).
 3. Store the accounts in the vault:
@@ -822,8 +828,8 @@ job, waits for the execution to end and releases the lock. The results go to `ru
 the `results` container. With `--no-wait` it returns once the job has marked the lock as renewed by
 itself, and leaves the lock to the job. It refuses `prod`, and checks that the site and the Function
 App it deploys to carry the tag `environment=<env>`. `--base-url <url>` tests a different address
-from the job's own, such as the site's `azurestaticapps.net` hostname while a new custom domain is
-still settling.
+from the one the run picks (dev.atlasrelay.org once it serves the build, else the site's
+`azurestaticapps.net` hostname).
 
 A dev environment bootstrapped before the registry was added needs `scripts/provision.sh dev`
 once, and then the registry's name as a variable of the GitHub Environment `dev`, which
@@ -945,26 +951,40 @@ lock and the teardown puts it back.
 ### Rebuilding a torn-down environment
 
 Within the sign-in vault's 7-day retention, bootstrapping or provisioning the environment again
-recovers the vault with its secrets and client ids, and records its name. Two things don't come
-back, so a rebuild with sign-in registrations takes these steps by hand:
+recovers the vault with its secrets and client ids, and records its name. Two things don't come back
+on their own, and the deployment (`scripts/lib/env.sh`) puts both back:
 
-1. **Your access to the vault.** Its role assignments went with the resource group, so the run stops
-   with `can't read signin-…-client-id` (or `can't list the secrets`). Grant yourself the role at
-   the resource group, not the vault: the stack creates the vault's own assignment, and one made by
-   hand at the same scope would collide with it.
-   ```bash
-   az role assignment create --role "Key Vault Secrets Officer" \
-     --assignee "$(scripts/settings.sh <env> ATLASRELAY_OPERATOR_PRINCIPAL_ID)" \
-     --scope "/subscriptions/$(scripts/settings.sh <env> AZURE_SUBSCRIPTION_ID)/resourceGroups/rg-atlasrelay-<env>"
-   ```
-   Wait a minute or two for it to apply, then run `scripts/provision.sh <env>` again.
-2. **Microsoft's trust in the site.** The sign-in identity is new, and the Entra app's federated
-   credential still names the old one, so Microsoft sign-in fails until
-   `scripts/register-signin.sh <env> aad` points it at the new identity. Run it right after the
-   provision.
+1. **Your access to the vault.** Its role assignments went with the resource group
+   ([soft-delete overview](https://learn.microsoft.com/azure/key-vault/general/soft-delete-overview)),
+   and the client ids have to be read from it before the stack can be deployed. When the vault
+   refuses you, `signin_vault_access` deploys `infra/signin-operator.bicep` on its own (deployment
+   `signin-operator-recovery`), granting `ATLASRELAY_OPERATOR_PRINCIPAL_ID` Key Vault Secrets
+   Officer on the vault, and waits up to five minutes for the role to apply. The stack deploys the
+   same module, so the assignment has the stack's name and the stack takes it over: there is no
+   second assignment to remove. Only the recorded operator can do this: anyone else, or a sign-in
+   that names no user (a service principal), is told so before anything changes.
+2. **Microsoft's trust in the site.** The sign-in identity `id-atlasrelay-<env>-signin` is new, and
+   the Entra app's federated credential `static-web-apps-<env>` still names the old one. After every
+   deployment with a Microsoft registration, `sync_aad_trust` points the credential at the
+   identity the stack reports (`SIGNIN_IDENTITY_PRINCIPAL_ID`) when it names another one. Microsoft
+   sign-in fails between the stack's deployment and that update, a minute at most. It needs the
+   same Microsoft Graph access as `scripts/register-signin.sh`; if it fails, the run stops and says
+   to run `scripts/register-signin.sh <env> aad`.
 
-Then remove the assignment from step 1 (`az role assignment delete` with the same arguments): the
-stack's own assignment on the vault is in place by then. Automating both steps is a follow-up.
+The rebuilt site also gets a new default hostname (`<name>.<slice>.azurestaticapps.net`), which none
+of the sign-in apps' redirect URIs name. Sign-in there fails until it is registered, and only
+Microsoft's can be registered without a console visit. Nothing needs it, though: the custom
+domain's redirect URIs are unchanged, so sign-in works there once it is bound again, and the
+full-flow tests sign in there too ([Full-flow tests on dev](#full-flow-tests-on-dev)). The stack
+points the domain's CNAME at the new site; then:
+
+```bash
+scripts/bind-custom-domain.sh <env>
+```
+
+To sign in on the new default hostname anyway, `scripts/register-signin.sh <env> aad` adds its
+Microsoft redirect URI; GitHub, Google and ORCID need it added in their consoles
+([Sign-in registrations](#sign-in-registrations)).
 
 ## History
 
