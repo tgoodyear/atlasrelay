@@ -108,14 +108,18 @@ AppExceptions
 | where Exceptions >= 5 and PageLoads >= 2
 '''
 
+// Every rule runs every 15 minutes: a log alert rule bills per evaluation frequency, and one at
+// 15 minutes costs a third of one at 5 (usnewsmap.com#308). Each window is at least twice the
+// frequency, so consecutive windows overlap and a burst that straddles one window's edge is still
+// counted whole in the next.
 var rules = [
   {
     name: 'api-server-errors'
     displayName: 'Atlas Relay: API server errors'
-    description: 'At least 3 API requests answered 5xx in 15 minutes, and at least 10% of requests. scripts/logs.sh api-errors shows which functions and codes.'
+    description: 'At least 3 API requests answered 5xx in 30 minutes, and at least 10% of requests. scripts/logs.sh api-errors shows which functions and codes.'
     severity: 2
-    frequency: 'PT5M'
-    window: 'PT15M'
+    frequency: 'PT15M'
+    window: 'PT30M'
     query: apiServerErrors
   }
   {
@@ -123,8 +127,8 @@ var rules = [
     displayName: 'Atlas Relay: API transfer outcome unknown or unrecorded'
     description: 'An API transfer ended with an unknown outcome or was accepted by RIPE Atlas but not recorded. scripts/logs.sh transfers lists them; docs/RUNBOOK.md says what to do.'
     severity: 1
-    frequency: 'PT5M'
-    window: 'PT15M'
+    frequency: 'PT15M'
+    window: 'PT30M'
     query: transferNeedsAttention
   }
   {
@@ -132,7 +136,7 @@ var rules = [
     displayName: 'Atlas Relay: RIPE Atlas API not answering'
     description: 'At least 2 calls to the RIPE Atlas API timed out, failed to connect or returned 5xx in 30 minutes. scripts/logs.sh ripe-atlas shows the calls.'
     severity: 3
-    frequency: 'PT10M'
+    frequency: 'PT15M'
     window: 'PT30M'
     query: ripeAtlasFailures
   }
@@ -141,7 +145,7 @@ var rules = [
     displayName: 'Atlas Relay: API error log lines'
     description: 'At least 3 error lines or exceptions from the API in 30 minutes. scripts/logs.sh api-errors shows them.'
     severity: 3
-    frequency: 'PT10M'
+    frequency: 'PT15M'
     window: 'PT30M'
     query: apiErrors
   }
