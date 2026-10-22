@@ -22,7 +22,9 @@ if [ "$answer" = build ]; then echo '<script src="${SCRIPT}"></script>'; exit 0;
 echo "curl: (22) The requested URL returned error: 404" >&2; exit 22
 `;
 
-function run(custom, answers) {
+// clock: seconds each call to the custom domain takes, on a fake clock (date +%s) that only moves
+// with those calls. Without it, the real clock.
+function run(custom, answers, clock) {
   const dir = mkdtempSync(join(tmpdir(), 'e2e-site-address-'));
   const bin = join(dir, 'bin');
   const fake = join(dir, 'fake');
@@ -33,7 +35,8 @@ function run(custom, answers) {
   writeFileSync(join(fake, 'answers'), answers.join('\n') + '\n');
   writeFileSync(join(fake, 'calls'), '');
   // No waiting in a test.
-  const script = `set -euo pipefail; . "${E2E_JOB_SH}"; _e2e_sleep() { :; }; E2E_ENV=dev; e2e_site_address default.azurestaticapps.net "${custom}" "${SCRIPT}"`;
+  const fakeDate = clock ? `date() { echo $(( 1000 + $(grep -c . "$FAKE/calls") * ${clock} )); };` : '';
+  const script = `set -euo pipefail; . "${E2E_JOB_SH}"; _e2e_sleep() { :; }; ${fakeDate} E2E_ENV=dev; e2e_site_address default.azurestaticapps.net "${custom}" "${SCRIPT}"`;
   const r = spawnSync('bash', ['-c', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE: fake }, encoding: 'utf8' });
   const calls = readFileSync(join(fake, 'calls'), 'utf8').split('\n').filter(Boolean);
   rmSync(dir, { recursive: true, force: true });
@@ -68,4 +71,13 @@ test('a custom domain that never settles falls back to the default hostname, wit
   assert.equal(r.calls.length, 60);
   assert.match(r.stderr, /warning: https:\/\/dev\.example\.org does not serve this build reliably/);
   assert.match(r.stderr, /register-signin\.sh dev aad/);
+});
+
+test('a custom domain whose requests time out falls back once five minutes have passed', () => {
+  // Each request runs to its 20-second limit and the pause after it, about 30 seconds a try.
+  const r = run('dev.example.org', ['404'], 30);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'https://default.azurestaticapps.net');
+  assert.equal(r.calls.length, 10, 'tries for five minutes, not 60 times over');
+  assert.match(r.stderr, /warning: https:\/\/dev\.example\.org does not serve this build reliably/);
 });

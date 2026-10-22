@@ -238,6 +238,18 @@ recover_signin_vault() {
   # sync_client_ids reads the client ids from it next.
   [ -n "$(aget SIGNIN_KEY_VAULT_NAME)" ] || aset SIGNIN_KEY_VAULT_NAME "$vault"
 }
+# az ad, and az rest with a Microsoft Graph URL, take their token from the tenant of the
+# subscription az has selected (az account set): az rest uses --subscription for Azure Resource
+# Manager URLs only. The operator's object id and the Entra app (scripts/register-signin.sh) are in
+# the environment's tenant, so stop before such a call when az has another tenant selected.
+graph_tenant_check() {
+  local selected wanted
+  selected=$(az account show --query tenantId -o tsv) || return 1
+  wanted=$(az account show "${AZ_SUB[@]}" --query tenantId -o tsv) || return 1
+  [ "$selected" = "$wanted" ] && return 0
+  echo "error: az has a subscription in tenant $selected selected, and $ENV_NAME is in tenant $wanted; Microsoft Graph calls go to the selected one. Run: az account set --subscription $(aget AZURE_SUBSCRIPTION_ID)" >&2
+  return 1
+}
 # A recovered vault comes back without its role assignments
 # (https://learn.microsoft.com/azure/key-vault/general/soft-delete-overview), so the operator can't
 # read the client ids from it, and the deployment that would give the role back can't start
@@ -256,6 +268,7 @@ signin_vault_access() {
     { echo "error: $vault refuses you, and no ATLASRELAY_OPERATOR_PRINCIPAL_ID names whom to give its role" >&2; return 1; }
   # The role goes to the recorded operator, so it only helps when that is who is signed in, and
   # nothing changes for anyone else, or for a sign-in that names no user (a service principal).
+  graph_tenant_check || return 1
   me=$(az ad signed-in-user show --query id -o tsv 2> /dev/null || true)
   if [ -z "$me" ]; then
     echo "error: $vault refuses you, and az names no signed-in user to check against its operator $operator; sign in as the operator (az login)" >&2
@@ -293,6 +306,7 @@ sync_aad_trust() {
   [ -n "$app_id" ] || return 0
   principal=$(aget SIGNIN_IDENTITY_PRINCIPAL_ID) || return 1
   [ -n "$principal" ] || { echo "error: no SIGNIN_IDENTITY_PRINCIPAL_ID; run scripts/provision.sh $ENV_NAME first" >&2; return 1; }
+  graph_tenant_check || return 1
   object_id=$(az rest --method get --url "$GRAPH/applications(appId='$app_id')" --query id -o tsv) ||
     { echo "error: can't read the Entra app $app_id; sign in to its tenant (az login --tenant ...)" >&2; return 1; }
   fic=$(jq -n --arg n "static-web-apps-$ENV_NAME" --arg i "https://login.microsoftonline.com/$(aget AZURE_TENANT_ID)/v2.0" --arg s "$principal" \

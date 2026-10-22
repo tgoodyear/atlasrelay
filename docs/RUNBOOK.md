@@ -1071,6 +1071,10 @@ on their own, and the deployment (`scripts/lib/env.sh`) puts both back:
    same Microsoft Graph access as `scripts/register-signin.sh`; if it fails, the run stops and says
    to run `scripts/register-signin.sh <env> aad`.
 
+Both ask Microsoft Graph, which az does in the tenant of the subscription it has selected, whatever
+`--subscription` says. So each stops before its first Graph call when that isn't the environment's
+tenant; `az account set --subscription <id>` fixes it.
+
 The rebuilt site also gets a new default hostname (`<name>.<slice>.azurestaticapps.net`), which none
 of the sign-in apps' redirect URIs name. Sign-in there fails until it is registered, and only
 Microsoft's can be registered without a console visit. Nothing needs it once the custom domain is

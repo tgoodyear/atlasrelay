@@ -13,13 +13,16 @@ const hasJq = spawnSync('jq', ['--version']).status === 0;
 
 // Answers the calls these functions make, from files in $FAKE: "readable" (the operator may read
 // the vault), "forbidden" (else the vault refuses with 403; without either it doesn't exist), "me"
-// (the signed-in user's id) and "fic" (the static-web-apps-<env> credential, as Graph's filtered
-// answer). A deployment of the operator's role makes the vault readable.
+// (the signed-in user's id), "fic" (the static-web-apps-<env> credential, as Graph's filtered
+// answer) and "selected" (the tenant of the subscription az has selected; else the environment's,
+// "tenant"). A deployment of the operator's role makes the vault readable.
 const FAKE_AZ = `#!/usr/bin/env bash
 # One line per call: the JSON bodies span several.
 args="$*"
 printf '%s\\n' "\${args//$'\\n'/ }" >> "$FAKE/calls"
 case "$*" in
+  "account show --subscription sub --query tenantId -o tsv") echo tenant ;;
+  "account show --query tenantId -o tsv") cat "$FAKE/selected" 2> /dev/null || echo tenant ;;
   "keyvault secret list"*)
     if [ -f "$FAKE/readable" ]; then echo signin-github-client-id; exit 0; fi
     if [ -f "$FAKE/forbidden" ]; then echo "(Forbidden) Caller is not authorized to perform action on resource. Code: Forbidden" >&2; exit 1; fi
@@ -125,6 +128,18 @@ test('the role is not granted for someone other than the recorded operator', { s
   }
 });
 
+test('with another tenant selected in az, nothing is granted and Graph is not asked', { skip: !hasJq }, () => {
+  const t = setup(OPERATOR, { forbidden: '', me: 'op-1', selected: 'other-tenant' });
+  try {
+    const r = t.run('signin_vault_access');
+    assert.notEqual(r.status, 0);
+    assert.match(r.err, /tenant other-tenant selected, and dev is in tenant tenant.*az account set --subscription sub/);
+    assert.equal(r.calls.filter((c) => /^(ad |deployment)/.test(c)).length, 0);
+  } finally {
+    t.cleanup();
+  }
+});
+
 const MICROSOFT = { ATLASRELAY_MICROSOFT_CLIENT_ID: 'app-1', SIGNIN_IDENTITY_PRINCIPAL_ID: 'new-principal' };
 const fic = (subject) =>
   JSON.stringify({
@@ -168,6 +183,18 @@ test('the federated credential is created when missing and left alone when curre
     const r = t.run('sync_aad_trust');
     assert.equal(r.status, 0, r.err);
     assert.equal(r.calls.filter((c) => /^rest --method (post|patch)/.test(c)).length, 0);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('the federated credential is not looked up in another tenant az has selected', { skip: !hasJq }, () => {
+  const t = setup(MICROSOFT, { fic: fic('old-principal'), selected: 'other-tenant' });
+  try {
+    const r = t.run('sync_aad_trust');
+    assert.notEqual(r.status, 0);
+    assert.match(r.err, /az account set --subscription sub/);
+    assert.equal(r.calls.filter((c) => c.startsWith('rest ')).length, 0);
   } finally {
     t.cleanup();
   }

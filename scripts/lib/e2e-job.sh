@@ -395,11 +395,16 @@ e2e_deploy() {
 # can answer the platform's 404 on some requests for a while, so the custom domain counts only once
 # it has served this build (SCRIPT) on ten requests in a row, within five minutes. Otherwise, or
 # with no custom domain, the default hostname, where Microsoft sign-in needs its own redirect URI.
+# The five minutes are a deadline: each request and each pause is cut to the time left, so a domain
+# whose requests time out doesn't hold the run (and the lock) longer.
 e2e_site_address() {
-  local host=$1 custom=$2 script=$3 ok=0
+  local host=$1 custom=$2 script=$3 ok=0 deadline left
   if [ -n "$custom" ]; then
+    deadline=$(( $(date +%s) + 300 ))
     for _ in $(seq 1 60); do
-      if curl -fsS --max-time 20 "https://$custom/?e2e=$RANDOM" 2> /dev/null | grep -qF "$script"; then
+      left=$(( deadline - $(date +%s) ))
+      [ "$left" -gt 0 ] || break
+      if curl -fsS --max-time "$(( left < 20 ? left : 20 ))" "https://$custom/?e2e=$RANDOM" 2> /dev/null | grep -qF "$script"; then
         ok=$((ok + 1))
         if [ "$ok" -ge 10 ]; then
           echo "https://$custom serves this build; the tests sign in there" >&2
@@ -409,7 +414,9 @@ e2e_site_address() {
       else
         ok=0
       fi
-      _e2e_sleep 5
+      left=$(( deadline - $(date +%s) ))
+      [ "$left" -gt 0 ] || break
+      _e2e_sleep "$(( left < 5 ? left : 5 ))"
     done
     echo "warning: https://$custom does not serve this build reliably yet, so the tests use https://$host; Microsoft sign-in there needs its redirect URI (scripts/register-signin.sh ${E2E_ENV:-<env>} aad)" >&2
   fi
