@@ -340,11 +340,10 @@ the site with its sign-in registrations, and runs `scripts/register-signin.sh de
 `azurestaticapps.net` hostname is new each time, and that last step registers it with Microsoft, so
 the full-flow tests can sign in on it. GitHub, Google and ORCID are registered for
 `dev.atlasrelay.org` only: bind it with `scripts/bind-custom-domain.sh dev` before checking those
-sign-ins by hand. Within 7 days of a teardown, `scripts/dev-up.sh` recovers the old sign-in vault
-instead of letting the stack create one, and does step 1 of
-[Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment) itself: a temporary
-Key Vault Secrets Officer assignment on the group, removed once the stack has made its own. Step 2
-is `scripts/register-signin.sh dev aad`, which it runs anyway.
+sign-ins by hand. Within 7 days of a teardown, the bootstrap recovers the old sign-in vault instead
+of letting the stack create one, gives the operator its role on the vault back and points
+Microsoft's trust at the new sign-in identity
+([Rebuilding a torn-down environment](#rebuilding-a-torn-down-environment)).
 
 A stood-up dev has no alerts and no budget: the tests set alerts off on purpose (failed sign-ins,
 refused transfers), and dev is up for hours at a time. `scripts/dev-up.sh --alert-email <address>`
@@ -1074,18 +1073,20 @@ on their own, and the deployment (`scripts/lib/env.sh`) puts both back:
 
 The rebuilt site also gets a new default hostname (`<name>.<slice>.azurestaticapps.net`), which none
 of the sign-in apps' redirect URIs name. Sign-in there fails until it is registered, and only
-Microsoft's can be registered without a console visit. Nothing needs it, though: the custom
-domain's redirect URIs are unchanged, so sign-in works there once it is bound again, and the
-full-flow tests sign in there too ([Full-flow tests on dev](#full-flow-tests-on-dev)). The stack
-points the domain's CNAME at the new site; then:
+Microsoft's can be registered without a console visit. Nothing needs it once the custom domain is
+bound again: the domain's redirect URIs are unchanged, so sign-in works there, and the full-flow
+tests sign in there too ([Full-flow tests on dev](#full-flow-tests-on-dev)). The stack points the
+domain's CNAME at the new site; then:
 
 ```bash
 scripts/bind-custom-domain.sh <env>
 ```
 
-To sign in on the new default hostname anyway, `scripts/register-signin.sh <env> aad` adds its
+To sign in on the new default hostname before that, `scripts/register-signin.sh <env> aad` adds its
 Microsoft redirect URI; GitHub, Google and ORCID need it added in their consoles
-([Sign-in registrations](#sign-in-registrations)).
+([Sign-in registrations](#sign-in-registrations)). `scripts/dev-up.sh` runs it for dev and leaves
+the domain unbound, so the full-flow tests sign in on the default hostname
+([Dev on demand](#dev-on-demand)).
 
 ## History
 
