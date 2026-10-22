@@ -501,8 +501,9 @@ test('totals count what arrived when it was checked, and the pledge otherwise', 
   assert.equal(creditedAmount(verified), 500);
   assert.equal(creditedAmount(base), 700);
   assert.deepEqual(totals([verified, { ...base, id: 'p2' }]), { confirmed: 1200, pending: 0 });
-  // A pending pledge reserves what was pledged.
-  assert.deepEqual(totals([{ ...base, status: 'sent' }]), { confirmed: 0, pending: 700 });
+  // A pending pledge reserves what was pledged until the reservation lapses,
+  // PENDING_RESERVATION_DAYS after it was made, so this counts as of its last update, not the clock.
+  assert.deepEqual(totals([{ ...base, status: 'sent' }], Date.parse(base.updatedAt)), { confirmed: 0, pending: 700 });
 });
 
 test('the public view shows the confirmed amount, the pledged one, and whether it was verified', () => {
