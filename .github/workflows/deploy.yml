@@ -94,13 +94,13 @@ jobs:
           # everything else resolved into the file.
           cd api-deploy && node -e "require('./dist/bundle.js'); console.log('API bundle loads without node_modules')"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web
           path: web/dist
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: api
           path: api-deploy
@@ -136,7 +136,7 @@ jobs:
       - name: Check a pasted key is redacted from a real trace
         run: E2E_TRACE_TEST_REQUIRED=1 node --test e2e-real/test/trace-redaction.test.mjs
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: playwright-traces
@@ -189,7 +189,7 @@ jobs:
       - name: Run full-flow tests
         run: npm run test:flows -w web
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: full-flow-traces
