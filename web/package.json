@@ -17,26 +17,26 @@
   "dependencies": {
     "@fontsource/inter": "5.3.0",
     "@fontsource/jetbrains-mono": "5.3.0",
-    "@microsoft/applicationinsights-analytics-js": "^3.4.4",
-    "@microsoft/applicationinsights-channel-js": "^3.4.4",
-    "@microsoft/applicationinsights-core-js": "^3.4.4",
-    "@microsoft/applicationinsights-dependencies-js": "^3.4.4",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-router-dom": "^7.9.0"
+    "@microsoft/applicationinsights-analytics-js": "^3.4.5",
+    "@microsoft/applicationinsights-channel-js": "^3.4.5",
+    "@microsoft/applicationinsights-core-js": "^3.4.5",
+    "@microsoft/applicationinsights-dependencies-js": "^3.4.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5"
   },
   "devDependencies": {
-    "@axe-core/playwright": "4.13.0",
+    "@axe-core/playwright": "4.14.0",
     "@azure/data-tables": "^13.3.2",
-    "@playwright/test": "1.63.0",
-    "@types/node": "^24.19.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "@vitejs/plugin-react": "^6.0.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "jquery": "3.7.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.3"
+    "vite": "^8.3.5"
   },
   "engines": {
     "node": ">=24.11.0"
