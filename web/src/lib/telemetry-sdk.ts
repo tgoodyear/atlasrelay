@@ -27,6 +27,9 @@ export function init(connectionString: string, earlyErrors: unknown[]): void {
     disableCookiesUsage: true,
     isStorageUseDisabled: true,
     enableSessionStorageBuffer: false,
+    // Core 3.4.5 turns on SDK usage stats by default. They keep counters in session storage and
+    // are sent by a separate core that skips the scrubbing telemetry initializer below, so opt out.
+    featureOptIn: { sdkStats: { mode: 2 /* FeatureOptInMode.disable */ } },
     // Page views are sent by telemetry.ts on each route change, with the query string removed.
     enableAutoRouteTracking: false,
     autoTrackPageVisitTime: false,
