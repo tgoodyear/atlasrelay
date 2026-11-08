@@ -4,6 +4,6 @@
   "description": "Full-flow tests against a deployed environment with real Microsoft sign-in; the test image (Dockerfile) installs this",
   "type": "module",
   "dependencies": {
-    "@playwright/test": "1.63.0"
+    "@playwright/test": "1.64.1"
   }
 }
